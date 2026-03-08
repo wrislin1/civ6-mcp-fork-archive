@@ -604,6 +604,20 @@ def _find_game_window_win32() -> WindowInfo | None:
     if old_ctx:
         user32.SetThreadDpiAwarenessContext(ctypes.c_ssize_t(old_ctx))
 
+    if results:
+        w = results[0]
+        log.info(
+            "Window found: hwnd=%s pos=(%d,%d) size=%dx%d pid=%d",
+            w.window_id,
+            w.x,
+            w.y,
+            w.w,
+            w.h,
+            w.pid,
+        )
+    else:
+        log.info("No game window found")
+
     return results[0] if results else None
 
 
@@ -973,6 +987,9 @@ def _ocr_winrt(
         sw = bw * extent_w
         sh = bh * extent_h
         results.append((text, int(sx), int(sy), int(sw), int(sh)))
+    log.info("WinRT OCR: %d lines found", len(results))
+    if results:
+        log.debug("WinRT OCR sample: %s", [r[0] for r in results[:5]])
     return results
 
 
@@ -1165,6 +1182,9 @@ def _ocr_fullscreen_win32() -> list[tuple[str, int, int, int, int]]:
 
     w = user32.GetSystemMetrics(0)  # SM_CXSCREEN (physical when DPI-aware)
     h = user32.GetSystemMetrics(1)  # SM_CYSCREEN (physical when DPI-aware)
+    log.info(
+        "Fullscreen OCR: capturing %dx%d (DPI-aware=%s)", w, h, old_ctx is not None
+    )
 
     desktop_hwnd = win32gui.GetDesktopWindow()
     desktop_dc = win32gui.GetWindowDC(desktop_hwnd)
@@ -1195,7 +1215,9 @@ def _ocr_fullscreen_win32() -> list[tuple[str, int, int, int, int]]:
     if old_ctx:
         user32.SetThreadDpiAwarenessContext(ctypes.c_ssize_t(old_ctx))
 
-    return _ocr_winrt(img, 0, 0, w, h)
+    results = _ocr_winrt(img, 0, 0, w, h)
+    log.info("Fullscreen OCR: %d text regions found", len(results))
+    return results
 
 
 def _ocr_fullscreen_linux() -> list[tuple[str, int, int, int, int]]:
@@ -1269,7 +1291,11 @@ def _find_text(
         min_y = max_y * min_y_fraction
         matches = [(t, x, y, w, h) for t, x, y, w, h in matches if y >= min_y]
     if not matches:
+        log.debug(
+            "_find_text: '%s' not found in %d OCR results", target, len(ocr_results)
+        )
         return None
+    log.debug("_find_text: '%s' -> %d matches", target, len(matches))
     if prefer_bottom:
         return max(matches, key=lambda m: m[2])
     return matches[0]
@@ -1323,6 +1349,17 @@ def _click_win32(x: int, y: int) -> None:
 
     abs_x = int((x - vx0) * 65536 / vw)
     abs_y = int((y - vy0) * 65536 / vh)
+    log.info(
+        "Click: screen=(%d,%d) abs=(%d,%d) vscreen=(%d,%d)+%dx%d",
+        x,
+        y,
+        abs_x,
+        abs_y,
+        vx0,
+        vy0,
+        vw,
+        vh,
+    )
 
     class MOUSEINPUT(ctypes.Structure):
         _fields_ = [
@@ -1585,9 +1622,19 @@ def _wait_for_text(
             prefer_bottom=prefer_bottom,
             min_y_fraction=min_y_fraction,
         )
+        elapsed = time.time() - start
         if match:
+            log.info("_wait_for_text: '%s' found after %.1fs", target, elapsed)
             return match
+        log.debug(
+            "_wait_for_text: '%s' not found (%.1fs/%ds, %d results)",
+            target,
+            elapsed,
+            timeout,
+            len(results),
+        )
         time.sleep(interval)
+    log.info("_wait_for_text: '%s' timed out after %ds", target, timeout)
     return None
 
 
@@ -1619,7 +1666,16 @@ def _click_text(
         return False
     text, x, y, w, h = match
     click_y = y + y_offset
-    log.info("OCR: found '%s' at (%d,%d) [%dx%d] — clicking (%d,%d)", text, x, y, w, h, x, click_y)
+    log.info(
+        "OCR: found '%s' at (%d,%d) [%dx%d] — clicking (%d,%d)",
+        text,
+        x,
+        y,
+        w,
+        h,
+        x,
+        click_y,
+    )
     _bring_to_front()
     time.sleep(0.3)
     _click(x, click_y)
@@ -1753,6 +1809,7 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
     Blocking operation — takes 30-90 seconds. Returns status message.
     """
     _require_gui_deps()  # Fail fast if deps missing
+    nav_start = time.time()
     steps = []
 
     # Launch the game if it's not running
@@ -1827,7 +1884,8 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
     else:
         steps.append("No leader screen (loading directly)")
 
-    return f"Save loading. Steps: {', '.join(steps)}. Wait ~10s then use get_game_overview to verify."
+    nav_elapsed = time.time() - nav_start
+    return f"Save loading ({nav_elapsed:.0f}s). Steps: {', '.join(steps)}. Wait ~10s then use get_game_overview to verify."
 
 
 # ---------------------------------------------------------------------------
