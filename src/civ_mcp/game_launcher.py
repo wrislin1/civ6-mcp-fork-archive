@@ -363,6 +363,51 @@ def _send_key_win32(vk_code: int) -> None:
     user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
 
 
+def _send_key_linux(key_name: str) -> None:
+    """Send a single keypress via xdotool (Linux).
+
+    key_name: xdotool key name, e.g. 'Return', 'Escape', 'space'
+    """
+    subprocess.run(
+        ["xdotool", "key", key_name],
+        capture_output=True,
+        timeout=5,
+    )
+
+
+# VK codes for _send_key_win32
+_VK_RETURN = 0x0D
+_VK_ESCAPE = 0x1B
+_VK_SPACE = 0x20
+
+_WIN32_KEY_MAP: dict[str, int] = {
+    "Return": _VK_RETURN,
+    "Escape": _VK_ESCAPE,
+    "space": _VK_SPACE,
+}
+
+
+def _send_key(key_name: str) -> None:
+    """Send a keypress using the platform-appropriate backend.
+
+    key_name uses xdotool naming: 'Return', 'Escape', 'space'.
+    """
+    if sys.platform == "linux":
+        _send_key_linux(key_name)
+    elif sys.platform == "win32":
+        vk = _WIN32_KEY_MAP.get(key_name)
+        if vk is None:
+            log.warning("_send_key: unknown key '%s' for win32", key_name)
+            return
+        _send_key_win32(vk)
+    elif sys.platform == "darwin":
+        # macOS Vision OCR handles CONTINUE reliably; keyboard fallback
+        # not needed yet. Log and skip.
+        log.debug("_send_key: not implemented on macOS (key=%s)", key_name)
+    else:
+        log.warning("_send_key: unsupported platform %s", sys.platform)
+
+
 def _wait_for_tuner_port(timeout: int = _PORT_POLL_TIMEOUT) -> bool:
     """Poll TCP 4318 until it accepts connections.
 
@@ -464,7 +509,11 @@ def _launch_game_sync() -> str:
     if sys.platform == "darwin":
         subprocess.run(["open", f"steam://run/{STEAM_APP_ID}"])
     elif sys.platform == "linux":
-        subprocess.run(["steam", f"steam://run/{STEAM_APP_ID}"])
+        subprocess.Popen(
+            ["steam", f"steam://run/{STEAM_APP_ID}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     elif sys.platform == "win32":
         os.startfile(f"steam://run/{STEAM_APP_ID}")  # noqa: S606 — hardcoded Steam URL
     else:
@@ -1064,7 +1113,13 @@ def _ocr_tesseract(
     lines: dict[tuple[int, int, int], list[int]] = {}
     n = len(data["text"])
     for i in range(n):
-        if int(data["conf"][i]) < 50 or not data["text"][i].strip():
+        conf = int(data["conf"][i])
+        text_val = data["text"][i].strip()
+        if conf < 50:
+            if text_val:
+                log.debug("OCR: rejected '%s' (conf=%d < 50)", text_val, conf)
+            continue
+        if not text_val:
             continue
         key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
         lines.setdefault(key, []).append(i)
@@ -1642,6 +1697,7 @@ def _wait_for_text(
     _require_gui_deps()
     start = time.time()
     focused = False
+    last_results: list[tuple[str, int, int, int, int]] = []
     while time.time() - start < timeout:
         win = _find_game_window()
         if win is None:
@@ -1659,6 +1715,7 @@ def _wait_for_text(
                 log.debug("Window capture failed, falling back to full-screen OCR")
                 results = _ocr_fullscreen()
 
+        last_results = results
         match = _find_text(
             results,
             target,
@@ -1678,7 +1735,24 @@ def _wait_for_text(
             len(results),
         )
         time.sleep(interval)
-    log.info("_wait_for_text: '%s' timed out after %ds", target, timeout)
+
+    # Log what OCR actually saw on failure — critical for diagnosing misses
+    elapsed = time.time() - start
+    if last_results:
+        seen = [f"'{t}'" for t, *_ in last_results[:20]]
+        log.warning(
+            "_wait_for_text: '%s' not found after %.0fs. Saw %d items: %s",
+            target,
+            elapsed,
+            len(last_results),
+            ", ".join(seen),
+        )
+    else:
+        log.warning(
+            "_wait_for_text: '%s' not found after %.0fs (no OCR results at all)",
+            target,
+            elapsed,
+        )
     return None
 
 
@@ -1706,7 +1780,6 @@ def _click_text(
         min_y_fraction=min_y_fraction,
     )
     if not match:
-        log.warning("OCR: '%s' not found after %ds", target, timeout)
         return False
     text, x, y, w, h = match
     click_y = y + y_offset
@@ -1926,7 +1999,20 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
         time.sleep(3)
         steps.append("Clicked CONTINUE")
     else:
-        steps.append("No leader screen (loading directly)")
+        # OCR failed — try keyboard fallback (Enter = "Next Action" in Civ 6)
+        log.warning("OCR: CONTINUE not found after 90s — trying Enter key fallback")
+        _bring_to_front()
+        _send_key("Return")
+        time.sleep(2)
+        _send_key("Return")  # double-tap for reliability
+        time.sleep(1)
+        steps.append("CONTINUE not found via OCR — used Enter key fallback")
+
+    # Verify game loaded by checking FireTuner port
+    if _is_tuner_port_open():
+        steps.append("FireTuner port confirmed open")
+    else:
+        steps.append("WARNING: FireTuner port not open after load")
 
     nav_elapsed = time.time() - nav_start
     return f"Save loading ({nav_elapsed:.0f}s). Steps: {', '.join(steps)}. Wait ~10s then use get_game_overview to verify."

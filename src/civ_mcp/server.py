@@ -9,13 +9,10 @@ import json
 import logging
 import os
 import re
-import subprocess
-import sys
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import uvicorn
@@ -101,9 +98,16 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
         lambda: game_launcher._click_text("CONTINUE", timeout=60, post_delay=1),
     )
     if clicked:
-        log.info("Auto-boot: clicked CONTINUE GAME")
+        log.info("Auto-boot: clicked CONTINUE GAME via OCR")
     else:
-        log.info("Auto-boot: no CONTINUE screen detected (may have loaded directly)")
+        # OCR failed — try keyboard fallback (Enter = "Next Action" in Civ 6)
+        log.warning("Auto-boot: OCR missed CONTINUE — trying Enter key fallback")
+        await asyncio.to_thread(lambda: game_launcher._bring_to_front())
+        await asyncio.sleep(0.5)
+        await asyncio.to_thread(lambda: game_launcher._send_key("Return"))
+        await asyncio.sleep(2)
+        await asyncio.to_thread(lambda: game_launcher._send_key("Return"))
+        log.info("Auto-boot: sent Enter key fallback (double-tap)")
     await asyncio.sleep(3)
     for attempt in range(30):
         try:
