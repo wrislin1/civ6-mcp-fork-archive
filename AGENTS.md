@@ -311,5 +311,5 @@ get_game_overview                 # verify load
 
 **Turn regression detection:** If you accidentally load a wrong save (e.g. the T1 scenario save instead of your autosave), `end_turn` will emit a CRITICAL warning with the correct autosave name to reload.
 
-Other tools: `quicksave`, `list_saves`, `load_save(index)`, `kill_game`, `launch_game`, `load_save_from_menu(name)`.
+Other tools: `list_saves`, `load_save(index)`, `kill_game`, `launch_game`, `load_save_from_menu(name)`.
 Save names omit extension: `"AutoSave_0221"` not `"AutoSave_0221.Civ6Save"`.

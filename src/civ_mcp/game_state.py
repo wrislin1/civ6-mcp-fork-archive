@@ -1529,12 +1529,6 @@ class GameState:
 
         return await dismiss_popup(self.conn)
 
-    async def quicksave(self) -> str:
-        """Create a quick-save."""
-        from civ_mcp.game_lifecycle import quicksave
-
-        return await quicksave(self.conn)
-
     async def list_saves(self) -> str:
         """List available save files."""
         from civ_mcp.game_lifecycle import list_saves

@@ -91,23 +91,18 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
     log.info("Auto-boot: load result: %s", result)
 
     # 4. Wait for save to load, click through leader intro, then reconnect
-    log.info("Auto-boot: waiting for save to load...")
+    log.info("Auto-boot: waiting 15s for save to load...")
+    await asyncio.sleep(15)
     # Click CONTINUE GAME on the leader intro screen (OCR poll).
-    # The save takes 10-30s to load; poll the whole time.
     clicked = await asyncio.to_thread(
-        lambda: game_launcher._click_text("CONTINUE", timeout=60, post_delay=1),
+        lambda: game_launcher._click_text("CONTINUE", timeout=105, post_delay=1),
     )
     if clicked:
         log.info("Auto-boot: clicked CONTINUE GAME via OCR")
     else:
-        # OCR failed — try keyboard fallback (Enter = "Next Action" in Civ 6)
-        log.warning("Auto-boot: OCR missed CONTINUE — trying Enter key fallback")
-        await asyncio.to_thread(lambda: game_launcher._bring_to_front())
-        await asyncio.sleep(0.5)
-        await asyncio.to_thread(lambda: game_launcher._send_key("Return"))
-        await asyncio.sleep(2)
-        await asyncio.to_thread(lambda: game_launcher._send_key("Return"))
-        log.info("Auto-boot: sent Enter key fallback (double-tap)")
+        # OCR failed — click the button by its known relative position
+        log.warning("Auto-boot: OCR missed CONTINUE — using positional click")
+        await asyncio.to_thread(game_launcher._click_continue_positional)
     await asyncio.sleep(3)
     for attempt in range(30):
         try:
@@ -2301,19 +2296,10 @@ async def run_lua(ctx: Context, code: str, context: str = "gamecore") -> str:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(annotations={"destructiveHint": True})
-async def quicksave(ctx: Context) -> str:
-    """Quicksave the current game.
-
-    Creates a quicksave that can be loaded later with load_save.
-    """
-    gs = _get_game(ctx)
-    return await _logged(ctx, "quicksave", {}, gs.quicksave)
-
 
 @mcp.tool(annotations={"readOnlyHint": True})
 async def list_saves(ctx: Context) -> str:
-    """List available save files (normal, autosave, quicksave).
+    """List available save files (normal, autosave).
 
     Returns indexed list of saves. Use load_save(save_index=N) to load one.
     Call this before load_save to see what's available.

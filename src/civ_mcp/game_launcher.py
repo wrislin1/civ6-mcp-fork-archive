@@ -408,6 +408,34 @@ def _send_key(key_name: str) -> None:
         log.warning("_send_key: unsupported platform %s", sys.platform)
 
 
+def _click_continue_positional() -> None:
+    """Click the CONTINUE GAME button by its known position on the leader screen.
+
+    The button is a teal ribbon at a fixed relative position across all
+    resolutions: roughly (38%, 75%) of the game window.  Used as a fallback
+    when OCR cannot read the low-contrast teal-on-teal text.
+    """
+    win = _find_game_window()
+    if win is None:
+        log.warning("Positional click: no game window found")
+        return
+    # Button center: 38% from left, 75% from top of the game window
+    abs_x = win.x + int(win.w * 0.38)
+    abs_y = win.y + int(win.h * 0.75)
+    log.info(
+        "Positional click: CONTINUE at (%d,%d) [window %dx%d at (%d,%d)]",
+        abs_x,
+        abs_y,
+        win.w,
+        win.h,
+        win.x,
+        win.y,
+    )
+    _bring_to_front()
+    time.sleep(0.3)
+    _click(abs_x, abs_y)
+
+
 def _wait_for_tuner_port(timeout: int = _PORT_POLL_TIMEOUT) -> bool:
     """Poll TCP 4318 until it accepts connections.
 
@@ -1068,6 +1096,11 @@ def _ocr_winrt(
     return results
 
 
+# Low-confidence OCR results from the most recent _ocr_tesseract call.
+# Used by _find_text as a fuzzy fallback when confident results don't match.
+_last_rejected_ocr: list[tuple[str, int, int, int, int]] = []
+
+
 def _ocr_tesseract(
     pil_image: "PIL.Image.Image",
     origin_x: int,
@@ -1112,12 +1145,25 @@ def _ocr_tesseract(
     # Group words by block + par + line (not just block + line)
     lines: dict[tuple[int, int, int], list[int]] = {}
     n = len(data["text"])
+    _last_rejected_ocr.clear()
     for i in range(n):
         conf = int(data["conf"][i])
         text_val = data["text"][i].strip()
         if conf < 50:
             if text_val:
                 log.debug("OCR: rejected '%s' (conf=%d < 50)", text_val, conf)
+                # Store with screen coords for fuzzy fallback matching
+                cx = (data["left"][i] + data["width"][i] / 2) / img_w
+                cy = (data["top"][i] + data["height"][i] / 2) / img_h
+                _last_rejected_ocr.append(
+                    (
+                        text_val,
+                        int(origin_x + cx * extent_w),
+                        int(origin_y + cy * extent_h),
+                        int(data["width"][i] / img_w * extent_w),
+                        int(data["height"][i] / img_h * extent_h),
+                    )
+                )
             continue
         if not text_val:
             continue
@@ -1352,6 +1398,29 @@ def _normalize(s: str) -> str:
     return s
 
 
+def _fuzzy_suffix_match(
+    target: str,
+    rejected: list[tuple[str, int, int, int, int]],
+) -> tuple[str, int, int, int, int] | None:
+    """Match by numeric suffix against low-confidence OCR results.
+
+    Tesseract often misreads the prefix of save names (e.g. '0_MCP_0135'
+    becomes 'VICP_0135') but the trailing digits are reliable. This matches
+    on a suffix of 3+ digits extracted from the target.
+    """
+    import re
+
+    suffix = re.search(r"(\d{3,})$", target.replace(" ", "").replace("_", ""))
+    if not suffix:
+        return None
+    suffix_str = suffix.group(1)
+    for text, x, y, w, h in rejected:
+        clean = text.replace(" ", "").replace("_", "")
+        if clean.endswith(suffix_str):
+            return (text, x, y, w, h)
+    return None
+
+
 def _find_text(
     ocr_results: list[tuple[str, int, int, int, int]],
     target: str,
@@ -1388,6 +1457,16 @@ def _find_text(
         min_y = max_y * min_y_fraction
         matches = [(t, x, y, w, h) for t, x, y, w, h in matches if y >= min_y]
     if not matches:
+        # Second-chance: fuzzy suffix match on rejected low-confidence results
+        fuzzy = _fuzzy_suffix_match(target, _last_rejected_ocr)
+        if fuzzy:
+            log.info(
+                "_find_text: '%s' not in confident results, "
+                "fuzzy suffix matched rejected '%s'",
+                target,
+                fuzzy[0],
+            )
+            return fuzzy
         log.debug(
             "_find_text: '%s' not found in %d OCR results", target, len(ocr_results)
         )
@@ -1984,13 +2063,10 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
     # NOTE (Windows): PrintWindow + SetForegroundWindow during the DX12
     # loading phase can crash the renderer.  macOS (Quartz) and Linux (mss)
     # are safe to poll during loading since they don't inject window messages.
-    #
-    # Poll continuously for CONTINUE with a 90s budget — covers slow
-    # first-time loads with shader compilation.  OCR just won't find the
-    # text during the loading bar phase (safe no-op).
 
-    log.info("[6/6] Waiting for save to load and CONTINUE GAME screen...")
-    match = _wait_for_text("CONTINUE", timeout=90, interval=2.5)
+    log.info("[6/6] Waiting 15s for save to load, then looking for CONTINUE GAME...")
+    time.sleep(15)
+    match = _wait_for_text("CONTINUE", timeout=105, interval=2.5)
     if match:
         text, x, y, w, h = match
         log.info("Found '%s' at (%d,%d) — clicking", text, x, y)
@@ -1999,14 +2075,11 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
         time.sleep(3)
         steps.append("Clicked CONTINUE")
     else:
-        # OCR failed — try keyboard fallback (Enter = "Next Action" in Civ 6)
-        log.warning("OCR: CONTINUE not found after 90s — trying Enter key fallback")
-        _bring_to_front()
-        _send_key("Return")
-        time.sleep(2)
-        _send_key("Return")  # double-tap for reliability
-        time.sleep(1)
-        steps.append("CONTINUE not found via OCR — used Enter key fallback")
+        # OCR failed — click the button by its known relative position
+        log.warning("OCR: CONTINUE not found after 90s — using positional click")
+        _click_continue_positional()
+        time.sleep(3)
+        steps.append("CONTINUE not found via OCR — used positional click fallback")
 
     # Verify game loaded by checking FireTuner port
     if _is_tuner_port_open():

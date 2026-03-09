@@ -276,23 +276,6 @@ async def dismiss_popup(conn: GameConnection) -> str:
 # ------------------------------------------------------------------
 
 
-async def quicksave(conn: GameConnection) -> str:
-    """Trigger a quicksave."""
-    lines = await conn.execute_write(
-        f"local gf = {{}}; "
-        f'gf.Name = "quicksave"; '
-        f"gf.Location = SaveLocations.LOCAL_STORAGE; "
-        f"gf.Type = SaveTypes.SINGLE_PLAYER; "
-        f"gf.IsAutosave = false; "
-        f"gf.IsQuicksave = true; "
-        f"Network.SaveGame(gf); "
-        f'print("OK|quicksave"); '
-        f'print("{lq.SENTINEL}")'
-    )
-    if any("OK|" in l for l in lines):
-        return "Quicksave triggered."
-    return "Quicksave may have failed: " + " ".join(lines)
-
 
 async def save_game(conn: GameConnection, name: str) -> str:
     """Create a named save. Used for MCP per-turn autosaves."""
@@ -333,7 +316,7 @@ def cleanup_old_autosaves(keep: int = 5) -> None:
 
 
 async def list_saves(conn: GameConnection) -> str:
-    """List available saves (normal + autosave + quicksave).
+    """List available saves (normal + autosave).
 
     Uses filesystem scan (reliable — finds all save types including
     autosaves and quicksaves). Falls back to Lua query if filesystem
