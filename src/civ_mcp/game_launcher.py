@@ -414,22 +414,50 @@ def _click_continue_positional() -> None:
     The button is a teal ribbon at a fixed relative position across all
     resolutions: roughly (38%, 75%) of the game window.  Used as a fallback
     when OCR cannot read the low-contrast teal-on-teal text.
+
+    On macOS, kCGWindowBounds includes the title bar + shadow, so we detect
+    the content area offset the same way _ocr_game_window does (capture →
+    measure → compare) to avoid clicking ~30px too high.
     """
     win = _find_game_window()
     if win is None:
         log.warning("Positional click: no game window found")
         return
-    # Button center: 38% from left, 75% from top of the game window
+
+    # On macOS, kCGWindowBounds includes title bar + shadow.
+    # Detect the content area offset the same way _ocr_game_window does.
+    content_y = win.y
+    content_h = win.h
+    if sys.platform == "darwin":
+        try:
+            import Quartz
+
+            cg_image = _capture_window(win.window_id)
+            img_px_w = Quartz.CGImageGetWidth(cg_image)
+            img_px_h = Quartz.CGImageGetHeight(cg_image)
+            if win.w and img_px_w and img_px_h:
+                scale = img_px_w / win.w
+                img_pt_h = img_px_h / scale
+                gap = win.h - img_pt_h
+                if gap > 5:
+                    content_y = win.y + gap
+                    content_h = int(img_pt_h)
+        except Exception:
+            log.debug("Positional click: could not detect title bar offset")
+
+    # Button center: 38% from left, 75% from top of the content area
     abs_x = win.x + int(win.w * 0.38)
-    abs_y = win.y + int(win.h * 0.75)
+    abs_y = content_y + int(content_h * 0.75)
     log.info(
-        "Positional click: CONTINUE at (%d,%d) [window %dx%d at (%d,%d)]",
+        "Positional click: CONTINUE at (%d,%d) [window %dx%d at (%d,%d), content_y=%d content_h=%d]",
         abs_x,
         abs_y,
         win.w,
         win.h,
         win.x,
         win.y,
+        content_y,
+        content_h,
     )
     _bring_to_front()
     time.sleep(0.3)
@@ -987,8 +1015,11 @@ def _ocr_vision(
         return []
 
     results = []
+    _last_rejected_ocr.clear()
     for obs in request.results() or []:
-        text = obs.topCandidates_(1)[0].string()
+        candidate = obs.topCandidates_(1)[0]
+        text = candidate.string()
+        conf = candidate.confidence()  # 0.0–1.0
         bbox = obs.boundingBox()
         # Vision: normalized [0,1], origin bottom-left → screen points
         norm_cx = bbox.origin.x + bbox.size.width / 2
@@ -997,8 +1028,13 @@ def _ocr_vision(
         sy = origin_y + norm_cy * extent_h
         sw = bbox.size.width * extent_w
         sh = bbox.size.height * extent_h
-        results.append((text, int(sx), int(sy), int(sw), int(sh)))
-    log.info("Vision OCR: %d lines found", len(results))
+        entry = (text, int(sx), int(sy), int(sw), int(sh))
+        if conf < 0.5:
+            log.debug("Vision OCR: rejected '%s' (conf=%.2f < 0.5)", text, conf)
+            _last_rejected_ocr.append(entry)
+            continue
+        results.append(entry)
+    log.info("Vision OCR: %d lines found (%d rejected)", len(results), len(_last_rejected_ocr))
     if results:
         log.debug("Vision OCR sample: %s", [r[0] for r in results[:5]])
     return results
@@ -1096,7 +1132,7 @@ def _ocr_winrt(
     return results
 
 
-# Low-confidence OCR results from the most recent _ocr_tesseract call.
+# Low-confidence OCR results from the most recent OCR call (any engine).
 # Used by _find_text as a fuzzy fallback when confident results don't match.
 _last_rejected_ocr: list[tuple[str, int, int, int, int]] = []
 
