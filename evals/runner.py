@@ -251,6 +251,45 @@ def _discover_run_id() -> str | None:
     return run_id if run_id else None
 
 
+def _upload_eval_logs(local_dir: Path, cloud_url: str) -> None:
+    """Upload .eval files from local_dir to cloud storage with retries.
+
+    cloud_url: e.g. "az://telemetry/evals"
+    Transient DNS/network errors are caught — the local file is preserved.
+    """
+    import time
+
+    eval_files = list(local_dir.glob("*.eval"))
+    if not eval_files:
+        return
+
+    try:
+        import fsspec
+
+        fs, _, paths = fsspec.get_fs_token_paths(cloud_url)
+        base_path = paths[0] if paths else cloud_url
+    except Exception as e:
+        print(f"  WARNING: Could not init cloud filesystem: {e}")
+        print(f"  .eval files preserved in {local_dir}")
+        return
+
+    for eval_file in eval_files:
+        dest = f"{base_path}/{eval_file.name}"
+        for attempt in range(3):
+            try:
+                fs.put(str(eval_file), dest)
+                print(f"  Uploaded {eval_file.name} → {cloud_url}/{eval_file.name}")
+                eval_file.unlink()
+                break
+            except Exception as e:
+                print(f"  Upload attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+        else:
+            print(f"  WARNING: Failed to upload {eval_file.name} after 3 attempts.")
+            print(f"  File preserved at: {eval_file}")
+
+
 def run_scenario(
     model: str,
     scenario: str,
@@ -260,12 +299,12 @@ def run_scenario(
     extra_args: list[str] | None = None,
 ) -> int:
     """Run a single scenario and return the exit code."""
-    # Cloud storage: set INSPECT_LOG_DIR for .eval files if configured
+    # Log locally first, upload to cloud after — avoids Inspect crashing
+    # on transient DNS/network errors during log_finish().
     cloud_bucket = os.environ.get("CIV_MCP_TELEMETRY_BUCKET", "")
-    if cloud_bucket:
-        # Point Inspect's log dir at the evals/ prefix in the same bucket
-        inspect_log_dir = cloud_bucket.rstrip("/") + "/evals"
-        os.environ.setdefault("INSPECT_LOG_DIR", inspect_log_dir)
+    local_log_dir = EVALS_DIR.parent / "logs"
+    local_log_dir.mkdir(exist_ok=True)
+    os.environ["INSPECT_LOG_DIR"] = str(local_log_dir)
 
     # Extract clean model name for diary/log attribution
     # e.g. "openai/azure/gpt-5.2" → "gpt-5.2"
@@ -311,6 +350,11 @@ def run_scenario(
     print(f"{'=' * 60}\n")
 
     result = subprocess.run(cmd, cwd=str(EVALS_DIR.parent))
+
+    # Upload .eval logs to cloud storage (retry-safe, won't crash on DNS failure)
+    if cloud_bucket:
+        _upload_eval_logs(local_log_dir, cloud_bucket.rstrip("/") + "/evals")
+
     return result.returncode
 
 
