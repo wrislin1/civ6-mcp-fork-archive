@@ -281,6 +281,15 @@ def _click_aspyr_launcher_sync() -> str | None:
         if match:
             text, x, y, w, h = match
             log.info("OCR: found '%s' at (%d,%d) — clicking", text, x, y)
+            # The Aspyr launcher is a separate process from the game.
+            # CGEventPost clicks require the target to be frontmost.
+            # Click the mouse position directly — the launcher should
+            # already be visible since we just OCR'd it on screen.
+            _bring_to_front()
+            time.sleep(0.3)
+            _click(x, y)
+            # Double-click in case the first was absorbed by the focus change
+            time.sleep(0.5)
             _click(x, y)
             time.sleep(3)
             log.info("Clicked PLAY on Aspyr launcher")
@@ -795,6 +804,45 @@ def _capture_window_screencapture(window_id: int) -> object:
         os.unlink(path)
 
 
+def _capture_fullscreen_screencapture() -> object | None:
+    """Capture the full screen via screencapture (macOS 15 fallback).
+
+    Returns a CGImageRef compatible with _ocr_vision(), or None on failure.
+    Unlike the per-window variant, this captures the entire display.
+    """
+    import tempfile
+
+    import Quartz
+    from Foundation import NSData
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        path = f.name
+    try:
+        subprocess.run(
+            ["screencapture", "-x", path],
+            check=True,
+            timeout=5,
+            capture_output=True,
+        )
+        data = NSData.dataWithContentsOfFile_(path)
+        if data is None:
+            log.warning("screencapture fullscreen produced no output")
+            return None
+        provider = Quartz.CGDataProviderCreateWithCFData(data)
+        cg_image = Quartz.CGImageCreateWithPNGDataProvider(
+            provider, None, True, Quartz.kCGRenderingIntentDefault
+        )
+        if cg_image is None:
+            log.warning("Failed to create CGImage from fullscreen screencapture")
+            return None
+        return cg_image
+    except Exception as e:
+        log.warning("screencapture fullscreen failed: %s", e)
+        return None
+    finally:
+        os.unlink(path)
+
+
 def _capture_window_win32(hwnd: int) -> "PIL.Image.Image":
     """Capture a window via PrintWindow + BitBlt into a PIL Image."""
     import ctypes
@@ -1220,8 +1268,11 @@ def _ocr_fullscreen() -> list[tuple[str, int, int, int, int]]:
         Quartz.kCGWindowImageDefault,
     )
     if image is None:
-        log.info("Fullscreen OCR: CGWindowListCreateImage returned nil")
-        return []
+        # macOS 15: CGWindowListCreateImage obsoleted — screencapture fallback
+        log.info("Fullscreen OCR: CGWindowListCreateImage returned nil, trying screencapture")
+        image = _capture_fullscreen_screencapture()
+        if image is None:
+            return []
 
     results = _ocr_vision(image, 0, 0, disp_w, disp_h)
     log.info("Fullscreen OCR: %d text regions found", len(results))
@@ -1967,7 +2018,9 @@ def _navigate_to_save_sync(save_name: str, tab: str | None = "Autosaves") -> str
     steps.append("Clicked Single Player")
 
     log.info("[2/7] Clicking 'Load Game'...")
-    if not _click_text("Load Game", timeout=5, exact=True, post_delay=0.5):
+    # y_offset nudges the click down from bbox center to avoid hitting
+    # "Resume Game" directly above in the tightly-packed single player menu.
+    if not _click_text("Load Game", timeout=5, exact=True, post_delay=0.5, y_offset=15):
         return "FAILED: Could not find 'Load Game' button."
     steps.append("Clicked Load Game")
 
