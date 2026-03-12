@@ -1122,7 +1122,17 @@ async def execute_end_turn(gs: GameState) -> str:
         gs._pending_end_turn_from = None
         if details:
             return f"End turn blocked (turn {turn_after or turn_before}): {'; '.join(details)}"
-        return f"End turn requested (turn is still {turn_after or turn_before}). Check get_pending_diplomacy or dismiss_popup."
+        # No blockers, no diplomacy, no game over — true AI turn hang.
+        # Return structured HANG: prefix so server.py can auto-recover.
+        turn_num = turn_after or turn_before
+        if turn_num is not None:
+            hang_save = f"0_MCP_{turn_num:04d}"
+            return (
+                f"HANG:{turn_num}:{hang_save}|"
+                f"End turn requested (turn is still {turn_num}). "
+                f"AI turn processing appears stuck."
+            )
+        return f"End turn requested (turn is still {turn_num}). Check get_pending_diplomacy or dismiss_popup."
 
     # Turn advanced — clear the pending flag
     gs._pending_end_turn = False
