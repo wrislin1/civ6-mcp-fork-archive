@@ -48,18 +48,24 @@ export function GameDiaryView({ filename }: GameDiaryViewProps) {
 
   const scenarioDef = scenarioId ? SCENARIOS[scenarioId] : null;
 
-  const maxIdx = Math.max(0, turnNumbers.length - 1);
+  // After agent elimination, remaining turns have no agent row and render blank.
+  // Trim the navigable range to the last turn the agent was alive.
+  const navTurns = outcome && !outcome.playerAlive
+    ? turnNumbers.filter((t) => t <= outcome.turn)
+    : turnNumbers;
+
+  const maxIdx = Math.max(0, navTurns.length - 1);
   const { index, goPrev, goNext, goFirst, goLast, seek } =
     useTurnNavigation(maxIdx);
 
   // Turn detail subscriptions — ~12 docs each
-  const selectedTurn = turnNumbers[index];
-  const prevTurnNum = index > 0 ? turnNumbers[index - 1] : undefined;
+  const selectedTurn = navTurns[index];
+  const prevTurnNum = index > 0 ? navTurns[index - 1] : undefined;
 
   const currentTurn = useDiaryTurn(filename, selectedTurn, agentModelOverride);
   const prevTurn = useDiaryTurn(filename, prevTurnNum, agentModelOverride);
 
-  const hasTurns = turnNumbers.length > 1;
+  const hasTurns = navTurns.length > 1;
   const isLastTurn = index === maxIdx;
 
   return (
@@ -222,7 +228,7 @@ export function GameDiaryView({ filename }: GameDiaryViewProps) {
                 turnData={currentTurn}
                 prevTurnData={prevTurn ?? undefined}
                 index={index}
-                total={turnNumbers.length}
+                total={navTurns.length}
               />
               <LeaderboardTable
                 turnData={currentTurn}
