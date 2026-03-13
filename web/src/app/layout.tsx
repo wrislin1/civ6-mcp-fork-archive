@@ -3,6 +3,7 @@ import { Cinzel, Cormorant_Garamond, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConvexClientProvider } from "@/components/convex-provider";
+import { ConsoleEgg } from "@/components/console-egg";
 import "./globals.css";
 
 const cinzel = Cinzel({
@@ -45,7 +46,10 @@ export default function RootLayout({
             defaultTheme="light"
             enableSystem={false}
           >
-            <TooltipProvider>{children}</TooltipProvider>
+            <TooltipProvider>
+              <ConsoleEgg />
+              {children}
+            </TooltipProvider>
           </ThemeProvider>
         </ConvexClientProvider>
       </body>
