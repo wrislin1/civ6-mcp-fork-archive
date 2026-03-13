@@ -1,11 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Download } from "lucide-react";
 import { PageShell } from "@/components/page-shell";
 import { GameDiaryView } from "@/components/game-diary-view";
-import { StrategicMap } from "@/components/strategic-map";
 import { useDiarySummary } from "@/lib/use-diary";
+import { SkeletonBlock } from "@/components/skeleton";
+
+const StrategicMap = dynamic(
+  () => import("@/components/strategic-map").then((m) => m.StrategicMap),
+  { ssr: false, loading: () => <SkeletonBlock className="h-[600px] w-full" /> },
+);
 
 type Tab = "diary" | "map";
 
