@@ -94,7 +94,7 @@ function ScenarioCard({
               </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <CivIcon icon={Map} color="#4A90A4" size="sm" />
+              <CivIcon icon={Map} color={CIV6_COLORS.marine} size="sm" />
               <span className="text-sm text-marble-600">
                 {scenario.mapType}, {scenario.mapSize}
               </span>
@@ -115,7 +115,7 @@ function ScenarioCard({
 
         {/* Opponents */}
         <div className="flex items-start gap-1.5">
-          <CivIcon icon={Users} color="#A39B8F" size="sm" />
+          <CivIcon icon={Users} color={CIV6_COLORS.normal} size="sm" />
           <span className="text-xs leading-relaxed text-marble-500">
             vs {scenario.opponents.join(", ")}
           </span>

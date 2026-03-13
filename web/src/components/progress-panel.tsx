@@ -154,7 +154,7 @@ export function ProgressPanel({ agent, prevAgent, scenarioId }: ProgressPanelPro
             </h4>
             <div className="flex flex-wrap gap-1.5">
               {agent.policies.map((p) => (
-                <div key={p} className="rounded-sm bg-marble-100 px-2 py-0.5">
+                <div key={p} className="max-w-[200px] truncate rounded-sm bg-marble-100 px-2 py-0.5">
                   <span className="font-mono text-xs text-marble-700">
                     {cleanCivName(p)}
                   </span>
@@ -225,7 +225,7 @@ export function ProgressPanel({ agent, prevAgent, scenarioId }: ProgressPanelPro
             {agent.religion_beliefs.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {agent.religion_beliefs.map((b) => (
-                  <div key={b} className="rounded-sm bg-marble-100 px-2 py-0.5">
+                  <div key={b} className="max-w-[200px] truncate rounded-sm bg-marble-100 px-2 py-0.5">
                     <span className="font-mono text-xs text-marble-700">
                       {cleanCivName(b)}
                     </span>
