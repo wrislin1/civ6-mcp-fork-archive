@@ -220,12 +220,68 @@ print("{SENTINEL}")
 """
 
 
-def build_unit_position_query(unit_index: int) -> str:
-    """GameCore: read a unit's current position."""
+def build_unit_position_query(
+    unit_index: int,
+    move_target_x: int | None = None,
+    move_target_y: int | None = None,
+) -> str:
+    """GameCore: read a unit's current position.
+
+    When *move_target_x/y* are provided, also diagnoses why a blocked move
+    failed (water, mountain, foreign border) so the caller doesn't need a
+    second round-trip.
+    """
+    diag_block = ""
+    if move_target_x is not None and move_target_y is not None:
+        diag_block = f"""
+-- Diagnose blocked move target
+pcall(function()
+    local plot = Map.GetPlot({move_target_x}, {move_target_y})
+    if not plot then print("DIAG|UNKNOWN|tile does not exist"); return end
+    if plot:IsWater() then
+        local hasShip = false
+        pcall(function()
+            local tech = GameInfo.Technologies["TECH_SHIPBUILDING"]
+            if tech then hasShip = Players[me]:GetTechs():HasTech(tech.Index) end
+        end)
+        if hasShip then print("DIAG|WATER_OK|water tile (can embark)")
+        else print("DIAG|WATER|water tile - land units need Shipbuilding tech to embark") end
+    elseif plot:IsMountain() then
+        print("DIAG|MOUNTAIN|impassable mountain")
+    elseif plot:IsImpassable() then
+        print("DIAG|IMPASSABLE|impassable terrain (ice or natural wonder)")
+    else
+        local owner = plot:GetOwner()
+        if owner >= 0 and owner ~= me then
+            local atWar = false
+            pcall(function() atWar = Players[me]:GetDiplomacy():IsAtWarWith(owner) end)
+            if atWar then
+                print("DIAG|UNKNOWN|tile is enemy territory but movement still blocked - check path")
+            else
+                local civName = "player " .. owner
+                pcall(function()
+                    local cfg = PlayerConfigurations[owner]
+                    civName = cfg and Locale.Lookup(cfg:GetCivilizationShortDescription()) or civName
+                end)
+                local isMajor = true
+                pcall(function() isMajor = Players[owner]:IsMajor() end)
+                if isMajor then
+                    print("DIAG|BORDER|foreign territory (" .. civName .. ") - need Open Borders via propose_trade")
+                else
+                    print("DIAG|BORDER_CS|city-state territory (" .. civName .. ") - need suzerainty or Open Borders")
+                end
+            end
+        else
+            print("DIAG|UNKNOWN|tile appears passable - path may be blocked by intermediate tiles")
+        end
+    end
+end)
+"""
     return f"""
-local u = Players[Game.GetLocalPlayer()]:GetUnits():FindID({unit_index})
+local me = Game.GetLocalPlayer()
+local u = Players[me]:GetUnits():FindID({unit_index})
 if u then print("POS|" .. u:GetX() .. "|" .. u:GetY()) else print("POS|GONE") end
-print("{SENTINEL}")
+{diag_block}print("{SENTINEL}")
 """
 
 
@@ -364,7 +420,15 @@ print("{SENTINEL}")
 
 
 def build_attack_followup_query(target_x: int, target_y: int) -> str:
-    """GameCore read: get actual HP of units at target tile after combat."""
+    """InGame context: get actual HP of units at target tile after combat.
+
+    Also checks for city defenses (walls/garrison) at the target — when
+    attacking a walled city, damage goes to walls first so the garrison
+    unit's HP stays unchanged even though the attack succeeded.
+
+    Runs in InGame context because enemy city district APIs
+    (GetDistricts, GetMaxDamage) are not available in GameCore.
+    """
     return f"""
 local found = false
 for i = 0, 63 do
@@ -378,11 +442,42 @@ for i = 0, 63 do
                 found = true
             end
         end
+        pcall(function()
+            for _, c in Players[i]:GetCities():Members() do
+                if c:GetX() == {target_x} and c:GetY() == {target_y} then
+                    local ccIdx = GameInfo.Districts["DISTRICT_CITY_CENTER"].Index
+                    for _, d in c:GetDistricts():Members() do
+                        if d:GetType() == ccIdx then
+                            pcall(function()
+                                local wMax = d:GetMaxDamage(DefenseTypes.DISTRICT_OUTER) or 0
+                                local wHP = wMax - (d:GetDamage(DefenseTypes.DISTRICT_OUTER) or 0)
+                                local gMax = d:GetMaxDamage(DefenseTypes.DISTRICT_GARRISON) or 0
+                                local gHP = gMax - (d:GetDamage(DefenseTypes.DISTRICT_GARRISON) or 0)
+                                if wMax > 0 or gMax > 0 then
+                                    print("CITY_DEF|wall:" .. wHP .. "/" .. wMax .. "|garrison:" .. gHP .. "/" .. gMax)
+                                end
+                            end)
+                            break
+                        end
+                    end
+                end
+            end
+        end)
     end
 end
 if not found then print("EMPTY") end
 print("{SENTINEL}")
 """
+
+
+def parse_blocked_diagnostic(lines: list[str]) -> str:
+    """Extract human-readable block reason from diagnostic Lua output."""
+    for line in lines:
+        if line.startswith("DIAG|"):
+            parts = line.split("|", 2)
+            if len(parts) >= 3:
+                return parts[2]
+    return "unit did not move — impassable terrain, border, or no path"
 
 
 def build_combat_estimate_query(unit_index: int, target_x: int, target_y: int) -> str:
@@ -1446,19 +1541,27 @@ def build_pathing_estimate_query(unit_index: int, target_x: int, target_y: int) 
 {_lua_get_unit(unit_index)}
 -- Guard: GetMoveToPath returns degenerate paths for units with 0 moves
 if unit:GetMovesRemaining() <= 0 then
-    print("PATH|1|1|0")
-    print("WAYPOINTS|(" .. unit:GetX() .. "," .. unit:GetY() .. ")")
+    print("PATH|-2|0|0")
+    print("WAYPOINTS|")
     print("{SENTINEL}")
     return
 end
 local targetPlot = Map.GetPlot({target_x}, {target_y})
 if not targetPlot then {_bail(f"ERR:INVALID_TARGET|Target ({target_x},{target_y}) is out of bounds")} end
 local path = UnitManager.GetMoveToPath(unit, targetPlot:GetIndex())
-if not path or #path == 0 then {_bail("ERR:NO_PATH|No path found to target")} end
+if not path or #path == 0 then
+    print("PATH|-1|0|0")
+    print("WAYPOINTS|")
+    print("{SENTINEL}")
+    return
+end
 -- Validate path reaches destination (GetMoveToPath returns garbage for unreachable targets)
 local lastPlot = Map.GetPlotByIndex(path[#path])
 if lastPlot:GetX() ~= {target_x} or lastPlot:GetY() ~= {target_y} then
-    {_bail(f"ERR:UNREACHABLE|Path does not reach ({target_x},{target_y}) — destination may be unreachable")}
+    print("PATH|-1|" .. #path .. "|0")
+    print("WAYPOINTS|")
+    print("{SENTINEL}")
+    return
 end
 local reach = UnitManager.GetReachableMovement(unit)
 local reachSet = {{}}

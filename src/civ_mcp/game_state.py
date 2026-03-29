@@ -207,7 +207,11 @@ class GameState:
         if result.startswith("MOVING_TO") or result.startswith("CAPTURE_MOVE"):
             try:
                 pos_lines = await self.conn.execute_read(
-                    lq.build_unit_position_query(unit_index)
+                    lq.build_unit_position_query(
+                        unit_index,
+                        move_target_x=target_x,
+                        move_target_y=target_y,
+                    )
                 )
                 for line in pos_lines:
                     if line.startswith("POS|") and "GONE" not in line:
@@ -219,7 +223,10 @@ class GameState:
                             from_x = int(from_match.group(1))
                             from_y = int(from_match.group(2))
                             if now_x == from_x and now_y == from_y:
-                                result += "|BLOCKED (unit did not move — impassable terrain, border, or no path)"
+                                reason = lq.parse_blocked_diagnostic(
+                                    pos_lines
+                                )
+                                result += f"|BLOCKED ({reason})"
                             else:
                                 dx = now_x - from_x
                                 dy = (
@@ -304,7 +311,9 @@ class GameState:
             # Melee/air needs more time: unit must path/fly then attack resolves
             await asyncio.sleep(0.4 if (is_melee or is_air) else 0.15)
             try:
-                followup = await self.conn.execute_read(
+                # InGame context: needed for enemy city district APIs
+                # (wall/garrison HP via GetDistricts, GetMaxDamage)
+                followup = await self.conn.execute_write(
                     lq.build_attack_followup_query(target_x, target_y)
                 )
                 # Filter out our own units from followup (after melee kill,
@@ -315,6 +324,7 @@ class GameState:
                 # Calculate damage from pre-attack HP vs post-combat HP
                 pre_hp = _extract_pre_hp(result)
                 post_hp = _extract_post_hp(followup, local_player)
+                city_def = _extract_city_defense(followup)
                 damage_info = ""
                 if pre_hp is not None and post_hp is not None:
                     dmg = pre_hp - post_hp
@@ -322,10 +332,21 @@ class GameState:
                         damage_info = f"|damage dealt:{dmg}"
                 elif pre_hp is not None and followup_str == "Target eliminated":
                     damage_info = f"|damage dealt:{pre_hp}"
+                # When attacking a walled city, unit HP stays unchanged but
+                # walls absorb the damage — show wall/garrison HP instead.
+                if city_def:
+                    w_hp, w_max, g_hp, g_max = city_def
+                    if w_max > 0:
+                        damage_info += (
+                            f"|city walls: {w_hp}/{w_max}"
+                            f", garrison: {g_hp}/{g_max}"
+                        )
 
                 result += damage_info + "\n  Post-combat: " + followup_str
 
                 # Warn if target HP unchanged (popup may have blocked the attack)
+                # Suppress warning when attacking a walled city — damage goes
+                # to walls first so garrison unit HP staying at 100% is normal.
                 actual_pre = (
                     pre_hp if pre_hp is not None else (est.defender_hp if est else None)
                 )
@@ -334,6 +355,7 @@ class GameState:
                         followup_str != "Target eliminated"
                         and post_hp is not None
                         and post_hp >= actual_pre
+                        and city_def is None
                     ):
                         result += (
                             "\n  !! WARNING: Target HP unchanged — attack may not have "
@@ -350,7 +372,7 @@ class GameState:
         result = _action_result(lines)
         if result.startswith("CITY_RANGE_ATTACK"):
             try:
-                followup = await self.conn.execute_read(
+                followup = await self.conn.execute_write(
                     lq.build_attack_followup_query(target_x, target_y)
                 )
                 followup_str = _format_attack_followup(followup)
@@ -815,7 +837,22 @@ class GameState:
     ) -> str:
         lua = lq.build_propose_trade(other_player_id, offer_items, request_items)
         lines = await self.conn.execute_write(lua)
-        return _action_result(lines)
+        result = _action_result(lines)
+        # Dismiss diplomacy UI left open by the trade session.
+        # After CloseSession, the game transitions DiplomacyActionView to
+        # OVERVIEW_MODE (intel screen). Need a brief delay for the C++ UI
+        # state machine to settle, then dismiss it in a separate call.
+        await asyncio.sleep(0.3)
+        try:
+            await self.conn.execute_write(
+                'pcall(function() ContextPtr:LookUpControl("/InGame/DiplomacyActionView"):SetHide(true) end) '
+                "pcall(function() Events.HideLeaderScreen() end) "
+                "LuaEvents.DiplomacyActionView_ShowIngameUI() "
+                f'print("{lq.SENTINEL}")'
+            )
+        except Exception:
+            pass
+        return result
 
     async def test_trade(
         self,
@@ -1578,6 +1615,8 @@ def _format_attack_followup(lines: list[str], attacker_owner: int = 0) -> str:
     Filters out units belonging to ``attacker_owner`` so that after a melee
     kill (where the attacker moves onto the target tile) we don't misreport
     our own unit's HP as the defender's.
+
+    Also includes city wall/garrison HP when attacking a walled city.
     """
     parts = []
     for line in lines:
@@ -1594,6 +1633,13 @@ def _format_attack_followup(lines: list[str], attacker_owner: int = 0) -> str:
                 parts.append(f"{label}{fields[1]} {fields[2]}")
             elif len(fields) >= 3:
                 parts.append(f"{fields[1]} {fields[2]}")
+    city_def = _extract_city_defense(lines)
+    if city_def:
+        wall_hp, wall_max, gar_hp, gar_max = city_def
+        if wall_max > 0:
+            parts.append(f"Walls {wall_hp}/{wall_max}")
+        if gar_max > 0:
+            parts.append(f"City garrison {gar_hp}/{gar_max}")
     if not parts:
         return "Target eliminated"
     return ", ".join(parts)
@@ -1638,4 +1684,27 @@ def _extract_post_hp(followup_lines: list[str], attacker_owner: int = 0) -> int 
                     return int(hp_part)
                 except ValueError:
                     pass
+    return None
+
+
+def _extract_city_defense(
+    followup_lines: list[str],
+) -> tuple[int, int, int, int] | None:
+    """Extract wall and garrison HP from CITY_DEF followup line.
+
+    Returns ``(wall_hp, wall_max, garrison_hp, garrison_max)`` or *None*
+    when the target tile has no city defenses.
+    """
+    for line in followup_lines:
+        if line.startswith("CITY_DEF|"):
+            # CITY_DEF|wall:74/100|garrison:197/200
+            wall_hp = wall_max = gar_hp = gar_max = 0
+            for part in line.split("|")[1:]:
+                if part.startswith("wall:"):
+                    hp, mx = part[5:].split("/")
+                    wall_hp, wall_max = int(hp), int(mx)
+                elif part.startswith("garrison:"):
+                    hp, mx = part[9:].split("/")
+                    gar_hp, gar_max = int(hp), int(mx)
+            return (wall_hp, wall_max, gar_hp, gar_max)
     return None

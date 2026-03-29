@@ -321,8 +321,11 @@ def run_scenario(
     # Extract clean model name for diary/log attribution
     # e.g. "openai/azure/gpt-5.2" → "gpt-5.2"
     clean_model = model.rsplit("/", 1)[-1]
+    # Resolve inspect CLI from the same venv as the running Python interpreter
+    import shutil
+    inspect_bin = shutil.which("inspect") or str(Path(sys.executable).parent / "inspect")
     cmd = [
-        "inspect",
+        inspect_bin,
         "eval",
         f"evals/civbench.py@{track}",
         "--model",

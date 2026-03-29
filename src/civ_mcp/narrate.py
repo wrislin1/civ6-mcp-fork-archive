@@ -417,6 +417,13 @@ def narrate_cities(
 
 
 def narrate_pathing_estimate(est: lq.PathingEstimate) -> str:
+    if est.turns == -2:
+        return "Unit has no moves remaining this turn."
+    if est.turns < 0:
+        return (
+            "Unreachable — no path found. Destination may be in fog, "
+            "behind foreign borders, or blocked by impassable terrain."
+        )
     if est.turns == 0:
         return f"Reachable this turn ({est.total_tiles} tiles in path, all within movement range)."
     wp_str = ""

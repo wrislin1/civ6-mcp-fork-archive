@@ -298,6 +298,7 @@ from civ_mcp.lua.units import (  # noqa: F401
     build_unit_position_query,
     build_units_query,
     diff_threats,
+    parse_blocked_diagnostic,
     parse_builder_tasks,
     parse_combat_estimate,
     parse_fog_neighbor_response,

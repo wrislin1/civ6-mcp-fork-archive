@@ -91,7 +91,11 @@ for i = 0, 62 do
             local avail = {}
             for _, aName in ipairs(checkActions) do
                 local ok2, valid = pcall(function() return pDiplo:IsDiplomaticActionValid(aName, i, false) end)
-                if ok2 and valid then table.insert(avail, (aName:gsub("DIPLOACTION_", ""))) end
+                if ok2 and valid then
+                    local label = aName:gsub("DIPLOACTION_", "")
+                    if label == "OPEN_BORDERS" then label = "Open Borders (via propose_trade)" end
+                    table.insert(avail, label)
+                end
             end
             if not pDiplo:IsAtWarWith(i) then
                 local canWar = false
@@ -315,7 +319,10 @@ def build_send_diplo_action(other_player_id: int, action_name: str) -> str:
     """Send a proactive diplomatic action and detect acceptance/rejection.
 
     action_name is e.g. DIPLOMATIC_DELEGATION, DECLARE_FRIENDSHIP, DENOUNCE,
-    RESIDENT_EMBASSY, OPEN_BORDERS, DECLARE_SURPRISE_WAR, DECLARE_FORMAL_WAR, etc.
+    RESIDENT_EMBASSY, DECLARE_SURPRISE_WAR, DECLARE_FORMAL_WAR, etc.
+
+    Open Borders is NOT supported here — it's a trade deal, not a diplomatic
+    action. Use propose_trade with AGREEMENT/OPEN_BORDERS items instead.
 
     Key discovery: RequestSession uses DIFFERENT action strings from DIPLOACTION_ names:
     - DECLARE_FRIENDSHIP -> session string "DECLARE_FRIEND" (not "DECLARE_FRIENDSHIP")
@@ -331,7 +338,6 @@ def build_send_diplo_action(other_player_id: int, action_name: str) -> str:
         "DIPLOMATIC_DELEGATION": "DIPLOMATIC_DELEGATION",
         "RESIDENT_EMBASSY": "RESIDENT_EMBASSY",
         "DENOUNCE": "DENOUNCE",
-        "OPEN_BORDERS": "OPEN_BORDERS",
         # War declarations — session strings match action names
         "DECLARE_SURPRISE_WAR": "DECLARE_SURPRISE_WAR",
         "DECLARE_FORMAL_WAR": "DECLARE_FORMAL_WAR",
@@ -446,12 +452,6 @@ elseif action == "DECLARE_FRIENDSHIP" then
     print("OK:ACCEPTED|" .. name .. " accepted your friendship declaration")
 elseif action == "DENOUNCE" then
     print("OK:SENT|Denounced " .. name)
-elseif action == "OPEN_BORDERS" then
-    if sessionCompleted then
-        print("OK:ACCEPTED|" .. name .. " accepted open borders")
-    else
-        print("OK:ACCEPTED|Open borders sent to " .. name)
-    end
 else
     print("OK:SENT|" .. action .. " sent to " .. name)
 end
@@ -791,6 +791,7 @@ DiplomacyManager.RequestSession(me, target, "MAKE_DEAL")
 DealManager.SendWorkingDeal(DealProposalAction.PROPOSED, me, target)
 local sid = DiplomacyManager.FindOpenSessionID(me, target)
 local result = "PROPOSED"
+local termsStr = ""
 if sid and sid >= 0 then
     local ok, respDeal = pcall(function()
         return DealManager.GetWorkingDeal(DealDirection.INCOMING, me, target)
@@ -798,12 +799,47 @@ if sid and sid >= 0 then
     if ok and respDeal and respDeal:GetItemCount() and respDeal:GetItemCount() > 0 then
         DealManager.SendWorkingDeal(DealProposalAction.ACCEPTED, me, target)
         result = "ACCEPTED"
+        -- Report the actual deal terms (AI may have counter-offered different terms)
+        local weGive = {{}}
+        local theyGive = {{}}
+        for item in respDeal:Items() do
+            local fromID = item:GetFromPlayerID()
+            local iType = item:GetType()
+            local subType = item:GetSubType() or -1
+            local amount = item:GetAmount() or 0
+            local duration = item:GetDuration() or 0
+            local desc = "Unknown"
+            if iType == DealItemTypes.GOLD then
+                if duration > 0 then desc = amount .. " gold/turn (" .. duration .. " turns)"
+                else desc = amount .. " gold" end
+            elseif iType == DealItemTypes.AGREEMENTS then
+                if subType == DealAgreementTypes.OPEN_BORDERS then desc = "Open Borders"
+                elseif subType == DealAgreementTypes.JOINT_WAR then desc = "Joint War"
+                else desc = "Agreement" end
+            elseif iType == DealItemTypes.RESOURCES then
+                local res = GameInfo.Resources[item:GetValueType() or -1]
+                local rName = res and Locale.Lookup(res.Name) or "Resource"
+                if duration > 0 then desc = amount .. "x " .. rName .. " (" .. duration .. "t)"
+                else desc = amount .. "x " .. rName end
+            elseif iType == DealItemTypes.FAVOR then
+                desc = amount .. " Diplomatic Favor"
+            elseif iType == DealItemTypes.CITIES then
+                desc = "City"
+            end
+            if fromID == me then table.insert(weGive, desc)
+            else table.insert(theyGive, desc) end
+        end
+        if #weGive > 0 or #theyGive > 0 then
+            termsStr = "\\nActual deal terms:"
+            if #weGive > 0 then termsStr = termsStr .. "\\n  We give: " .. table.concat(weGive, ", ") end
+            if #theyGive > 0 then termsStr = termsStr .. "\\n  They give: " .. table.concat(theyGive, ", ") end
+        end
     else
         result = "REJECTED"
     end
     {_lua_close_diplo_session()}
 end
-print("OK:" .. result .. "|Trade " .. result:lower() .. " with " .. name)
+print("OK:" .. result .. "|Trade " .. result:lower() .. " with " .. name .. termsStr)
 print("{SENTINEL}")
 """
 
