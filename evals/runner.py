@@ -118,6 +118,7 @@ def ensure_game_ready() -> None:
 
 # Azure OpenAI
 AZURE_MODELS = [
+    "openai/azure/gpt-5.4",
     "openai/azure/gpt-5.2",
     "openai/azure/gpt-5.1",
     "openai/azure/gpt-5",
@@ -129,10 +130,11 @@ AZURE_MODELS = [
 # Azure supports Responses API but NOT /responses/input_tokens (token counting)
 # or /responses/compact — Inspect's context compaction crashes with 404.
 # Force chat completions until Azure adds full v1 parity.
-_NEEDS_CHAT_COMPLETIONS = {"gpt-5.2", "gpt-5.1", "gpt-5"}
+_NEEDS_CHAT_COMPLETIONS = {"gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-5"}
 
-# GCP Vertex AI
+# GCP Vertex AI (Gemini + Anthropic)
 VERTEX_MODELS = [
+    "anthropic/vertex/claude-opus-4-6",
     "google/vertex/gemini-3.1-pro-preview",
     "google/vertex/gemini-3-pro-preview",
     "google/vertex/gemini-3-flash-preview",
@@ -410,6 +412,12 @@ def main():
         help="Resume from an autosave (e.g. 0_MCP_0221)",
     )
     parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Number of runs per (model, scenario) pair (default: 1)",
+    )
+    parser.add_argument(
         "--list-models",
         action="store_true",
         help="Print available models and exit",
@@ -451,37 +459,40 @@ def main():
     ensure_game_ready()
 
     # Run
-    results: list[tuple[str, str, int]] = []
-    total = len(models) * len(scenarios)
+    runs = args.runs
+    results: list[tuple[str, str, int, int]] = []
+    total = len(models) * len(scenarios) * runs
     current = 0
 
     for model in models:
         for scenario in scenarios:
-            current += 1
-            print(f"\n[{current}/{total}] Running {scenario} with {model}")
-            rc = run_scenario(
-                model=model,
-                scenario=scenario,
-                track=args.track,
-                message_limit=args.message_limit,
-                resume_save=args.resume_save,
-                extra_args=extra if extra else None,
-            )
-            results.append((model, scenario, rc))
-            if rc != 0:
-                print(f"  WARNING: {scenario} exited with code {rc}")
+            for run_num in range(1, runs + 1):
+                current += 1
+                run_label = f" (run {run_num}/{runs})" if runs > 1 else ""
+                print(f"\n[{current}/{total}] Running {scenario} with {model}{run_label}")
+                rc = run_scenario(
+                    model=model,
+                    scenario=scenario,
+                    track=args.track,
+                    message_limit=args.message_limit,
+                    resume_save=args.resume_save,
+                    extra_args=extra if extra else None,
+                )
+                results.append((model, scenario, rc, run_num))
+                if rc != 0:
+                    print(f"  WARNING: {scenario} exited with code {rc}")
 
     # Summary
     print(f"\n{'=' * 60}")
     print("  RESULTS SUMMARY")
     print(f"{'=' * 60}")
-    for model, scenario, rc in results:
+    for model, scenario, rc, *_ in results:
         status = "OK" if rc == 0 else f"FAIL (exit {rc})"
         print(f"  {model:45s} | {scenario:20s} | {status}")
     print()
 
     # Exit with non-zero if any scenario failed
-    failures = sum(1 for _, _, rc in results if rc != 0)
+    failures = sum(1 for *_, rc, _ in results if rc != 0)
     if failures:
         print(f"{failures}/{total} scenario(s) failed.")
         sys.exit(1)

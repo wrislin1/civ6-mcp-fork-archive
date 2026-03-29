@@ -36,6 +36,7 @@ from civ_mcp.spectator import CameraController, PopupWatcher
 from civ_mcp.telemetry import (
     EVENT_CITY_ROW,
     EVENT_DIARY_ROW,
+    AlertSink,
     CloudSink,
     LocalSink,
     TelemetryEmitter,
@@ -175,6 +176,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     cloud_bucket = os.environ.get("CIV_MCP_TELEMETRY_BUCKET")
     if cloud_bucket:
         emitter.add_sink(CloudSink(cloud_bucket))
+    alert_webhook = os.environ.get("CIV_MCP_ALERT_WEBHOOK")
+    if alert_webhook:
+        emitter.add_sink(AlertSink(alert_webhook))
     emitter.start()
 
     logger = GameLogger(emitter)
@@ -2591,5 +2595,8 @@ def main():
         signal.signal(
             signal.SIGTERM, lambda sig, frame: os.kill(os.getpid(), signal.SIGINT)
         )
+
+    if os.environ.get("CIV_MCP_DISABLE_LUA"):
+        mcp._tool_manager.remove_tool("run_lua")
 
     mcp.run(transport="stdio")

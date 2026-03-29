@@ -354,6 +354,128 @@ class CloudSink:
         }.get(event_type)
 
 
+# ── Alert sink (opt-in via CIV_MCP_ALERT_WEBHOOK) ────────────────────────
+
+
+class AlertSink:
+    """Sends webhook alerts when a game stalls or completes.
+
+    Detects: repeated end_turn blockers, HANG signals, game over.
+    Fires a single POST per distinct alert (de-duplicated per turn + type).
+    Slack-compatible JSON body with ``text`` field.
+    """
+
+    BLOCKER_THRESHOLD = 5  # same blocker N times → alert
+
+    def __init__(self, webhook_url: str) -> None:
+        # ntfy JSON API requires POST to root with topic in body
+        self._is_ntfy = "ntfy.sh/" in webhook_url or "ntfy." in webhook_url
+        if self._is_ntfy:
+            # Extract topic from URL path, POST to root
+            parts = webhook_url.rstrip("/").rsplit("/", 1)
+            self._url = parts[0]  # e.g. https://ntfy.sh
+            self._ntfy_topic = parts[1] if len(parts) > 1 else ""
+        else:
+            self._url = webhook_url
+            self._ntfy_topic = ""
+        self._run_id: str = ""
+        self._game_id: str = ""
+        self._model: str = ""
+        self._alerted: set[str] = set()  # "turn:type" keys
+        self._blocker_counts: dict[str, int] = {}  # blocker_msg → count
+        self._last_turn: int = -1
+
+    def start(self, run_id: str, metadata: dict[str, Any]) -> None:
+        self._run_id = run_id
+        self._model = metadata.get("model_id", "?")
+
+    def bind_game(self, civ: str, seed: int) -> None:
+        self._game_id = f"{civ}_{seed}"
+
+    async def emit(self, event_type: str, data: dict[str, Any]) -> None:
+        turn = data.get("turn", -1)
+
+        # Reset blocker counts on turn advance
+        if turn != self._last_turn:
+            self._blocker_counts.clear()
+            self._last_turn = turn
+
+        if event_type == EVENT_GAME_OVER:
+            outcome = data.get("outcome", {})
+            result = outcome.get("result", "?")
+            vtype = outcome.get("victory_type", "?")
+            winner = outcome.get("winner_civ", "?")
+            self._fire(
+                turn,
+                "game_over",
+                f"Game over: {result} ({vtype}) — winner: {winner}",
+            )
+            return
+
+        if event_type != EVENT_TOOL_CALL:
+            return
+
+        tool = data.get("tool", "")
+        result = str(data.get("result", ""))
+
+        # Detect HANG signal
+        if tool == "end_turn" and result.startswith("HANG:"):
+            self._fire(turn, "hang", f"HANG detected at turn {turn}")
+            return
+
+        # Detect repeated end_turn blockers
+        if tool == "end_turn" and "Blocker:" in result:
+            # Extract blocker type from "Blocker: Fill Civic Slot (Fill Policy Slot)"
+            blocker = result.split("Blocker:", 1)[1].strip().split("\n")[0]
+            key = blocker[:60]
+            self._blocker_counts[key] = self._blocker_counts.get(key, 0) + 1
+            if self._blocker_counts[key] == self.BLOCKER_THRESHOLD:
+                self._fire(
+                    turn,
+                    f"blocker:{key}",
+                    f"Stuck on blocker at turn {turn}: {key} ({self.BLOCKER_THRESHOLD}x)",
+                )
+
+    async def close(self) -> None:
+        pass
+
+    def _fire(self, turn: int, alert_type: str, message: str) -> None:
+        key = f"{turn}:{alert_type}"
+        if key in self._alerted:
+            return
+        self._alerted.add(key)
+        title = f"{self._model} | {self._game_id}"
+        body = f"Run {self._run_id} | T{turn}: {message}"
+        is_game_over = "game_over" in alert_type
+        data: dict[str, Any] = {
+            "message": body,
+            "text": body,  # Slack compat
+            "title": title,
+            "priority": 4 if "hang" in alert_type else 3,
+            "tags": ["trophy"] if is_game_over else ["warning"],
+        }
+        if self._ntfy_topic:
+            data["topic"] = self._ntfy_topic
+        payload = json.dumps(data).encode()
+        # Fire-and-forget — never block game progress
+        asyncio.get_event_loop().call_soon(
+            lambda: asyncio.ensure_future(self._post(payload))
+        )
+
+    async def _post(self, payload: bytes) -> None:
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(
+                self._url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            await asyncio.to_thread(urllib.request.urlopen, req, timeout=5)
+        except Exception:
+            log.debug("AlertSink: webhook POST failed", exc_info=True)
+
+
 # ── Emitter (fan-out to sinks) ───────────────────────────────────────────
 
 

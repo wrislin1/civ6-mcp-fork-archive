@@ -303,6 +303,21 @@ export const setModelOverride = mutation({
   },
 });
 
+export const patchEvalTrack = mutation({
+  args: { fromTrack: v.string(), toTrack: v.string() },
+  handler: async (ctx, { fromTrack, toTrack }) => {
+    const games = await ctx.db.query("games").collect();
+    let patched = 0;
+    for (const game of games) {
+      if (game.evalTrack === fromTrack) {
+        await ctx.db.patch(game._id, { evalTrack: toTrack });
+        patched++;
+      }
+    }
+    return { patched };
+  },
+});
+
 /** Delete up to `limit` rows from a single table for a game.
  *  Returns how many were deleted — call repeatedly until 0. */
 export const deleteGameBatch = mutation({

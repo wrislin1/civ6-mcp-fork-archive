@@ -356,6 +356,12 @@ def _civ_mcp_server(
         metadata["model_id"] = model_id
     if metadata:
         env["CIV_MCP_METADATA"] = json.dumps(metadata)
+    # Disable run_lua in eval — agents must use built-in tools only
+    env["CIV_MCP_DISABLE_LUA"] = "1"
+    # Pass through alert webhook if configured
+    alert_webhook = os.environ.get("CIV_MCP_ALERT_WEBHOOK", "")
+    if alert_webhook:
+        env["CIV_MCP_ALERT_WEBHOOK"] = alert_webhook
     # Pass through cloud telemetry bucket if configured
     cloud_bucket = os.environ.get("CIV_MCP_TELEMETRY_BUCKET", "")
     if cloud_bucket:

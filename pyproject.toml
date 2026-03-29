@@ -1,6 +1,6 @@
 [project]
 name = "civ6-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "MCP server for Civilization VI — lets LLM agents read game state and play"
 readme = "README.md"
 license = "MIT"
