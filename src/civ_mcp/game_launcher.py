@@ -358,23 +358,30 @@ def _click_continue_positional() -> None:
         except Exception:
             log.debug("Positional click: could not detect title bar offset")
 
-    # Button center: 38% from left, 75% from top of the content area
-    abs_x = win.x + int(win.w * 0.38)
-    abs_y = content_y + int(content_h * 0.75)
-    log.info(
-        "Positional click: CONTINUE at (%d,%d) [window %dx%d at (%d,%d), content_y=%d content_h=%d]",
-        abs_x,
-        abs_y,
-        win.w,
-        win.h,
-        win.x,
-        win.y,
-        content_y,
-        content_h,
-    )
+    # Try multiple positions — the button's relative position varies across
+    # resolutions and window modes (observed: 38%/75% on 4K, 35%/82% on 1080p).
+    positions = [(0.38, 0.75), (0.35, 0.82), (0.38, 0.80), (0.35, 0.78)]
     _bring_to_front()
     time.sleep(0.3)
-    _click(abs_x, abs_y)
+    for pct_x, pct_y in positions:
+        abs_x = win.x + int(win.w * pct_x)
+        abs_y = content_y + int(content_h * pct_y)
+        log.info(
+            "Positional click: CONTINUE at (%d,%d) [%.0f%%,%.0f%%] "
+            "[window %dx%d at (%d,%d), content_y=%d content_h=%d]",
+            abs_x,
+            abs_y,
+            pct_x * 100,
+            pct_y * 100,
+            win.w,
+            win.h,
+            win.x,
+            win.y,
+            content_y,
+            content_h,
+        )
+        _click(abs_x, abs_y)
+        time.sleep(0.5)
 
 
 def _wait_for_tuner_port(timeout: int = _PORT_POLL_TIMEOUT) -> bool:

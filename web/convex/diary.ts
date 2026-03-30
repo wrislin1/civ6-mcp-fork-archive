@@ -63,6 +63,8 @@ export const getEloData = query({
 
     return games
       .filter((g) => g.outcome?.winnerCiv && g.eloPlayers && g.eloPlayers.length >= 2)
+      // Exclude development games from Elo — only benchmark tracks count
+      .filter((g) => g.evalTrack && g.evalTrack !== "development")
       .map((g) => {
         const override = g.agentModelOverride ?? null;
         return {

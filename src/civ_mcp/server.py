@@ -95,37 +95,48 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
     result = await load_game_save(conn, save_name)
     log.info("Auto-boot: load result: %s", result)
 
-    # 4. Wait for save to load, click through leader intro, then reconnect
+    # 4. Wait for save to load, click through leader intro, then reconnect.
+    # The CONTINUE GAME button on the leader screen has low-contrast
+    # teal-on-teal text that OCR often misses — fall back to positional
+    # click grid if OCR fails. Verify the click actually worked by
+    # checking for Lua states (only available once in-game, not on leader
+    # screen).
     log.info("Auto-boot: waiting 15s for save to load...")
     await asyncio.sleep(15)
-    # Click CONTINUE GAME on the leader intro screen (OCR poll).
     clicked = await asyncio.to_thread(
         lambda: game_launcher._click_text("CONTINUE", timeout=105, post_delay=1),
     )
     if clicked:
         log.info("Auto-boot: clicked CONTINUE GAME via OCR")
     else:
-        # OCR failed — click the button by its known relative position
-        log.warning("Auto-boot: OCR missed CONTINUE — using positional click")
+        log.warning("Auto-boot: OCR missed CONTINUE — using positional click grid")
         await asyncio.to_thread(game_launcher._click_continue_positional)
+
+    # Verify the click worked — Lua states only appear once past the
+    # leader screen into gameplay. Retry positional click if needed.
     await asyncio.sleep(3)
-    for attempt in range(30):
+    game_ready = False
+    for attempt in range(45):
         try:
             await conn.reconnect()
             if conn.gamecore_index is not None:
                 log.info("Auto-boot: game ready (GameCore=%s)", conn.gamecore_index)
+                game_ready = True
                 break
         except ConnectionError:
             pass
+        # Retry positional click every 10s in case the first click missed
+        if attempt > 0 and attempt % 10 == 0 and not clicked:
+            log.info("Auto-boot: retrying positional click (attempt %d)", attempt)
+            await asyncio.to_thread(game_launcher._click_continue_positional)
         await asyncio.sleep(1)
-    else:
+    if not game_ready:
         log.warning("Auto-boot: save may not have loaded — GameCore not found")
         return
 
-    # 5. Verify correct save loaded — the Lua load path can silently fail
-    # when the game is mid-session (Network.LoadGame's save handle gets GC'd
-    # during the LeaveGame state teardown). Detect wrong save and fall back
-    # to kill + OCR menu navigation.
+    # 5. Verify correct save loaded. If the wrong save loaded (e.g.
+    # main-menu "Continue Game" loaded a stale autosave instead of the
+    # scenario save), reload the correct one via Lua — no OCR needed.
     try:
         verify = await conn.execute_read(
             "local t = Game.GetCurrentGameTurn(); "
@@ -138,29 +149,67 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
                 if turn > 5:
                     log.error(
                         "Auto-boot: loaded T%d but expected T1 — wrong save! "
-                        "Falling back to kill + OCR reload",
+                        "Reloading '%s' via Lua",
                         turn,
+                        save_name,
                     )
-                    await game_launcher.kill_game()
-                    result = await asyncio.to_thread(game_launcher._launch_game_sync)
-                    log.info("Auto-boot: relaunch: %s", result)
-                    result = await asyncio.to_thread(
-                        game_launcher._navigate_to_save_sync, save_name, None
+                    # Retry via Lua (Network.LoadGame) — bypasses OCR entirely
+                    result = await load_game_save(conn, save_name)
+                    log.info("Auto-boot: Lua reload result: %s", result)
+                    await asyncio.sleep(15)
+                    # Click CONTINUE again for the leader screen
+                    await asyncio.to_thread(
+                        game_launcher._click_continue_positional
                     )
-                    log.info("Auto-boot: OCR nav: %s", result)
-                    for attempt in range(30):
+                    await asyncio.sleep(5)
+                    for retry in range(30):
                         try:
                             await conn.reconnect()
                             if conn.gamecore_index is not None:
-                                log.info(
-                                    "Auto-boot: game ready after fallback (GameCore=%s)",
-                                    conn.gamecore_index,
-                                )
-                                return
+                                break
                         except ConnectionError:
                             pass
                         await asyncio.sleep(1)
-                    log.warning("Auto-boot: fallback reload also failed")
+                    # Verify again
+                    try:
+                        verify2 = await conn.execute_read(
+                            "local t = Game.GetCurrentGameTurn(); "
+                            'print("VERIFY|" .. t); '
+                            'print("---END---")'
+                        )
+                        for line2 in verify2:
+                            if line2.startswith("VERIFY|"):
+                                t2 = int(line2.split("|")[1])
+                                if t2 > 5:
+                                    log.error(
+                                        "Auto-boot: Lua reload also loaded T%d "
+                                        "— falling back to kill + OCR",
+                                        t2,
+                                    )
+                                    await game_launcher.kill_game()
+                                    r = await asyncio.to_thread(
+                                        game_launcher._launch_game_sync
+                                    )
+                                    log.info("Auto-boot: relaunch: %s", r)
+                                    r = await asyncio.to_thread(
+                                        game_launcher._navigate_to_save_sync,
+                                        save_name,
+                                        None,
+                                    )
+                                    log.info("Auto-boot: OCR nav: %s", r)
+                                    for a in range(30):
+                                        try:
+                                            await conn.reconnect()
+                                            if conn.gamecore_index is not None:
+                                                return
+                                        except ConnectionError:
+                                            pass
+                                        await asyncio.sleep(1)
+                                    log.warning("Auto-boot: all fallbacks failed")
+                                    return
+                                log.info("Auto-boot: Lua reload verified at T%d", t2)
+                    except Exception:
+                        log.debug("Auto-boot: post-reload verify failed", exc_info=True)
                     return
                 log.info("Auto-boot: verified save at T%d", turn)
     except Exception:
