@@ -144,35 +144,45 @@ async def _check_empire_warnings(
     if snap:
         for cs in snap.cities.values():
             if cs.loyalty_per_turn < -5:
-                turns_left = int(cs.loyalty / abs(cs.loyalty_per_turn)) if cs.loyalty_per_turn < 0 else 99
-                events.append(lq.TurnEvent(
-                    priority=1,
-                    category="city",
-                    message=(
-                        f"LOYALTY CRISIS: {cs.name} losing {cs.loyalty_per_turn:+.1f}/t "
-                        f"(loyalty {cs.loyalty:.0f}) — will rebel in ~{turns_left} turns!"
-                    ),
-                ))
+                turns_left = (
+                    int(cs.loyalty / abs(cs.loyalty_per_turn))
+                    if cs.loyalty_per_turn < 0
+                    else 99
+                )
+                events.append(
+                    lq.TurnEvent(
+                        priority=1,
+                        category="city",
+                        message=(
+                            f"LOYALTY CRISIS: {cs.name} losing {cs.loyalty_per_turn:+.1f}/t "
+                            f"(loyalty {cs.loyalty:.0f}) — will rebel in ~{turns_left} turns!"
+                        ),
+                    )
+                )
             elif cs.loyalty < 30 and cs.loyalty_per_turn < 0:
-                events.append(lq.TurnEvent(
-                    priority=2,
-                    category="city",
-                    message=f"LOYALTY WARNING: {cs.name} at {cs.loyalty:.0f} loyalty ({cs.loyalty_per_turn:+.1f}/t)",
-                ))
+                events.append(
+                    lq.TurnEvent(
+                        priority=2,
+                        category="city",
+                        message=f"LOYALTY WARNING: {cs.name} at {cs.loyalty:.0f} loyalty ({cs.loyalty_per_turn:+.1f}/t)",
+                    )
+                )
 
     # --- Resource cap (from snapshot stockpiles) ---
     if snap:
         for s in snap.stockpiles:
             net = s.per_turn - s.demand + s.imported
             if s.cap > 0 and s.amount >= s.cap and net > 0:
-                events.append(lq.TurnEvent(
-                    priority=3,
-                    category="economy",
-                    message=(
-                        f"RESOURCE CAP: {s.name} {s.amount}/{s.cap} ({net:+d}/t) "
-                        f"— excess is wasted. Trade surplus or spend it."
-                    ),
-                ))
+                events.append(
+                    lq.TurnEvent(
+                        priority=3,
+                        category="economy",
+                        message=(
+                            f"RESOURCE CAP: {s.name} {s.amount}/{s.cap} ({net:+d}/t) "
+                            f"— excess is wasted. Trade surplus or spend it."
+                        ),
+                    )
+                )
 
     # --- Gold deficit (quick overview query) ---
     try:
@@ -184,16 +194,25 @@ async def _check_empire_warnings(
 
     if overview:
         game_score = overview.score
-        if overview.gold_per_turn < 0 and overview.gold < abs(overview.gold_per_turn) * 20:
-            turns_to_zero = int(overview.gold / abs(overview.gold_per_turn)) if overview.gold_per_turn < 0 else 99
-            events.append(lq.TurnEvent(
-                priority=2,
-                category="economy",
-                message=(
-                    f"DEFICIT: Gold {overview.gold_per_turn:+.0f}/t with {overview.gold:.0f} in treasury "
-                    f"— bankrupt in ~{turns_to_zero} turns."
-                ),
-            ))
+        if (
+            overview.gold_per_turn < 0
+            and overview.gold < abs(overview.gold_per_turn) * 20
+        ):
+            turns_to_zero = (
+                int(overview.gold / abs(overview.gold_per_turn))
+                if overview.gold_per_turn < 0
+                else 99
+            )
+            events.append(
+                lq.TurnEvent(
+                    priority=2,
+                    category="economy",
+                    message=(
+                        f"DEFICIT: Gold {overview.gold_per_turn:+.0f}/t with {overview.gold:.0f} in treasury "
+                        f"— bankrupt in ~{turns_to_zero} turns."
+                    ),
+                )
+            )
 
     # --- Idle trade routes (lightweight Lua query) ---
     try:
@@ -204,15 +223,17 @@ async def _check_empire_warnings(
                 cap, active = int(parts[1]), int(parts[2])
                 idle = cap - active
                 if idle > 0:
-                    events.append(lq.TurnEvent(
-                        priority=2,
-                        category="economy",
-                        message=(
-                            f"IDLE TRADE ROUTE: {idle} unused route "
-                            f"{'capacity' if idle == 1 else 'capacities'} "
-                            f"({active}/{cap} active). Build a Trader or assign an idle one."
-                        ),
-                    ))
+                    events.append(
+                        lq.TurnEvent(
+                            priority=2,
+                            category="economy",
+                            message=(
+                                f"IDLE TRADE ROUTE: {idle} unused route "
+                                f"{'capacity' if idle == 1 else 'capacities'} "
+                                f"({active}/{cap} active). Build a Trader or assign an idle one."
+                            ),
+                        )
+                    )
                 break
     except Exception:
         log.debug("Trade capacity check failed", exc_info=True)
@@ -231,20 +252,22 @@ async def _check_empire_warnings(
                 our_rank = next(i + 1 for i, (n, _) in enumerate(all_sci) if n == "You")
                 leader_name, leader_sci = all_sci[0]
                 if our_rank > 1 and len(all_sci) > 2:
-                    events.append(lq.TurnEvent(
-                        priority=2,
-                        category="scoreboard",
-                        message=(
-                            f"SCOREBOARD: Your science ({our_sci:.1f}/t) ranks "
-                            f"{our_rank} of {len(all_sci)}. "
-                            f"Leader: {leader_name} at {leader_sci:.1f}/t."
-                        ),
-                    ))
+                    events.append(
+                        lq.TurnEvent(
+                            priority=2,
+                            category="scoreboard",
+                            message=(
+                                f"SCOREBOARD: Your science ({our_sci:.1f}/t) ranks "
+                                f"{our_rank} of {len(all_sci)}. "
+                                f"Leader: {leader_name} at {leader_sci:.1f}/t."
+                            ),
+                        )
+                    )
 
                 # Military disparity
                 our_mil_lines = await gs.conn.execute_read(
-                    'local me = Game.GetLocalPlayer(); '
-                    'print(Players[me]:GetStats():GetMilitaryStrength()); '
+                    "local me = Game.GetLocalPlayer(); "
+                    "print(Players[me]:GetStats():GetMilitaryStrength()); "
                     'print("---END---")'
                 )
                 our_mil = 0
@@ -256,14 +279,16 @@ async def _check_empire_warnings(
                 if our_mil > 0:
                     for r in rivals:
                         if r.mil >= our_mil * 2:
-                            events.append(lq.TurnEvent(
-                                priority=2,
-                                category="military",
-                                message=(
-                                    f"MILITARY WARNING: {r.name} has {r.mil} military "
-                                    f"({r.mil / our_mil:.1f}x ours at {our_mil})."
-                                ),
-                            ))
+                            events.append(
+                                lq.TurnEvent(
+                                    priority=2,
+                                    category="military",
+                                    message=(
+                                        f"MILITARY WARNING: {r.name} has {r.mil} military "
+                                        f"({r.mil / our_mil:.1f}x ours at {our_mil})."
+                                    ),
+                                )
+                            )
         except Exception:
             log.debug("Rival snapshot for warnings failed", exc_info=True)
 
@@ -692,7 +717,9 @@ async def execute_end_turn(gs: GameState) -> str:
                             f'print(anyNeed and "NEEDS_PROMO" or ("NO_PROMO_NEEDED|cleared=" .. cleared)); '
                             f'print("{lq.SENTINEL}")'
                         )
-                        needs_promo = any("NEEDS_PROMO" == l.strip() for l in check_lines)
+                        needs_promo = any(
+                            "NEEDS_PROMO" == l.strip() for l in check_lines
+                        )
                         log.debug(
                             "Promotion blocker: needs_promo=%s (check=%s)",
                             needs_promo,
@@ -777,9 +804,7 @@ async def execute_end_turn(gs: GameState) -> str:
                             resolved_any = True
                             continue
                     except Exception:
-                        log.debug(
-                            "Spy escape auto-resolve failed", exc_info=True
-                        )
+                        log.debug("Spy escape auto-resolve failed", exc_info=True)
                     hard_blockers.append((blocking_type, blocking_msg))
                     continue
 
@@ -1186,7 +1211,8 @@ async def execute_end_turn(gs: GameState) -> str:
     if turn_after is not None:
         try:
             await save_game(gs.conn, f"0_MCP_{turn_after:04d}")
-            cleanup_old_autosaves(keep=5)
+            # Keep enough saves for hang recovery (3 retries) + manual fallback
+            cleanup_old_autosaves(keep=8)
         except Exception:
             log.debug("MCP autosave failed for T%s", turn_after, exc_info=True)
 

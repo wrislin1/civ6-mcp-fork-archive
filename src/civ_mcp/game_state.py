@@ -47,6 +47,7 @@ class GameState:
         )
         self._high_water_turn: int = 0  # highest turn seen (for regression detection)
         self._local_player_id: int = 0  # human player (always 0 in single-player)
+        self._hang_retry_active: bool = False  # guard against recursive hang recovery
 
     async def get_game_identity(self) -> tuple[str, int]:
         """Return (civ_type_lower, random_seed) for the current game.
@@ -223,9 +224,7 @@ class GameState:
                             from_x = int(from_match.group(1))
                             from_y = int(from_match.group(2))
                             if now_x == from_x and now_y == from_y:
-                                reason = lq.parse_blocked_diagnostic(
-                                    pos_lines
-                                )
+                                reason = lq.parse_blocked_diagnostic(pos_lines)
                                 result += f"|BLOCKED ({reason})"
                             else:
                                 dx = now_x - from_x
@@ -330,7 +329,8 @@ class GameState:
 
                 # Check if target was eliminated (no enemy units on tile)
                 enemy_units = [
-                    l for l in followup
+                    l
+                    for l in followup
                     if l.startswith("UNIT|") and f"owner:{local_id}" not in l
                 ]
                 eliminated = not enemy_units
@@ -357,8 +357,7 @@ class GameState:
                     w_hp, w_max, g_hp, g_max = city_def
                     if w_max > 0:
                         damage_info += (
-                            f"|city walls: {w_hp}/{w_max}"
-                            f", garrison: {g_hp}/{g_max}"
+                            f"|city walls: {w_hp}/{w_max}, garrison: {g_hp}/{g_max}"
                         )
 
                 result += damage_info + "\n  Post-combat: " + followup_str
