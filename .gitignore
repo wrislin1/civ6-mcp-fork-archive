@@ -39,3 +39,4 @@ evals/saves/*.Civ6Save  # benchmark saves are tracked
 evals/.resume_context.md
 eval-logs/
 .vercel
+scripts/mission_control.sh
