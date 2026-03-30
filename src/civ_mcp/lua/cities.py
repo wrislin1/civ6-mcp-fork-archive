@@ -181,22 +181,53 @@ local eHP = enemy:GetMaxDamage() - enemy:GetDamage()
 local params = {{}}
 params[CityCommandTypes.PARAM_X] = {target_x}
 params[CityCommandTypes.PARAM_Y] = {target_y}
-local canAttack = CityManager.CanStartCommand(pCity, CityCommandTypes.RANGE_ATTACK, true, params, false)
-if not canAttack then
-    local ccIdx = GameInfo.Districts["DISTRICT_CITY_CENTER"].Index
-    local hasWalls = false
-    for _, d in pCity:GetDistricts():Members() do
-        if d:GetType() == ccIdx then
-            local wHP = d:GetMaxDamage(DefenseTypes.DISTRICT_OUTER)
-            if wHP and wHP > 0 then hasWalls = true end
-            break
+-- Pre-checks for specific error messages
+local ccIdx = GameInfo.Districts["DISTRICT_CITY_CENTER"].Index
+local hasWalls = false
+for _, d in pCity:GetDistricts():Members() do
+    if d:GetType() == ccIdx then
+        local wHP = d:GetMaxDamage(DefenseTypes.DISTRICT_OUTER)
+        if wHP and wHP > 0 then hasWalls = true end
+        break
+    end
+end
+if not hasWalls then
+    {_bail("ERR:NO_WALLS|City has no walls — build Ancient Walls first")}
+end
+if dist > 2 then
+    {_bail_lua('"ERR:OUT_OF_RANGE|Target is " .. dist .. " tiles away (city attack range is 2)"')}
+end
+-- Check if target is in the valid target list (covers LOS + already-fired)
+local validTargets = CityManager.GetCommandTargets(pCity, CityCommandTypes.RANGE_ATTACK)
+local targetPlotIdx = {target_y} * Map.GetGridSize() + {target_x}
+local inTargets = false
+if validTargets then
+    for _, tbl in pairs(validTargets) do
+        if type(tbl) == "table" then
+            for _, idx in ipairs(tbl) do
+                if idx == targetPlotIdx then inTargets = true; break end
+            end
+        end
+        if inTargets then break end
+    end
+end
+if not inTargets then
+    -- Distinguish already-fired from LOS: if NO targets at all, city already fired
+    local totalTargets = 0
+    if validTargets then
+        for _, tbl in pairs(validTargets) do
+            if type(tbl) == "table" then totalTargets = totalTargets + #tbl end
         end
     end
-    if not hasWalls then
-        {_bail("ERR:NO_WALLS|City has no walls — build Ancient Walls first")}
+    if totalTargets == 0 then
+        {_bail("ERR:ALREADY_FIRED|City already attacked this turn")}
     else
-        {_bail_lua('"ERR:CANNOT_ATTACK|City already fired this turn, target out of range (dist=" .. dist .. "), or LOS blocked"')}
+        {_bail_lua('"ERR:NO_LOS|Line of sight to (" .. {target_x} .. "," .. {target_y} .. ") is blocked from (" .. cx .. "," .. cy .. ")"')}
     end
+end
+local canAttack = CityManager.CanStartCommand(pCity, CityCommandTypes.RANGE_ATTACK, true, params, false)
+if not canAttack then
+    {_bail("ERR:CANNOT_ATTACK|City cannot attack this target (unknown reason)")}
 end
 CityManager.RequestCommand(pCity, CityCommandTypes.RANGE_ATTACK, params)
 print("OK:CITY_RANGE_ATTACK|" .. Locale.Lookup(pCity:GetName()) .. " -> " .. eName .. "@{target_x},{target_y}|pre_hp:" .. eHP .. "/" .. enemy:GetMaxDamage())

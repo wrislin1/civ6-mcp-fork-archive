@@ -1838,6 +1838,16 @@ for _, city in pCities:Members() do
                             end
                             -- Find valid improvement via resource lookup table
                             local validImp = resImpMap[resInfo.ResourceType] or "UNKNOWN"
+                            -- Check tech prerequisite
+                            if validImp ~= "UNKNOWN" then
+                                local impInfo = GameInfo.Improvements[validImp]
+                                if impInfo and impInfo.PrereqTech then
+                                    local techInfo = GameInfo.Technologies[impInfo.PrereqTech]
+                                    if techInfo and not Players[me]:GetTechs():HasTech(techInfo.Index) then
+                                        validImp = validImp .. "_LOCKED"
+                                    end
+                                end
+                            end
                             -- Find nearest builder
                             local nearId, nearDist = -1, 999
                             for _, b in ipairs(builders) do
@@ -1914,12 +1924,16 @@ def parse_builder_tasks(
                 xy = parts[2].split(",")
                 if len(xy) != 2:
                     continue
+                imp = parts[3]
+                # Skip tasks where tech prerequisite isn't met
+                if imp.endswith("_LOCKED"):
+                    continue
                 tasks.append(
                     BuilderTask(
                         priority=parts[1],
                         x=int(xy[0]),
                         y=int(xy[1]),
-                        improvement=parts[3],
+                        improvement=imp,
                         resource=parts[4],
                         resource_class=parts[5],
                         city_name=parts[6],
