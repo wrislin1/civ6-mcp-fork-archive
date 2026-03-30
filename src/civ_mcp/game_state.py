@@ -302,38 +302,57 @@ class GameState:
         lua = lq.build_attack_unit(unit_index, target_x, target_y)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
-        # Follow up with GameCore read for actual post-combat HP
-        # Brief delay: RequestOperation is async — combat resolves on the next
-        # C++ frame, so same-frame reads return stale pre-combat HP values.
+        # Combat followup: the game engine processes combat asynchronously
+        # after RequestOperation.  Lua state within the same turn frame
+        # does NOT reflect post-combat HP regardless of how long we wait.
+        # Strategy: use the combat estimate as authoritative damage source
+        # and only query the tile to detect if the target was eliminated.
         is_melee = result.startswith("MELEE_ATTACK")
         is_air = result.startswith("AIR_ATTACK")
         if result.startswith("RANGE_ATTACK") or is_melee or is_air:
-            # Melee/air needs more time: unit must path/fly then attack resolves
-            await asyncio.sleep(0.4 if (is_melee or is_air) else 0.15)
+            pre_hp = _extract_pre_hp(result)
+            est_dmg = est.est_damage_to_defender if est else None
+            local_id = self._local_player_id
+
+            # Brief delay then check if target still exists on the tile
+            await asyncio.sleep(0.3 if not is_melee else 0.5)
+            followup: list[str] = []
             try:
-                # InGame context: needed for enemy city district APIs
-                # (wall/garrison HP via GetDistricts, GetMaxDamage)
                 followup = await self.conn.execute_write(
                     lq.build_attack_followup_query(target_x, target_y)
                 )
-                # Filter out our own units from followup (after melee kill,
-                # attacker occupies target tile and would be misread as defender)
-                local_player = self._local_player_id
-                followup_str = _format_attack_followup(followup, local_player)
+            except Exception as e:
+                log.debug("Attack followup read failed: %s", e)
 
-                # Calculate damage from pre-attack HP vs post-combat HP
-                pre_hp = _extract_pre_hp(result)
-                post_hp = _extract_post_hp(followup, local_player)
+            try:
+                followup_str = _format_attack_followup(followup, local_id)
                 city_def = _extract_city_defense(followup)
+
+                # Check if target was eliminated (no enemy units on tile)
+                enemy_units = [
+                    l for l in followup
+                    if l.startswith("UNIT|") and f"owner:{local_id}" not in l
+                ]
+                eliminated = not enemy_units
+
+                # Build damage report from estimate (authoritative) or followup
+                post_hp = _extract_post_hp(followup, local_id)
                 damage_info = ""
-                if pre_hp is not None and post_hp is not None:
-                    dmg = pre_hp - post_hp
-                    if dmg > 0:
-                        damage_info = f"|damage dealt:{dmg}"
-                elif pre_hp is not None and followup_str == "Target eliminated":
-                    damage_info = f"|damage dealt:{pre_hp}"
-                # When attacking a walled city, unit HP stays unchanged but
-                # walls absorb the damage — show wall/garrison HP instead.
+                if eliminated and pre_hp is not None:
+                    damage_info = f"|damage dealt:{pre_hp} (killed)"
+                    followup_str = "Target eliminated"
+                elif pre_hp is not None and post_hp is not None and post_hp < pre_hp:
+                    # Followup reflects real change (can happen for city attacks)
+                    damage_info = f"|damage dealt:{pre_hp - post_hp}"
+                elif est_dmg and est_dmg > 0 and pre_hp is not None:
+                    # Followup stale — use estimate as best available
+                    capped_dmg = min(est_dmg, pre_hp)
+                    est_post = pre_hp - capped_dmg
+                    damage_info = f"|est damage dealt:~{capped_dmg}"
+                    followup_str = (
+                        f"~{est_post}/{pre_hp} (estimate — verify with get_units)"
+                    )
+
                 if city_def:
                     w_hp, w_max, g_hp, g_max = city_def
                     if w_max > 0:
@@ -343,27 +362,8 @@ class GameState:
                         )
 
                 result += damage_info + "\n  Post-combat: " + followup_str
-
-                # Warn if target HP unchanged (popup may have blocked the attack)
-                # Suppress warning when attacking a walled city — damage goes
-                # to walls first so garrison unit HP staying at 100% is normal.
-                actual_pre = (
-                    pre_hp if pre_hp is not None else (est.defender_hp if est else None)
-                )
-                if actual_pre is not None and est and est.est_damage_to_defender > 0:
-                    if (
-                        followup_str != "Target eliminated"
-                        and post_hp is not None
-                        and post_hp >= actual_pre
-                        and city_def is None
-                    ):
-                        result += (
-                            "\n  !! WARNING: Target HP unchanged — attack may not have "
-                            "executed. Possible causes: popup blocking, LOS issue, or "
-                            "combat animation still resolving. Run dismiss_popup if needed."
-                        )
             except Exception as e:
-                log.debug("Attack followup read failed: %s", e)
+                log.debug("Attack followup formatting failed: %s", e)
         return estimate_str + result
 
     async def city_attack(self, city_id: int, target_x: int, target_y: int) -> str:
@@ -371,21 +371,25 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
         if result.startswith("CITY_RANGE_ATTACK"):
+            pre_hp = _extract_pre_hp(result)
+            await asyncio.sleep(0.3)
+            followup: list[str] = []
             try:
                 followup = await self.conn.execute_write(
                     lq.build_attack_followup_query(target_x, target_y)
                 )
+            except Exception:
+                followup = []
+            try:
                 followup_str = _format_attack_followup(followup)
-
-                pre_hp = _extract_pre_hp(result)
                 post_hp = _extract_post_hp(followup)
                 damage_info = ""
-                if pre_hp is not None and post_hp is not None:
-                    dmg = pre_hp - post_hp
-                    if dmg > 0:
-                        damage_info = f"|damage dealt:{dmg}"
-                elif pre_hp is not None and followup_str == "Target eliminated":
-                    damage_info = f"|damage dealt:{pre_hp}"
+                if pre_hp is not None and post_hp is not None and post_hp < pre_hp:
+                    damage_info = f"|damage dealt:{pre_hp - post_hp}"
+                elif not any(l.startswith("UNIT|") for l in followup):
+                    if pre_hp is not None:
+                        damage_info = f"|damage dealt:{pre_hp} (killed)"
+                    followup_str = "Target eliminated"
 
                 result += damage_info + "\n  Post-combat: " + followup_str
             except Exception as e:

@@ -160,7 +160,9 @@ end"""
 
 # XP threshold calculation for unit promotions.
 # Expects ``exp`` (unit:GetExperience()), ``promClass`` (PromotionClass string) in scope.
-# Produces: xpPromoCount, t1, xp, xpNeeded.
+# Produces: xpPromoCount, xp, xpNeeded.
+# Uses GetExperienceForNextLevel() directly — the game engine already
+# accounts for current level when returning the threshold.
 _LUA_XP_THRESHOLD = """\
 local xpPromoCount = 0
 if promClass ~= "" then
@@ -170,9 +172,8 @@ if promClass ~= "" then
         end
     end
 end
-local t1 = exp:GetExperienceForNextLevel()
 local xp = exp:GetExperiencePoints()
-local xpNeeded = t1 * (xpPromoCount + 1) * (xpPromoCount + 2) / 2"""
+local xpNeeded = exp:GetExperienceForNextLevel()"""
 
 _LUA_VICTORY_ENABLED = """\
 local _vtypes = {"VICTORY_TECHNOLOGY","VICTORY_CULTURE","VICTORY_RELIGIOUS","VICTORY_DIPLOMATIC","VICTORY_CONQUEST"}
