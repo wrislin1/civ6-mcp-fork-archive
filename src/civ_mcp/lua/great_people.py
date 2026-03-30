@@ -318,23 +318,13 @@ if not can then
     end)
     {_bail_lua('"ERR:CANNOT_ACTIVATE|" .. Locale.Lookup(unit:GetName()) .. " (" .. uName .. ")" .. classStr .. " at (" .. ux .. "," .. uy .. ") charges=" .. charges .. "." .. reqStr .. tilesStr .. classHint')}
 end
--- Track charges before activation to compute remaining
-local chargesBefore = -1
-pcall(function() chargesBefore = unit:GetGreatPerson():GetActionCharges() end)
+-- Track charges before activation to compute remaining.
+-- GetActionCharges() is stale same-frame (async C++ activation), so we
+-- compute remaining = chargesBefore - 1 rather than re-reading post-call.
+local chargesBefore = 1
+pcall(function() chargesBefore = unit:GetGreatPerson():GetActionCharges() or 1 end)
 UnitManager.RequestCommand(unit, cmdHash, {{}})
--- Report remaining charges so agent knows whether to activate again
-local remCharges = -1
-pcall(function()
-    local gp2 = unit:GetGreatPerson()
-    if gp2 then
-        remCharges = gp2:GetActionCharges() or 0
-        -- If GetActionCharges still returns 0 and we had charges before,
-        -- the activation consumed one charge
-        if remCharges == 0 and chargesBefore > 0 then
-            remCharges = chargesBefore - 1
-        end
-    end
-end)
+local remCharges = chargesBefore - 1
 local chargeStr = ""
 if remCharges > 0 then chargeStr = " charges_remaining=" .. remCharges .. " — activate again to use next charge" end
 print("OK:GP_ACTIVATED|" .. Locale.Lookup(unit:GetName()) .. " (" .. uName .. ") at " .. ux .. "," .. uy .. chargeStr)
