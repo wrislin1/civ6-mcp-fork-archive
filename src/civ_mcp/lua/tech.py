@@ -189,6 +189,8 @@ def _build_set_ingame(
 ) -> str:
     """Shared builder for set_research / set_civic via InGame UI."""
     err_label = "TECH" if "Tech" in gi_table else "CIVIC"
+    has_method = "HasTech" if "Tech" in gi_table else "HasCivic"
+    player_method = "GetTechs" if "Tech" in gi_table else "GetCulture"
     return f"""
 local id = Game.GetLocalPlayer()
 local idx = nil
@@ -196,6 +198,9 @@ for row in GameInfo.{gi_table}() do
     if row.{type_field} == "{name}" then idx = row.Index; break end
 end
 if idx == nil then {_bail(f"ERR:{err_label}_NOT_FOUND|{name}")} end
+if Players[id]:{player_method}():{has_method}(idx) then
+    {_bail(f"ERR:ALREADY_COMPLETED|{name} is already researched")}
+end
 local params = {{}}
 params[PlayerOperations.{param}] = idx
 UI.RequestPlayerOperation(id, PlayerOperations.{operation}, params)
@@ -263,6 +268,8 @@ else
 end"""
     else:
         verify = f'\nprint("{ok_prefix}|{name}")'
+    has_method = "HasTech" if "Tech" in gi_table else "HasCivic"
+    completed_method = "GetTechs" if "Tech" in gi_table else "GetCulture"
     return f"""
 local id = Game.GetLocalPlayer()
 local idx = nil
@@ -270,6 +277,9 @@ for row in GameInfo.{gi_table}() do
     if row.{type_field} == "{name}" then idx = row.Index; break end
 end
 if idx == nil then {_bail(f"ERR:{err_label}_NOT_FOUND|{name}")} end
+if Players[id]:{completed_method}():{has_method}(idx) then
+    {_bail(f"ERR:ALREADY_COMPLETED|{name} is already researched")}
+end
 Players[id]:{player_method}():{setter}(idx){verify}
 print("{SENTINEL}")
 """
