@@ -799,7 +799,7 @@ def cmd_sensorium(args):
             print("  No data")
             continue
 
-        turns = sorted(set(e.get("turn", 0) for e in tool_calls))
+        turns = sorted(set(e.get("turn") or 0 for e in tool_calls))
         n_turns = len(turns) or 1
 
         # --- Attention classification ---
