@@ -238,6 +238,9 @@ class Machine:
         else:
             env_parts = [f"export {k}={v};" for k, v in self.display_env.items()]
             env_str = " ".join(env_parts)
+            # Kill any existing civbench tmux session before creating a new one.
+            # Prevents "duplicate session" errors on retry/relaunch.
+            self.ssh("tmux kill-session -t civbench 2>/dev/null", timeout=5)
             rc, out = self.ssh(
                 f"{env_str} tmux new-session -d -s civbench "
                 f'"cd {self.repo} && uv run python -u evals/runner.py '
