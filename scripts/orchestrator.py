@@ -219,19 +219,23 @@ class Machine:
     def discover_run_id(self) -> str | None:
         """Extract run_id from the most recent diary file on this machine."""
         if self.os == "windows":
-            cmd = (
-                'powershell -Command "($f = Get-ChildItem $env:USERPROFILE\\.civ6-mcp\\diary_*.jsonl '
-                "-Exclude '*cities*' | Sort-Object LastWriteTime -Descending "
-                "| Select-Object -First 1); if ($f) { $f.BaseName -replace '.*_','' }\""
+            # Get basename of newest diary file, extract last _-delimited segment
+            ps = (
+                "$f = Get-ChildItem $env:USERPROFILE\\.civ6-mcp\\diary_*.jsonl "
+                "-Exclude '*cities*' -ErrorAction SilentlyContinue "
+                "| Sort-Object LastWriteTime -Descending | Select-Object -First 1; "
+                "if ($f) { $f.BaseName.Split('_')[-1] }"
             )
+            encoded = base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
+            cmd = f'powershell -EncodedCommand {encoded}'
         else:
             cmd = (
                 "ls -t ~/.civ6-mcp/diary_*.jsonl 2>/dev/null | grep -v cities | head -1 "
                 "| xargs -I{} basename {} .jsonl | rev | cut -d_ -f1 | rev"
             )
         rc, out = self.ssh(cmd, timeout=15)
-        rid = out.strip()
-        return rid if rc == 0 and rid and rid != "" else None
+        rid = out.strip().split("\n")[-1].strip()  # take last line only
+        return rid if rc == 0 and rid and len(rid) > 2 else None
 
     def sync_to_convex(self) -> bool:
         """Run convex_sync.py --upload on this machine. Returns True on success."""
@@ -483,6 +487,16 @@ def cmd_launch(
     stall_alert_min = defaults.get("stall_alert_minutes", 30)
     stall_kill_min = defaults.get("stall_kill_minutes", 60)
     max_retries = defaults.get("max_retries", 2)
+
+    # Clean slate: clear stale state, sentinels, and autosaves on ALL machines
+    log.info("Clearing stale state and sentinels on all machines...")
+    if STATE_PATH.exists():
+        STATE_PATH.unlink()
+    for name in machine_names:
+        m = machines.get(name)
+        if m and m.is_reachable():
+            m.clear_completion_sentinel()
+            m.clean_autosaves()
 
     # Build job queue: interleave models across machines so each machine
     # runs a DIFFERENT model in each round. Round 1: machine[0]→model[0],
