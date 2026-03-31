@@ -73,9 +73,18 @@ class Machine:
         t = timeout or self.ssh_timeout
         try:
             r = subprocess.run(
-                ["ssh", "-o", f"ConnectTimeout={t}", "-o", "BatchMode=yes",
-                 self.ssh_target, cmd],
-                capture_output=True, text=True, timeout=t + 10,
+                [
+                    "ssh",
+                    "-o",
+                    f"ConnectTimeout={t}",
+                    "-o",
+                    "BatchMode=yes",
+                    self.ssh_target,
+                    cmd,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=t + 10,
             )
             return r.returncode, r.stdout.strip()
         except subprocess.TimeoutExpired:
@@ -89,9 +98,9 @@ class Machine:
 
     def get_version(self) -> str:
         if self.os == "windows":
-            cmd = f'cd {self.repo} && git describe --tags --always 2>nul'
+            cmd = f"cd {self.repo} && git describe --tags --always 2>nul"
         else:
-            cmd = f'cd {self.repo} && git describe --tags --always'
+            cmd = f"cd {self.repo} && git describe --tags --always"
         rc, out = self.ssh(cmd)
         return out if rc == 0 else "UNKNOWN"
 
@@ -99,10 +108,12 @@ class Machine:
         if self.os == "windows":
             rc, out = self.ssh(
                 'tasklist /FI "IMAGENAME eq CivilizationVI_DX12.exe" /NH 2>nul '
-                '| findstr /I Civ >nul && echo YES || echo NO'
+                "| findstr /I Civ >nul && echo YES || echo NO"
             )
         else:
-            rc, out = self.ssh("pgrep -x Civ6Sub >/dev/null 2>&1 && echo YES || echo NO")
+            rc, out = self.ssh(
+                "pgrep -x Civ6Sub >/dev/null 2>&1 && echo YES || echo NO"
+            )
         return "YES" in out
 
     def is_runner_running(self) -> bool:
@@ -117,21 +128,26 @@ class Machine:
         else:
             rc, out = self.ssh(
                 'pgrep -f "evals/runner.py\\|inspect eval" >/dev/null 2>&1 '
-                '&& echo YES || echo NO'
+                "&& echo YES || echo NO"
             )
         return "YES" in out
 
     def check_completed(self) -> bool:
         """Check if runner left a completion sentinel."""
         if self.os == "windows":
-            rc, out = self.ssh('if exist %USERPROFILE%\\civbench_done (echo YES) else (echo NO)', timeout=10)
+            rc, out = self.ssh(
+                "if exist %USERPROFILE%\\civbench_done (echo YES) else (echo NO)",
+                timeout=10,
+            )
         else:
-            rc, out = self.ssh("test -f ~/civbench_done && echo YES || echo NO", timeout=10)
+            rc, out = self.ssh(
+                "test -f ~/civbench_done && echo YES || echo NO", timeout=10
+            )
         return "YES" in out
 
     def clear_completion_sentinel(self) -> None:
         if self.os == "windows":
-            self.ssh('del %USERPROFILE%\\civbench_done 2>nul', timeout=5)
+            self.ssh("del %USERPROFILE%\\civbench_done 2>nul", timeout=5)
         else:
             self.ssh("rm -f ~/civbench_done", timeout=5)
 
@@ -151,7 +167,7 @@ class Machine:
             cmd = (
                 "ls -t ~/.civ6-mcp/diary_*.jsonl 2>/dev/null | grep -v cities | head -1 "
                 "| xargs -I{} tail -1 {} 2>/dev/null "
-                "| python3 -c 'import sys,json; print(json.load(sys.stdin).get(\"turn\",\"\"))' 2>/dev/null"
+                '| python3 -c \'import sys,json; print(json.load(sys.stdin).get("turn",""))\' 2>/dev/null'
             )
         rc, out = self.ssh(cmd, timeout=15)
         try:
@@ -161,26 +177,33 @@ class Machine:
 
     def kill_game(self) -> None:
         if self.os == "windows":
-            self.ssh('taskkill /F /IM CivilizationVI_DX12.exe 2>nul', timeout=10)
-            self.ssh('taskkill /F /IM CivilizationVI.exe 2>nul', timeout=10)
+            self.ssh("taskkill /F /IM CivilizationVI_DX12.exe 2>nul", timeout=10)
+            self.ssh("taskkill /F /IM CivilizationVI.exe 2>nul", timeout=10)
         else:
             self.ssh("killall -9 Civ6Sub Civ6 2>/dev/null", timeout=10)
 
     def kill_runner(self) -> None:
         if self.os == "windows":
-            self.ssh('taskkill /F /IM python.exe 2>nul', timeout=10)
-            self.ssh('schtasks /End /TN CivBench 2>nul', timeout=10)
+            self.ssh("taskkill /F /IM python.exe 2>nul", timeout=10)
+            self.ssh("schtasks /End /TN CivBench 2>nul", timeout=10)
         else:
-            self.ssh("tmux kill-session -t civbench 2>/dev/null; pkill -f runner.py 2>/dev/null", timeout=10)
+            self.ssh(
+                "tmux kill-session -t civbench 2>/dev/null; pkill -f runner.py 2>/dev/null",
+                timeout=10,
+            )
 
     def clean_autosaves(self) -> str:
         if self.os == "windows":
             # Windows save path
             save_dir = "C:\\Users\\%USERNAME%\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single"
-            rc, out = self.ssh(f'del /Q "{save_dir}\\0_MCP_*.Civ6Save" 2>nul && echo CLEANED || echo NONE')
+            rc, out = self.ssh(
+                f'del /Q "{save_dir}\\0_MCP_*.Civ6Save" 2>nul && echo CLEANED || echo NONE'
+            )
         else:
             save_dir = "~/.local/share/aspyr-media/Sid\\ Meier\\'s\\ Civilization\\ VI/Saves/Single"
-            rc, out = self.ssh(f'rm -f {save_dir}/0_MCP_*.Civ6Save 2>/dev/null && echo CLEANED || echo NONE')
+            rc, out = self.ssh(
+                f"rm -f {save_dir}/0_MCP_*.Civ6Save 2>/dev/null && echo CLEANED || echo NONE"
+            )
         return out
 
     def launch_runner(self, model: str, scenario: str, runs: int = 1) -> bool:
@@ -197,21 +220,23 @@ class Machine:
             )
             encoded = base64.b64encode(bat_content.encode("utf-8")).decode("ascii")
             self.ssh(
-                f"powershell -Command \"[System.Text.Encoding]::UTF8.GetString("
+                f'powershell -Command "[System.Text.Encoding]::UTF8.GetString('
                 f"[System.Convert]::FromBase64String('{encoded}'))"
                 f" | Set-Content -Path '{self.repo}\\run_bench.bat' -NoNewline\""
             )
-            self.ssh('schtasks /Create /TN "CivBench" /TR '
-                     f'"{self.repo}\\run_bench.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F')
+            self.ssh(
+                'schtasks /Create /TN "CivBench" /TR '
+                f'"{self.repo}\\run_bench.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F'
+            )
             rc, out = self.ssh('schtasks /Run /TN "CivBench"')
             return "SUCCESS" in out or rc == 0
         else:
             env_parts = [f"export {k}={v};" for k, v in self.display_env.items()]
             env_str = " ".join(env_parts)
             rc, out = self.ssh(
-                f'{env_str} tmux new-session -d -s civbench '
+                f"{env_str} tmux new-session -d -s civbench "
                 f'"cd {self.repo} && uv run python -u evals/runner.py '
-                f'--model {model} --scenarios {scenario} --runs {runs} '
+                f"--model {model} --scenarios {scenario} --runs {runs} "
                 f'2>&1 | tee ~/civbench_run.log; touch ~/civbench_done"'
             )
             return rc == 0
@@ -227,7 +252,7 @@ class Machine:
                 "if ($f) { $f.BaseName.Split('_')[-1] }"
             )
             encoded = base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
-            cmd = f'powershell -EncodedCommand {encoded}'
+            cmd = f"powershell -EncodedCommand {encoded}"
         else:
             cmd = (
                 "ls -t ~/.civ6-mcp/diary_*.jsonl 2>/dev/null | grep -v cities | head -1 "
@@ -241,13 +266,17 @@ class Machine:
         """Run convex_sync.py --upload on this machine. Returns True on success."""
         if self.os == "windows":
             diary_dir = "%USERPROFILE%\\.civ6-mcp"
-            cmd = (f"cd /d {self.repo} && "
-                   f".venv\\Scripts\\python.exe scripts/convex_sync.py "
-                   f"--upload {diary_dir} --prod")
+            cmd = (
+                f"cd /d {self.repo} && "
+                f".venv\\Scripts\\python.exe scripts/convex_sync.py "
+                f"--upload {diary_dir} --prod"
+            )
         else:
-            cmd = (f"cd {self.repo} && "
-                   f"uv run python scripts/convex_sync.py "
-                   f"--upload ~/.civ6-mcp --prod")
+            cmd = (
+                f"cd {self.repo} && "
+                f"uv run python scripts/convex_sync.py "
+                f"--upload ~/.civ6-mcp --prod"
+            )
         rc, out = self.ssh(cmd, timeout=300)
         if rc != 0:
             log.warning("Sync failed on %s: %s", self.name, out[:200])
@@ -338,8 +367,18 @@ def alert(message: str) -> None:
         return
     try:
         import urllib.request
-        payload = json.dumps({"message": message, "title": "CivBench Orchestrator", "priority": 4, "tags": ["warning"]}).encode()
-        req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json"})
+
+        payload = json.dumps(
+            {
+                "message": message,
+                "title": "CivBench Orchestrator",
+                "priority": 4,
+                "tags": ["warning"],
+            }
+        ).encode()
+        req = urllib.request.Request(
+            webhook, data=payload, headers={"Content-Type": "application/json"}
+        )
         urllib.request.urlopen(req, timeout=5)
     except Exception:
         pass
@@ -350,9 +389,13 @@ def alert(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def cmd_preflight(machines: dict[str, Machine], machine_names: list[str] | None) -> bool:
+def cmd_preflight(
+    machines: dict[str, Machine], machine_names: list[str] | None
+) -> bool:
     """Validate all machines are ready. Returns True if all pass."""
-    targets = {n: machines[n] for n in (machine_names or machines.keys()) if n in machines}
+    targets = {
+        n: machines[n] for n in (machine_names or machines.keys()) if n in machines
+    }
     all_ok = True
 
     for name, m in targets.items():
@@ -361,10 +404,10 @@ def cmd_preflight(machines: dict[str, Machine], machine_names: list[str] | None)
 
         # Reachable
         if not m.is_reachable():
-            print(f"    ✗ OFFLINE")
+            print("    ✗ OFFLINE")
             all_ok = False
             continue
-        print(f"    ✓ Reachable")
+        print("    ✓ Reachable")
 
         # Version
         version = m.get_version()
@@ -375,16 +418,24 @@ def cmd_preflight(machines: dict[str, Machine], machine_names: list[str] | None)
         # Game running
         game = m.is_game_running()
         runner = m.is_runner_running()
-        print(f"    {'●' if game else '○'} Civ VI: {'running' if game else 'not running'}")
+        print(
+            f"    {'●' if game else '○'} Civ VI: {'running' if game else 'not running'}"
+        )
         print(f"    {'●' if runner else '○'} Runner: {'active' if runner else 'idle'}")
 
         # Save files
         if m.os == "windows":
-            rc, out = m.ssh(f'dir {m.repo}\\evals\\saves\\0A_GROUND_CONTROL.Civ6Save 2>nul && echo FOUND || echo MISSING')
+            rc, out = m.ssh(
+                f"dir {m.repo}\\evals\\saves\\0A_GROUND_CONTROL.Civ6Save 2>nul && echo FOUND || echo MISSING"
+            )
         else:
-            rc, out = m.ssh(f'test -f {m.repo}/evals/saves/0A_GROUND_CONTROL.Civ6Save && echo FOUND || echo MISSING')
+            rc, out = m.ssh(
+                f"test -f {m.repo}/evals/saves/0A_GROUND_CONTROL.Civ6Save && echo FOUND || echo MISSING"
+            )
         has_saves = "FOUND" in out
-        print(f"    {'✓' if has_saves else '✗'} Saves: {'present' if has_saves else 'MISSING'}")
+        print(
+            f"    {'✓' if has_saves else '✗'} Saves: {'present' if has_saves else 'MISSING'}"
+        )
         if not has_saves:
             all_ok = False
 
@@ -397,11 +448,11 @@ def cmd_status(machines: dict[str, Machine]) -> None:
     state = load_state()
     jobs = state.get("jobs", {})
 
-    print(f"\n╔═══════════════════════════════════════════════════╗")
+    print("\n╔═══════════════════════════════════════════════════╗")
     print(f"║  CivBench Orchestrator     {time.strftime('%H:%M %b %d %Y')}  ║")
-    print(f"╚═══════════════════════════════════════════════════╝")
+    print("╚═══════════════════════════════════════════════════╝")
 
-    print(f"\nFleet")
+    print("\nFleet")
     print(f"  {'─' * 50}")
     for name, m in machines.items():
         reachable = m.is_reachable()
@@ -413,18 +464,24 @@ def cmd_status(machines: dict[str, Machine]) -> None:
         runner = m.is_runner_running()
         turn = m.get_latest_turn()
         turn_str = f"T{turn}" if turn is not None else ""
-        print(f"  {name:<12} {version:<20} "
-              f"{'CIV' if game else '   '} "
-              f"{'RUN' if runner else '   '} "
-              f"{turn_str}")
+        print(
+            f"  {name:<12} {version:<20} "
+            f"{'CIV' if game else '   '} "
+            f"{'RUN' if runner else '   '} "
+            f"{turn_str}"
+        )
 
-    active_jobs = {k: v for k, v in jobs.items() if v.get("status") in ("launching", "running", "completing")}
+    active_jobs = {
+        k: v
+        for k, v in jobs.items()
+        if v.get("status") in ("launching", "running", "completing")
+    }
     pending_jobs = {k: v for k, v in jobs.items() if v.get("status") == "pending"}
     done_jobs = {k: v for k, v in jobs.items() if v.get("status") == "done"}
     failed_jobs = {k: v for k, v in jobs.items() if v.get("status") == "failed"}
 
     if active_jobs:
-        print(f"\nActive Jobs")
+        print("\nActive Jobs")
         print(f"  {'─' * 60}")
         for jid, j in active_jobs.items():
             sa = j.get("started_at", 0)
@@ -441,18 +498,26 @@ def cmd_status(machines: dict[str, Machine]) -> None:
                 rate_str = f"{min_per_turn:.1f}m/t"
                 eta_str = f"~{eta_h:.1f}h left"
             rid = j.get("run_id") or ""
-            print(f"  {j.get('machine_name', '?'):<10} {model_short:<18} "
-                  f"T{turn:>3}  {elapsed_h:.1f}h  {rate_str:>7}  {eta_str:>10}  {rid}")
+            print(
+                f"  {j.get('machine_name', '?'):<10} {model_short:<18} "
+                f"T{turn:>3}  {elapsed_h:.1f}h  {rate_str:>7}  {eta_str:>10}  {rid}"
+            )
 
     if done_jobs:
         print(f"\nCompleted ({len(done_jobs)})")
         print(f"  {'─' * 60}")
         for jid, j in done_jobs.items():
             model_short = j.get("model", "?").rsplit("/", 1)[-1]
-            elapsed = (j.get("finished_at", 0) - j.get("started_at", 0)) / 3600 if j.get("finished_at") else 0
+            elapsed = (
+                (j.get("finished_at", 0) - j.get("started_at", 0)) / 3600
+                if j.get("finished_at")
+                else 0
+            )
             synced = "synced" if j.get("synced") else "pending sync"
             rid = j.get("run_id") or "?"
-            print(f"  ✓ {rid:<25} {model_short:<18} T{j.get('last_turn', '?'):>3}  {elapsed:.1f}h  {synced}")
+            print(
+                f"  ✓ {rid:<25} {model_short:<18} T{j.get('last_turn', '?'):>3}  {elapsed:.1f}h  {synced}"
+            )
 
     if pending_jobs:
         print(f"\nPending: {len(pending_jobs)} jobs")
@@ -530,12 +595,17 @@ def cmd_launch(
                 )
 
     # Persist initial state
-    state = {"started_at": time.time(), "jobs": {jid: j.to_dict() for jid, j in jobs.items()}}
+    state = {
+        "started_at": time.time(),
+        "jobs": {jid: j.to_dict() for jid, j in jobs.items()},
+    }
     save_state(state)
 
     print(f"\nScheduled {len(jobs)} jobs across {len(machine_list)} machines:")
     for jid, j in jobs.items():
-        print(f"  {j.machine_name:<12} {j.model.rsplit('/', 1)[-1]:<25} {j.scenario:<20} run {j.run_num}")
+        print(
+            f"  {j.machine_name:<12} {j.model.rsplit('/', 1)[-1]:<25} {j.scenario:<20} run {j.run_num}"
+        )
     print()
 
     # Track which machine is busy
@@ -603,13 +673,20 @@ def cmd_launch(
                         job.retries += 1
                         job.status = "pending"  # will relaunch on next loop
                         machine_jobs[job.machine_name] = None
-                        log.warning("Runner died on %s, retry %d/%d", jid, job.retries, max_retries)
+                        log.warning(
+                            "Runner died on %s, retry %d/%d",
+                            jid,
+                            job.retries,
+                            max_retries,
+                        )
                         alert(f"Runner died: {jid} — retry {job.retries}/{max_retries}")
                     else:
                         job.status = "failed"
                         job.fail_reason = "runner died after max retries"
                         machine_jobs[job.machine_name] = None
-                        alert(f"Job failed: {jid} — runner died after {max_retries} retries")
+                        alert(
+                            f"Job failed: {jid} — runner died after {max_retries} retries"
+                        )
                     continue
 
             # Check turn progress
@@ -621,14 +698,18 @@ def cmd_launch(
                 else:
                     stall_min = (time.time() - job.last_turn_change) / 60
                     if stall_min > stall_kill_min:
-                        log.error("Stall timeout: %s at T%d for %.0fm", jid, turn, stall_min)
+                        log.error(
+                            "Stall timeout: %s at T%d for %.0fm", jid, turn, stall_min
+                        )
                         m.kill_runner()
                         m.kill_game()
                         if job.retries < max_retries:
                             job.retries += 1
                             job.status = "pending"
                             machine_jobs[job.machine_name] = None
-                            alert(f"Stall kill: {jid} T{turn} ({stall_min:.0f}m) — retry {job.retries}")
+                            alert(
+                                f"Stall kill: {jid} T{turn} ({stall_min:.0f}m) — retry {job.retries}"
+                            )
                         else:
                             job.status = "failed"
                             job.fail_reason = f"stall at T{turn} for {stall_min:.0f}m"
@@ -640,7 +721,11 @@ def cmd_launch(
                 # Turn polling failed — stall detection is blind
                 blind_min = (time.time() - job.last_turn_change) / 60
                 if blind_min > stall_alert_min:
-                    log.warning("Cannot read turn for %s (%.0fm blind) — stall detection degraded", jid, blind_min)
+                    log.warning(
+                        "Cannot read turn for %s (%.0fm blind) — stall detection degraded",
+                        jid,
+                        blind_min,
+                    )
 
         # Check for completed jobs via sentinel file → run post-game pipeline
         for jid, job in jobs.items():
@@ -656,7 +741,12 @@ def cmd_launch(
                 state["jobs"][jid] = job.to_dict()
                 save_state(state)
                 elapsed = (job.finished_at - job.started_at) / 3600
-                log.info("Game finished: %s T%d in %.1fh — running post-game pipeline", jid, job.last_turn, elapsed)
+                log.info(
+                    "Game finished: %s T%d in %.1fh — running post-game pipeline",
+                    jid,
+                    job.last_turn,
+                    elapsed,
+                )
 
                 # 1. Discover run_id
                 run_id = m.discover_run_id()
@@ -670,7 +760,9 @@ def cmd_launch(
                     job.synced = True
                     log.info("  Sync OK")
                 else:
-                    log.warning("  Sync failed — data still on machine, can retry with 'sync' command")
+                    log.warning(
+                        "  Sync failed — data still on machine, can retry with 'sync' command"
+                    )
 
                 # 3. Rich alert
                 short_model = job.model.rsplit("/", 1)[-1]
@@ -686,8 +778,10 @@ def cmd_launch(
                 log.info("Completed: %s", jid)
 
         # Persist state
-        state = {"started_at": state.get("started_at", time.time()),
-                 "jobs": {jid: j.to_dict() for jid, j in jobs.items()}}
+        state = {
+            "started_at": state.get("started_at", time.time()),
+            "jobs": {jid: j.to_dict() for jid, j in jobs.items()},
+        }
         save_state(state)
 
         # Check if all done
@@ -708,7 +802,8 @@ def cmd_launch(
         failed = sum(1 for j in jobs.values() if j.status == "failed")
         active_info = " | ".join(
             f"{j.machine_name}:T{j.last_turn}"
-            for j in jobs.values() if j.status == "running"
+            for j in jobs.values()
+            if j.status == "running"
         )
         sys.stdout.write(
             f"\r  [{done}✓ {running}▶ {pending}… {failed}✗] {active_info}    "
@@ -744,10 +839,18 @@ def main() -> None:
 
     # launch
     p_launch = sub.add_parser("launch", help="Launch benchmark runs")
-    p_launch.add_argument("--scenarios", required=True, help="Comma-separated scenario IDs")
-    p_launch.add_argument("--models", required=True, help="Comma-separated model aliases or full IDs")
-    p_launch.add_argument("--runs", type=int, default=3, help="Runs per (model, scenario)")
-    p_launch.add_argument("--machines", required=True, help="Comma-separated machine names")
+    p_launch.add_argument(
+        "--scenarios", required=True, help="Comma-separated scenario IDs"
+    )
+    p_launch.add_argument(
+        "--models", required=True, help="Comma-separated model aliases or full IDs"
+    )
+    p_launch.add_argument(
+        "--runs", type=int, default=3, help="Runs per (model, scenario)"
+    )
+    p_launch.add_argument(
+        "--machines", required=True, help="Comma-separated machine names"
+    )
 
     # status
     sub.add_parser("status", help="Show fleet status + active job details")
@@ -757,7 +860,9 @@ def main() -> None:
 
     # sync
     p_sync = sub.add_parser("sync", help="Sync telemetry to Convex")
-    p_sync.add_argument("--machines", help="Comma-separated machine names (default: all)")
+    p_sync.add_argument(
+        "--machines", help="Comma-separated machine names (default: all)"
+    )
 
     # summary
     sub.add_parser("summary", help="Aggregate results by model and scenario")
@@ -765,8 +870,12 @@ def main() -> None:
     # logs
     p_logs = sub.add_parser("logs", help="Tail remote runner logs")
     p_logs.add_argument("--machine", required=True, help="Machine name")
-    p_logs.add_argument("--last", type=int, default=30, help="Number of lines (default: 30)")
-    p_logs.add_argument("--errors", action="store_true", help="Show only error/warning lines")
+    p_logs.add_argument(
+        "--last", type=int, default=30, help="Number of lines (default: 30)"
+    )
+    p_logs.add_argument(
+        "--errors", action="store_true", help="Show only error/warning lines"
+    )
 
     # resume
     sub.add_parser("resume", help="Resume from saved state")
@@ -808,14 +917,22 @@ def main() -> None:
         machine_names = [n.strip() for n in args.machines.split(",")]
         unknown = [n for n in machine_names if n not in machines]
         if unknown:
-            log.error("Unknown machines: %s (available: %s)", unknown, list(machines.keys()))
+            log.error(
+                "Unknown machines: %s (available: %s)", unknown, list(machines.keys())
+            )
             sys.exit(1)
         scenario_list = [s.strip() for s in args.scenarios.split(",")]
         model_list = [aliases.get(m.strip(), m.strip()) for m in args.models.split(",")]
-        cmd_launch(machines, machine_names, model_list, scenario_list, args.runs, config)
+        cmd_launch(
+            machines, machine_names, model_list, scenario_list, args.runs, config
+        )
 
     elif args.command == "sync":
-        names = [n.strip() for n in args.machines.split(",")] if args.machines else list(machines.keys())
+        names = (
+            [n.strip() for n in args.machines.split(",")]
+            if args.machines
+            else list(machines.keys())
+        )
         for name in names:
             if name not in machines:
                 log.warning("Unknown machine: %s", name)
@@ -837,27 +954,45 @@ def main() -> None:
             print("No jobs in state.")
         else:
             # Group by scenario, then model
-            by_scenario: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+            by_scenario: dict[str, dict[str, list]] = defaultdict(
+                lambda: defaultdict(list)
+            )
             for jid, j in jobs_data.items():
-                by_scenario[j.get("scenario", "?")][j.get("model", "?").rsplit("/", 1)[-1]].append(j)
+                by_scenario[j.get("scenario", "?")][
+                    j.get("model", "?").rsplit("/", 1)[-1]
+                ].append(j)
 
             for scenario, models_dict in sorted(by_scenario.items()):
                 total = sum(len(jl) for jl in models_dict.values())
-                done = sum(1 for jl in models_dict.values() for j in jl if j.get("status") == "done")
+                done = sum(
+                    1
+                    for jl in models_dict.values()
+                    for j in jl
+                    if j.get("status") == "done"
+                )
                 print(f"\n{scenario} ({done}/{total} done)")
                 print(f"  {'─' * 55}")
                 for model, jlist in sorted(models_dict.items()):
                     n = len(jlist)
                     d = sum(1 for j in jlist if j.get("status") == "done")
-                    turns = [j.get("last_turn", 0) for j in jlist if j.get("status") == "done"]
+                    turns = [
+                        j.get("last_turn", 0)
+                        for j in jlist
+                        if j.get("status") == "done"
+                    ]
                     elapsed = [
                         (j.get("finished_at", 0) - j.get("started_at", 0)) / 3600
-                        for j in jlist if j.get("status") == "done" and j.get("finished_at")
+                        for j in jlist
+                        if j.get("status") == "done" and j.get("finished_at")
                     ]
-                    avg_t = f"avg T{sum(turns)//len(turns)}" if turns else ""
-                    avg_h = f"avg {sum(elapsed)/len(elapsed):.1f}h" if elapsed else ""
-                    rids = [j.get("run_id", "?") for j in jlist if j.get("status") == "done"]
-                    print(f"  {model:<22} {d}/{n}  {avg_t:>8}  {avg_h:>10}  {' '.join(rids)}")
+                    avg_t = f"avg T{sum(turns) // len(turns)}" if turns else ""
+                    avg_h = f"avg {sum(elapsed) / len(elapsed):.1f}h" if elapsed else ""
+                    rids = [
+                        j.get("run_id", "?") for j in jlist if j.get("status") == "done"
+                    ]
+                    print(
+                        f"  {model:<22} {d}/{n}  {avg_t:>8}  {avg_h:>10}  {' '.join(rids)}"
+                    )
             print()
 
     elif args.command == "logs":
@@ -869,8 +1004,12 @@ def main() -> None:
         output = m.tail_log(n)
         if args.errors:
             output = "\n".join(
-                l for l in output.split("\n")
-                if any(kw in l.lower() for kw in ("error", "warning", "fail", "traceback", "exception"))
+                line
+                for line in output.split("\n")
+                if any(
+                    kw in line.lower()
+                    for kw in ("error", "warning", "fail", "traceback", "exception")
+                )
             )
         print(output)
 
