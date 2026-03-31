@@ -30,5 +30,22 @@ def _get_git_sha() -> str:
         return ""
 
 
+def _get_git_describe() -> str:
+    """Full version descriptor: tag + commits-since-tag + SHA + dirty flag.
+
+    Example: ``v1.0.4-3-g2630adb-dirty``
+    Falls back to short SHA if no tags exist, or empty string.
+    """
+    try:
+        return subprocess.check_output(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+
+
 VERSION = _get_version()
 GIT_SHA = _get_git_sha()
+GIT_DESCRIBE = _get_git_describe()

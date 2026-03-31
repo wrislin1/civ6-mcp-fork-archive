@@ -1,15 +1,20 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 
-/** List all games — returns shape compatible with DiaryFile[] */
+/** List all games — returns shape compatible with DiaryFile[]
+ *  Pass minTurns to filter out micro-runs (default: include all). */
 export const listGames = query({
-  args: {},
-  handler: async (ctx) => {
-    const games = await ctx.db
+  args: { minTurns: v.optional(v.number()) },
+  handler: async (ctx, { minTurns }) => {
+    let games = await ctx.db
       .query("games")
       .withIndex("by_status")
       .order("desc")
       .collect();
+
+    if (minTurns) {
+      games = games.filter((g) => g.turnCount >= minTurns);
+    }
 
     return games.map((g) => ({
       gameId: g.gameId,
@@ -28,6 +33,8 @@ export const listGames = query({
       mapType: g.mapType ?? null,
       mapSize: g.mapSize ?? null,
       evalTrack: g.evalTrack ?? null,
+      excludeReason: g.excludeReason ?? null,
+      gitDescribe: g.gitDescribe ?? null,
       runId: g.runId ?? null,
     }));
   },
@@ -63,8 +70,10 @@ export const getEloData = query({
 
     return games
       .filter((g) => g.outcome?.winnerCiv && g.eloPlayers && g.eloPlayers.length >= 2)
-      // Exclude development games from Elo — only benchmark tracks count
+      // Exclude development games and explicitly excluded games from Elo
       .filter((g) => g.evalTrack && g.evalTrack !== "development")
+      .filter((g) => !g.excludeReason)
+      .filter((g) => g.turnCount >= 50) // minimum game length for meaningful Elo
       .map((g) => {
         const override = g.agentModelOverride ?? null;
         return {

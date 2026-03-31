@@ -165,6 +165,56 @@ def hash_lines(lines: list[str]) -> str:
     return hashlib.md5("".join(lines).encode()).hexdigest()
 
 
+MIN_TURNS_TO_SYNC = 10
+
+
+def should_sync_game(
+    files: dict[str, Path],
+) -> tuple[bool, str | None]:
+    """Check if a game has enough data to be worth syncing.
+
+    Returns (should_sync, exclude_reason).
+    - (True, None) = sync normally
+    - (True, "reason") = sync but mark as excluded
+    - (False, "reason") = skip entirely
+    """
+    diary_path = files.get("diary")
+    if not diary_path or not diary_path.exists():
+        return False, "no_diary"
+
+    # Count diary lines (each line = one player-turn observation)
+    try:
+        with open(diary_path) as f:
+            line_count = sum(1 for _ in f)
+    except Exception:
+        return False, "unreadable_diary"
+
+    if line_count < MIN_TURNS_TO_SYNC:
+        return False, f"micro_run ({line_count} lines)"
+
+    # Check max turn from last diary entry
+    try:
+        with open(diary_path, "rb") as f:
+            # Read last non-empty line efficiently
+            f.seek(0, 2)
+            pos = f.tell()
+            while pos > 0:
+                pos -= 1
+                f.seek(pos)
+                if f.read(1) == b"\n" and pos < f.tell() - 1:
+                    break
+            last_line = f.readline().decode().strip()
+            if last_line:
+                last = json.loads(last_line)
+                max_turn = last.get("turn", 0)
+                if max_turn < MIN_TURNS_TO_SYNC:
+                    return False, f"early_abort (max turn {max_turn})"
+    except Exception:
+        pass  # non-fatal — line count check above is sufficient
+
+    return True, None
+
+
 def discover_games(directory: Path) -> dict[str, dict[str, Path]]:
     """Scan directory for JSONL/JSON game files, grouped by game_id.
 
@@ -980,7 +1030,15 @@ async def batch_upload(directory: Path, client: ConvexClient) -> None:
     total_start = time.time()
     games_uploaded = 0
 
+    skipped = 0
     for gid, files in sorted(games.items()):
+        # Quality gate: skip micro-runs and failed launches
+        sync_ok, exclude_reason = should_sync_game(files)
+        if not sync_ok:
+            log.info("  SKIP %s — %s", gid, exclude_reason)
+            skipped += 1
+            continue
+
         game_start = time.time()
         log.info("--- %s ---", gid)
 
@@ -996,6 +1054,9 @@ async def batch_upload(directory: Path, client: ConvexClient) -> None:
         elapsed = time.time() - game_start
         log.info("  %s done (%.1fs)", gid, elapsed)
         games_uploaded += 1
+
+    if skipped:
+        log.info("Skipped %d game(s) below quality threshold", skipped)
 
     total_elapsed = time.time() - total_start
     log.info(

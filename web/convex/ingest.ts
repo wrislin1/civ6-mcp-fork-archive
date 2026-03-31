@@ -4,6 +4,7 @@ import { v } from "convex/values";
 // Eval metadata: JSONL snake_case → Convex camelCase field mapping
 const EVAL_FIELD_MAP = [
   ["mcp_version", "mcpVersion"], ["mcp_git_sha", "mcpGitSha"],
+  ["mcp_git_describe", "gitDescribe"],
   ["scenario_id", "scenarioId"], ["difficulty", "difficulty"],
   ["map_type", "mapType"], ["map_size", "mapSize"],
   ["game_speed", "gameSpeed"], ["eval_track", "evalTrack"],
@@ -105,8 +106,9 @@ export const ingestPlayerRows = mutation({
     rows: v.array(v.any()),
     runId: v.optional(v.string()),
     evalFiles: v.optional(v.array(v.string())),
+    excludeReason: v.optional(v.string()),
   },
-  handler: async (ctx, { gameId, civ, leader, seed, rows, runId, evalFiles }) => {
+  handler: async (ctx, { gameId, civ, leader, seed, rows, runId, evalFiles, excludeReason }) => {
     for (const row of rows) {
       // Backfill fields added after early game data was recorded
       if (row.exploration_pct === undefined) row.exploration_pct = 0;
@@ -160,6 +162,7 @@ export const ingestPlayerRows = mutation({
       if (leader) patch.leader = leader;
       if (civ) patch.civ = civ;
       if (runId) patch.runId = runId;
+      if (excludeReason) patch.excludeReason = excludeReason;
       if (evalFiles?.length) {
         const existing = game.evalFiles ?? [];
         patch.evalFiles = [...new Set([...existing, ...evalFiles])];
@@ -196,6 +199,7 @@ export const ingestPlayerRows = mutation({
         hasCities: false,
         ...evalMeta,
         ...(runId ? { runId } : {}),
+        ...(excludeReason ? { excludeReason } : {}),
         ...(evalFiles?.length ? { evalFiles } : {}),
         ...(agentRow?.agent_model ? { agentModel: agentRow.agent_model } : {}),
         ...(typeof agentRow?.score === "number" ? { agentScore: agentRow.score } : {}),

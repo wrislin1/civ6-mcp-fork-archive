@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from civ_mcp.version import GIT_SHA, VERSION
+from civ_mcp.version import GIT_DESCRIBE, GIT_SHA, VERSION
 
 log = logging.getLogger(__name__)
 
@@ -239,6 +239,7 @@ class CloudSink:
             "start_ts": time.time(),
             "mcp_version": VERSION,
             "git_sha": GIT_SHA,
+            "git_describe": GIT_DESCRIBE,
             "metadata": self._metadata,
         }
         self._write_cloud_json(f"{self._run_prefix()}/manifest.json", manifest)
@@ -541,6 +542,7 @@ class TelemetryEmitter:
         # Always include MCP version info — used by diary rows and manifest
         self._metadata.setdefault("mcp_version", VERSION)
         self._metadata.setdefault("mcp_git_sha", GIT_SHA)
+        self._metadata.setdefault("mcp_git_describe", GIT_DESCRIBE)
 
         for sink in self._sinks:
             try:

@@ -50,6 +50,9 @@ export default defineSchema({
     mapSize: v.optional(v.string()),
     gameSpeed: v.optional(v.string()),
     evalTrack: v.optional(v.string()),
+    // Data quality / provenance
+    excludeReason: v.optional(v.string()), // "micro_run", "wrong_save", "failed_launch", null = valid
+    gitDescribe: v.optional(v.string()), // e.g. "v1.0.4-3-g2630adb"
     outcome: v.optional(
       v.object({
         result: v.union(v.literal("victory"), v.literal("defeat")),
