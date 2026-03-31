@@ -216,7 +216,7 @@ class Machine:
                 f".venv\\Scripts\\python.exe -u evals/runner.py "
                 f"--model {model} --scenarios {scenario} --runs {runs} "
                 f">> %USERPROFILE%\\civbench_run.log 2>&1\r\n"
-                f"echo DONE > %USERPROFILE%\\civbench_done\r\n"
+                f"if %ERRORLEVEL% EQU 0 echo DONE > %USERPROFILE%\\civbench_done\r\n"
             )
             encoded = base64.b64encode(bat_content.encode("utf-8")).decode("ascii")
             self.ssh(
@@ -237,7 +237,7 @@ class Machine:
                 f"{env_str} tmux new-session -d -s civbench "
                 f'"cd {self.repo} && uv run python -u evals/runner.py '
                 f"--model {model} --scenarios {scenario} --runs {runs} "
-                f'2>&1 | tee ~/civbench_run.log; touch ~/civbench_done"'
+                f'2>&1 | tee ~/civbench_run.log && touch ~/civbench_done"'
             )
             return rc == 0
 
@@ -728,9 +728,12 @@ def cmd_launch(
                     )
 
         # Check for completed jobs via sentinel file → run post-game pipeline
+        # (skip during grace period — runner may not have started yet)
         for jid, job in jobs.items():
             if job.status != "running":
                 continue
+            if time.time() - job.started_at < 180:
+                continue  # grace period — game still loading
             m = machines[job.machine_name]
             if m.check_completed():
                 job.status = "completing"
