@@ -42,6 +42,90 @@ CONFIG_PATH = CONFIG_DIR / "machines.yaml"
 STATE_PATH = CONFIG_DIR / "state.json"
 
 # ---------------------------------------------------------------------------
+# ETA prediction — piecewise turn-time model with Bayesian blending
+# ---------------------------------------------------------------------------
+
+# Segments: (start_turn, end_turn) matching Civ VI game phases
+_ETA_SEGMENTS = [(1, 50), (50, 150), (150, 330)]
+
+# Per-model priors: (early, mid, late) min/turn, expected end turn, stall overhead
+_ETA_PRIORS: dict[str, dict[str, Any]] = {
+    "opus": {"rates": (1.5, 2.5, 3.5), "end_turn": 300, "stall_mult": 1.08},
+    "gpt": {"rates": (1.8, 2.4, 3.3), "end_turn": 290, "stall_mult": 1.10},
+    "gemini": {"rates": (3.0, 5.0, 7.0), "end_turn": 280, "stall_mult": 1.12},
+    "sonnet": {"rates": (1.3, 2.2, 3.0), "end_turn": 300, "stall_mult": 1.08},
+}
+_ETA_DEFAULT = {"rates": (2.0, 3.5, 5.0), "end_turn": 290, "stall_mult": 1.10}
+_ETA_PSEUDOCOUNT = 20  # prior strength — ~20 observed turns to halve prior influence
+
+
+def _eta_integrate(rates: tuple, from_turn: int, to_turn: int) -> float:
+    """Total minutes from from_turn to to_turn given piecewise segment rates."""
+    total = 0.0
+    for (seg_s, seg_e), rate in zip(_ETA_SEGMENTS, rates):
+        lo = max(from_turn, seg_s)
+        hi = min(to_turn, seg_e)
+        if hi > lo:
+            total += (hi - lo) * rate
+    return total
+
+
+def estimate_eta(
+    model_name: str, current_turn: int, elapsed_h: float, turn_limit: int = 330
+) -> dict[str, float]:
+    """Non-linear ETA with confidence interval.
+
+    Returns ``{"eta_h": 11.9, "lo_h": 7.2, "hi_h": 18.1}``.
+    """
+    # Match model to prior
+    model_lower = model_name.lower()
+    prior = _ETA_DEFAULT
+    for key, p in _ETA_PRIORS.items():
+        if key in model_lower:
+            prior = p
+            break
+
+    pr = prior["rates"]
+    elapsed_min = elapsed_h * 60
+
+    # Scale factor: how does observed speed compare to prior expectation?
+    prior_elapsed = _eta_integrate(pr, 1, current_turn)
+    scale = elapsed_min / prior_elapsed if prior_elapsed > 0 else 1.0
+
+    # Blend observed data with prior per segment
+    rates = []
+    for i, ((seg_s, seg_e), r) in enumerate(zip(_ETA_SEGMENTS, pr)):
+        n_obs = max(0, min(current_turn, seg_e) - seg_s)
+        obs_rate = r * scale if n_obs > 0 else r
+        blended = (n_obs * obs_rate + _ETA_PSEUDOCOUNT * r) / (
+            n_obs + _ETA_PSEUDOCOUNT
+        )
+        rates.append(blended)
+
+    # Point estimate
+    end_turn = min(prior["end_turn"], turn_limit)
+    remaining_min = _eta_integrate(tuple(rates), current_turn, end_turn)
+    remaining_min *= prior["stall_mult"]
+    eta_h = remaining_min / 60
+
+    # Confidence interval
+    sigma = 0.25
+    lo_rates = tuple(r * (1 - sigma) for r in rates)
+    hi_rates = tuple(r * (1 + sigma) for r in rates)
+    lo_end = max(current_turn + 1, min(end_turn, 250))
+    eta_lo = _eta_integrate(lo_rates, current_turn, lo_end) / 60
+    eta_hi = (
+        _eta_integrate(hi_rates, current_turn, turn_limit) * prior["stall_mult"] / 60
+    )
+
+    return {
+        "eta_h": round(eta_h, 1),
+        "lo_h": round(eta_lo, 1),
+        "hi_h": round(eta_hi, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
 
@@ -496,15 +580,13 @@ def cmd_status(machines: dict[str, Machine]) -> None:
             elapsed_h = (time.time() - sa) / 3600 if sa > 0 else 0
             turn = j.get("last_turn", 0)
             model_short = j.get("model", "?").rsplit("/", 1)[-1]
-            # Calculate rate and ETA
+            # Calculate rate and ETA (non-linear model)
             rate_str = ""
             eta_str = ""
             if turn > 5 and elapsed_h > 0.01:
-                min_per_turn = (elapsed_h * 60) / turn
-                remaining_turns = 330 - turn  # Quick speed = 330 turns
-                eta_h = (remaining_turns * min_per_turn) / 60
-                rate_str = f"{min_per_turn:.1f}m/t"
-                eta_str = f"~{eta_h:.1f}h left"
+                rate_str = f"{elapsed_h * 60 / turn:.1f}m/t"
+                est = estimate_eta(j.get("model", ""), turn, elapsed_h)
+                eta_str = f"~{est['eta_h']}h [{est['lo_h']}-{est['hi_h']}h]"
             rid = j.get("run_id") or ""
             print(
                 f"  {j.get('machine_name', '?'):<10} {model_short:<18} "
