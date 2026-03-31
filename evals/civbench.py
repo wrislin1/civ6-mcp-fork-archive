@@ -40,7 +40,7 @@ import os
 import re
 import sys
 import time
-import uuid
+
 from pathlib import Path
 
 # Inspect loads this file directly — ensure the project root is on sys.path
@@ -489,16 +489,20 @@ def civbench_standard(
         run_id: Reuse an existing run_id (for resume). Generated if not provided.
     """
     scenario_list = _normalise_scenarios(scenarios)
-    run_id = run_id or uuid.uuid4().hex[:8]
-    os.environ["CIV_MCP_RUN_ID"] = run_id  # reasoning capture reads this
-    # Pass scenario metadata when running a single scenario. Multi-scenario
-    # runs share one MCP process, so env vars can't vary per sample — the
-    # diary/log entries still carry per-turn civ/game info for identification.
+    from civ_mcp.run_id import generate_run_id
+
     scenario_obj = (
         SCENARIOS.get(scenario_list[0])
         if scenario_list and len(scenario_list) == 1
         else None
     )
+    run_id = run_id or generate_run_id(
+        model_id=model_id, scenario_id=scenario_list[0] if scenario_list else ""
+    )
+    os.environ["CIV_MCP_RUN_ID"] = run_id  # reasoning capture reads this
+    # Pass scenario metadata when running a single scenario. Multi-scenario
+    # runs share one MCP process, so env vars can't vary per sample — the
+    # diary/log entries still carry per-turn civ/game info for identification.
     server = _civ_mcp_server(
         run_id=run_id,
         scenario=scenario_obj,
@@ -553,15 +557,18 @@ def civbench_open(
         token_limit: Max tokens before stopping.
         time_limit: Max wall-clock seconds before stopping.
     """
+    from civ_mcp.run_id import generate_run_id
+
     scenario_list = _normalise_scenarios(scenarios)
-    run_id = uuid.uuid4().hex[:8]
-    os.environ["CIV_MCP_RUN_ID"] = run_id  # reasoning capture reads this
-    # See civbench_standard for why scenario_obj is None for multi-scenario runs
     scenario_obj = (
         SCENARIOS.get(scenario_list[0])
         if scenario_list and len(scenario_list) == 1
         else None
     )
+    run_id = generate_run_id(
+        model_id=model_id, scenario_id=scenario_list[0] if scenario_list else ""
+    )
+    os.environ["CIV_MCP_RUN_ID"] = run_id
     server = _civ_mcp_server(
         run_id=run_id,
         scenario=scenario_obj,

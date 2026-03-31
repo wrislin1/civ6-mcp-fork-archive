@@ -524,8 +524,10 @@ class TelemetryEmitter:
         If run_id is None, reads CIV_MCP_RUN_ID env var or generates a UUID.
         If metadata is None, reads CIV_MCP_METADATA env var (JSON) or {}.
         """
+        from civ_mcp.run_id import generate_run_id
+
         self._run_id = (
-            run_id or os.environ.get("CIV_MCP_RUN_ID") or uuid.uuid4().hex[:8]
+            run_id or os.environ.get("CIV_MCP_RUN_ID") or generate_run_id()
         )
         if metadata is not None:
             self._metadata = metadata
