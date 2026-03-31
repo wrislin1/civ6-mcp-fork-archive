@@ -118,11 +118,16 @@ class Machine:
 
     def is_runner_running(self) -> bool:
         if self.os == "windows":
-            # Match runner.py specifically, not any python.exe
-            rc, out = self.ssh(
-                'powershell -Command "if (Get-Process python -ErrorAction SilentlyContinue '
+            # Match runner.py specifically, not any python.exe.
+            # Use EncodedCommand to avoid quote-mangling through SSH→cmd→PowerShell.
+            ps = (
+                "if (Get-Process python -ErrorAction SilentlyContinue "
                 "| Where-Object { $_.CommandLine -match 'runner.py' }) "
-                '{ echo YES } else { echo NO }"',
+                "{ 'YES' } else { 'NO' }"
+            )
+            encoded = base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
+            rc, out = self.ssh(
+                f"powershell -EncodedCommand {encoded}",
                 timeout=15,
             )
         else:
