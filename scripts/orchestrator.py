@@ -9,6 +9,9 @@ Usage:
     python scripts/orchestrator.py preflight [--machines M1,M2]
     python scripts/orchestrator.py launch --scenarios S --models M --runs N --machines M1,M2
     python scripts/orchestrator.py status
+    python scripts/orchestrator.py summary
+    python scripts/orchestrator.py sync [--machines M1,M2]
+    python scripts/orchestrator.py logs --machine M [--last N] [--errors]
     python scripts/orchestrator.py kill-all
     python scripts/orchestrator.py resume
 
@@ -25,6 +28,7 @@ import logging
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -212,6 +216,39 @@ class Machine:
             )
             return rc == 0
 
+    def discover_run_id(self) -> str | None:
+        """Extract run_id from the most recent diary file on this machine."""
+        if self.os == "windows":
+            cmd = (
+                'powershell -Command "($f = Get-ChildItem $env:USERPROFILE\\.civ6-mcp\\diary_*.jsonl '
+                "-Exclude '*cities*' | Sort-Object LastWriteTime -Descending "
+                "| Select-Object -First 1); if ($f) { $f.BaseName -replace '.*_','' }\""
+            )
+        else:
+            cmd = (
+                "ls -t ~/.civ6-mcp/diary_*.jsonl 2>/dev/null | grep -v cities | head -1 "
+                "| xargs -I{} basename {} .jsonl | rev | cut -d_ -f1 | rev"
+            )
+        rc, out = self.ssh(cmd, timeout=15)
+        rid = out.strip()
+        return rid if rc == 0 and rid and rid != "" else None
+
+    def sync_to_convex(self) -> bool:
+        """Run convex_sync.py --upload on this machine. Returns True on success."""
+        if self.os == "windows":
+            diary_dir = "%USERPROFILE%\\.civ6-mcp"
+            cmd = (f"cd /d {self.repo} && "
+                   f".venv\\Scripts\\python.exe scripts/convex_sync.py "
+                   f"--upload {diary_dir} --prod")
+        else:
+            cmd = (f"cd {self.repo} && "
+                   f"uv run python scripts/convex_sync.py "
+                   f"--upload ~/.civ6-mcp --prod")
+        rc, out = self.ssh(cmd, timeout=300)
+        if rc != 0:
+            log.warning("Sync failed on %s: %s", self.name, out[:200])
+        return rc == 0
+
     def tail_log(self, n: int = 10) -> str:
         if self.os == "windows":
             rc, out = self.ssh(
@@ -238,10 +275,14 @@ class Job:
     status: str = "pending"  # pending, launching, running, completing, done, failed
     run_id: str | None = None
     started_at: float = 0
+    finished_at: float = 0
     last_turn: int = 0
     last_turn_change: float = 0
     retries: int = 0
     fail_reason: str = ""
+    synced: bool = False
+    score: int = 0
+    outcome: str = ""  # "victory", "defeat", ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -369,20 +410,41 @@ def cmd_status(machines: dict[str, Machine]) -> None:
 
     if active_jobs:
         print(f"\nActive Jobs")
-        print(f"  {'─' * 50}")
+        print(f"  {'─' * 60}")
         for jid, j in active_jobs.items():
-            elapsed = (time.time() - j.get("started_at", 0)) / 3600
-            print(f"  {j.get('machine_name', '?'):<12} {j.get('model', '?').rsplit('/', 1)[-1]:<20} "
-                  f"T{j.get('last_turn', '?'):>3}  {elapsed:.1f}h  {j.get('run_id', '?')}")
+            sa = j.get("started_at", 0)
+            elapsed_h = (time.time() - sa) / 3600 if sa > 0 else 0
+            turn = j.get("last_turn", 0)
+            model_short = j.get("model", "?").rsplit("/", 1)[-1]
+            # Calculate rate and ETA
+            rate_str = ""
+            eta_str = ""
+            if turn > 5 and elapsed_h > 0.01:
+                min_per_turn = (elapsed_h * 60) / turn
+                remaining_turns = 330 - turn  # Quick speed = 330 turns
+                eta_h = (remaining_turns * min_per_turn) / 60
+                rate_str = f"{min_per_turn:.1f}m/t"
+                eta_str = f"~{eta_h:.1f}h left"
+            rid = j.get("run_id") or ""
+            print(f"  {j.get('machine_name', '?'):<10} {model_short:<18} "
+                  f"T{turn:>3}  {elapsed_h:.1f}h  {rate_str:>7}  {eta_str:>10}  {rid}")
+
+    if done_jobs:
+        print(f"\nCompleted ({len(done_jobs)})")
+        print(f"  {'─' * 60}")
+        for jid, j in done_jobs.items():
+            model_short = j.get("model", "?").rsplit("/", 1)[-1]
+            elapsed = (j.get("finished_at", 0) - j.get("started_at", 0)) / 3600 if j.get("finished_at") else 0
+            synced = "synced" if j.get("synced") else "pending sync"
+            rid = j.get("run_id") or "?"
+            print(f"  ✓ {rid:<25} {model_short:<18} T{j.get('last_turn', '?'):>3}  {elapsed:.1f}h  {synced}")
 
     if pending_jobs:
         print(f"\nPending: {len(pending_jobs)} jobs")
-    if done_jobs:
-        print(f"Done: {len(done_jobs)} jobs")
     if failed_jobs:
-        print(f"Failed: {len(failed_jobs)} jobs")
+        print(f"\nFailed ({len(failed_jobs)})")
         for jid, j in failed_jobs.items():
-            print(f"  {jid}: {j.get('fail_reason', '?')}")
+            print(f"  ✗ {jid}: {j.get('fail_reason', '?')}")
     print()
 
 
@@ -400,7 +462,7 @@ def cmd_kill_all(machines: dict[str, Machine]) -> None:
     # Update state
     state = load_state()
     for jid, j in state.get("jobs", {}).items():
-        if j.get("status") in ("launching", "running"):
+        if j.get("status") in ("launching", "running", "completing"):
             j["status"] = "failed"
             j["fail_reason"] = "killed by operator"
     save_state(state)
@@ -544,19 +606,54 @@ def cmd_launch(
                             alert(f"Job failed: {jid} — stall timeout")
                     elif stall_min > stall_alert_min:
                         log.warning("Stall: %s at T%d for %.0fm", jid, turn, stall_min)
+            else:
+                # Turn polling failed — stall detection is blind
+                blind_min = (time.time() - job.last_turn_change) / 60
+                if blind_min > stall_alert_min:
+                    log.warning("Cannot read turn for %s (%.0fm blind) — stall detection degraded", jid, blind_min)
 
-        # Check for completed jobs via sentinel file (not process death)
+        # Check for completed jobs via sentinel file → run post-game pipeline
         for jid, job in jobs.items():
             if job.status != "running":
                 continue
             m = machines[job.machine_name]
             if m.check_completed():
+                job.status = "completing"
+                job.finished_at = time.time()
+                m.clear_completion_sentinel()
+                # Persist immediately — if orchestrator crashes mid-pipeline,
+                # we don't lose the completion or re-trigger the job
+                state["jobs"][jid] = job.to_dict()
+                save_state(state)
+                elapsed = (job.finished_at - job.started_at) / 3600
+                log.info("Game finished: %s T%d in %.1fh — running post-game pipeline", jid, job.last_turn, elapsed)
+
+                # 1. Discover run_id
+                run_id = m.discover_run_id()
+                if run_id:
+                    job.run_id = run_id
+                    log.info("  Run ID: %s", run_id)
+
+                # 2. Sync to Convex
+                log.info("  Syncing to Convex...")
+                if m.sync_to_convex():
+                    job.synced = True
+                    log.info("  Sync OK")
+                else:
+                    log.warning("  Sync failed — data still on machine, can retry with 'sync' command")
+
+                # 3. Rich alert
+                short_model = job.model.rsplit("/", 1)[-1]
+                rid_str = job.run_id or "?"
+                alert(
+                    f"✓ {rid_str} | {short_model} | {job.scenario} | "
+                    f"T{job.last_turn} | {elapsed:.1f}h"
+                )
+
+                # 4. Mark done, free machine
                 job.status = "done"
                 machine_jobs[job.machine_name] = None
-                m.clear_completion_sentinel()
-                elapsed = (time.time() - job.started_at) / 3600
-                log.info("Completed: %s T%d in %.1fh", jid, job.last_turn, elapsed)
-                alert(f"Done: {jid} | T{job.last_turn} | {elapsed:.1f}h")
+                log.info("Completed: %s", jid)
 
         # Persist state
         state = {"started_at": state.get("started_at", time.time()),
@@ -602,6 +699,11 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Persistent log file for multi-day runs
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(CONFIG_DIR / "orchestrator.log")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger("orchestrator").addHandler(fh)
 
     parser = argparse.ArgumentParser(description="CivBench Orchestrator")
     sub = parser.add_subparsers(dest="command")
@@ -618,10 +720,23 @@ def main() -> None:
     p_launch.add_argument("--machines", required=True, help="Comma-separated machine names")
 
     # status
-    sub.add_parser("status", help="Show fleet status")
+    sub.add_parser("status", help="Show fleet status + active job details")
 
     # kill-all
     sub.add_parser("kill-all", help="Kill all runners and games")
+
+    # sync
+    p_sync = sub.add_parser("sync", help="Sync telemetry to Convex")
+    p_sync.add_argument("--machines", help="Comma-separated machine names (default: all)")
+
+    # summary
+    sub.add_parser("summary", help="Aggregate results by model and scenario")
+
+    # logs
+    p_logs = sub.add_parser("logs", help="Tail remote runner logs")
+    p_logs.add_argument("--machine", required=True, help="Machine name")
+    p_logs.add_argument("--last", type=int, default=30, help="Number of lines (default: 30)")
+    p_logs.add_argument("--errors", action="store_true", help="Show only error/warning lines")
 
     # resume
     sub.add_parser("resume", help="Resume from saved state")
@@ -668,6 +783,66 @@ def main() -> None:
         scenario_list = [s.strip() for s in args.scenarios.split(",")]
         model_list = [aliases.get(m.strip(), m.strip()) for m in args.models.split(",")]
         cmd_launch(machines, machine_names, model_list, scenario_list, args.runs, config)
+
+    elif args.command == "sync":
+        names = [n.strip() for n in args.machines.split(",")] if args.machines else list(machines.keys())
+        for name in names:
+            if name not in machines:
+                log.warning("Unknown machine: %s", name)
+                continue
+            m = machines[name]
+            print(f"  Syncing {name}... ", end="", flush=True)
+            if not m.is_reachable():
+                print("OFFLINE")
+                continue
+            if m.sync_to_convex():
+                print("OK")
+            else:
+                print("FAILED")
+
+    elif args.command == "summary":
+        state = load_state()
+        jobs_data = state.get("jobs", {})
+        if not jobs_data:
+            print("No jobs in state.")
+        else:
+            # Group by scenario, then model
+            by_scenario: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+            for jid, j in jobs_data.items():
+                by_scenario[j.get("scenario", "?")][j.get("model", "?").rsplit("/", 1)[-1]].append(j)
+
+            for scenario, models_dict in sorted(by_scenario.items()):
+                total = sum(len(jl) for jl in models_dict.values())
+                done = sum(1 for jl in models_dict.values() for j in jl if j.get("status") == "done")
+                print(f"\n{scenario} ({done}/{total} done)")
+                print(f"  {'─' * 55}")
+                for model, jlist in sorted(models_dict.items()):
+                    n = len(jlist)
+                    d = sum(1 for j in jlist if j.get("status") == "done")
+                    turns = [j.get("last_turn", 0) for j in jlist if j.get("status") == "done"]
+                    elapsed = [
+                        (j.get("finished_at", 0) - j.get("started_at", 0)) / 3600
+                        for j in jlist if j.get("status") == "done" and j.get("finished_at")
+                    ]
+                    avg_t = f"avg T{sum(turns)//len(turns)}" if turns else ""
+                    avg_h = f"avg {sum(elapsed)/len(elapsed):.1f}h" if elapsed else ""
+                    rids = [j.get("run_id", "?") for j in jlist if j.get("status") == "done"]
+                    print(f"  {model:<22} {d}/{n}  {avg_t:>8}  {avg_h:>10}  {' '.join(rids)}")
+            print()
+
+    elif args.command == "logs":
+        if not args.machine or args.machine not in machines:
+            log.error("Specify a valid machine with --machine")
+            sys.exit(1)
+        m = machines[args.machine]
+        n = args.last or 30
+        output = m.tail_log(n)
+        if args.errors:
+            output = "\n".join(
+                l for l in output.split("\n")
+                if any(kw in l.lower() for kw in ("error", "warning", "fail", "traceback", "exception"))
+            )
+        print(output)
 
     elif args.command == "resume":
         state = load_state()
