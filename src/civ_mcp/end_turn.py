@@ -452,7 +452,7 @@ async def execute_end_turn(gs: GameState) -> str:
 
                 if blocking_type == "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION":
                     # NEVER auto-resolve session blockers — the agent must
-                    # call get_world_congress() and vote_world_congress()
+                    # call get_world_congress() and queue_wc_votes()
                     # to deploy diplomatic favor strategically.
                     hard_blockers.append((blocking_type, blocking_msg))
                     continue

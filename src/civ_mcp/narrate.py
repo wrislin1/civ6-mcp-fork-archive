@@ -1617,7 +1617,7 @@ def narrate_world_congress(status: lq.WorldCongressStatus) -> str:
                             tgt_strs.append(t)
                     lines.append(f"  Targets: {', '.join(tgt_strs)}")
                 lines.append(
-                    f"  -> vote_world_congress(resolution_hash={r.resolution_hash}, option=1or2, target_index=N, num_votes=1)"
+                    f'  -> queue_wc_votes(votes=\'[{{"hash": {r.resolution_hash}, "option": 1or2, "target": 0, "votes": 1}}]\')'
                 )
             elif imminent:
                 # Imminent but not yet in session — resolutions are LAST SESSION's passed outcomes

@@ -164,9 +164,9 @@ NOTIFICATION_TOOL_MAP: dict[str, str] = {
     "NOTIFICATION_GOVERNOR_APPOINTMENT_AVAILABLE": "get_governors() then appoint_governor()",
     "NOTIFICATION_GOVERNOR_PROMOTION_AVAILABLE": "get_governors() then appoint_governor()",
     "NOTIFICATION_COMMEMORATION_AVAILABLE": "get_dedications() then choose_dedication(dedication_index=...)",
-    "NOTIFICATION_WORLD_CONGRESS_BLOCKING": "get_world_congress() then vote_world_congress()",
+    "NOTIFICATION_WORLD_CONGRESS_BLOCKING": "get_world_congress() then queue_wc_votes()",
     "NOTIFICATION_WORLD_CONGRESS_RESULTS": "get_world_congress() (review results)",
-    "NOTIFICATION_WORLD_CONGRESS_SPECIAL_SESSION_BLOCKING": "get_world_congress() then vote_world_congress()",
+    "NOTIFICATION_WORLD_CONGRESS_SPECIAL_SESSION_BLOCKING": "get_world_congress() then queue_wc_votes()",
     "NOTIFICATION_COMMAND_UNITS": "Units have moves remaining — move them or use skip_remaining_units()",
 }
 
@@ -198,7 +198,7 @@ BLOCKING_TOOL_MAP: dict[str, str] = {
     "ENDTURN_BLOCKING_STACKED_UNITS": "Move units — cannot stack military units",
     "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE": "Consider Changing Governments",
     "ENDTURN_BLOCKING_COMMEMORATION_AVAILABLE": "Use get_dedications() then choose_dedication(dedication_index=...)",
-    "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION": "MUST VOTE: Use get_world_congress() to see resolutions, then vote_world_congress() for EACH resolution. Deploy ALL diplomatic favor!",
+    "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION": "MUST VOTE: Use get_world_congress() to see resolutions, then queue_wc_votes() to register all votes, then end_turn(). Deploy ALL diplomatic favor!",
     "ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK": "Use get_world_congress() to review results (auto-resolved)",
     "ENDTURN_BLOCKING_WORLD_CONGRESS_SPECIAL_SESSION": "World Congress special session (auto-resolved)",
     "ENDTURN_BLOCKING_CONSIDER_RAZE_CITY": "Use city_action(city_id=..., action='keep') or 'raze'/'liberate'",

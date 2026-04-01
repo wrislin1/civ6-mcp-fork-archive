@@ -2050,6 +2050,26 @@ async def end_turn(
                 log.debug("Map capture failed", exc_info=True)
     elif "Turn paused" in result or "World Congress fires" in result:
         gs._end_turn_blocked = True
+        # Safety net: if WC blocker fires repeatedly on the same turn,
+        # auto-submit to break infinite loops (agent used wrong voting tool)
+        if "World Congress fires" in result:
+            wc_turn = getattr(gs, "_wc_blocker_turn", -1)
+            wc_count = getattr(gs, "_wc_blocker_count", 0)
+            current = _diary_turn or 0
+            if wc_turn == current:
+                gs._wc_blocker_count = wc_count + 1
+                if gs._wc_blocker_count >= 3:
+                    log.warning(
+                        "WC blocker repeated %d times on T%d — auto-submitting",
+                        gs._wc_blocker_count, current,
+                    )
+                    try:
+                        await gs.submit_congress()
+                    except Exception:
+                        log.debug("WC auto-submit failed", exc_info=True)
+            else:
+                gs._wc_blocker_turn = current
+                gs._wc_blocker_count = 1
 
     # Log structured game-over entry
     if "GAME OVER" in result:
@@ -2424,7 +2444,7 @@ async def get_world_congress(ctx: Context) -> str:
 
     Shows whether congress is in session, resolutions to vote on (with options A/B
     and possible targets), turns until next session, and your diplomatic favor.
-    When in session, use vote_world_congress to cast votes.
+    When in session, use queue_wc_votes to register votes before end_turn.
     """
     gs = _get_game(ctx)
 
@@ -2433,41 +2453,6 @@ async def get_world_congress(ctx: Context) -> str:
         return nr.narrate_world_congress(status)
 
     return await _logged(ctx, "get_world_congress", {}, _run)
-
-
-@mcp.tool()
-async def vote_world_congress(
-    ctx: Context,
-    resolution_hash: int,
-    option: int,
-    target_index: int,
-    num_votes: int = 1,
-) -> str:
-    """Vote on a World Congress resolution.
-
-    Args:
-        resolution_hash: Resolution type hash (from get_world_congress)
-        option: 1 for option A, 2 for option B
-        target_index: 0-based index into the resolution's possible targets list
-        num_votes: Number of votes (1 is free, extras cost diplomatic favor)
-
-    After voting on all resolutions, call end_turn() to submit and advance.
-    Use get_world_congress first to see available resolutions and targets.
-    """
-    gs = _get_game(ctx)
-    params = {
-        "resolution_hash": resolution_hash,
-        "option": option,
-        "target_index": target_index,
-        "num_votes": num_votes,
-    }
-
-    async def _run():
-        return await gs.vote_world_congress(
-            resolution_hash, option, target_index, num_votes
-        )
-
-    return await _logged(ctx, "vote_world_congress", params, _run)
 
 
 @mcp.tool()
