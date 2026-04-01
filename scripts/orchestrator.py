@@ -52,6 +52,7 @@ _ETA_SEGMENTS = [(1, 50), (50, 150), (150, 330)]
 _ETA_PRIORS: dict[str, dict[str, Any]] = {
     "opus": {"rates": (1.5, 2.5, 3.5), "end_turn": 300, "stall_mult": 1.08},
     "gpt": {"rates": (1.8, 2.4, 3.3), "end_turn": 290, "stall_mult": 1.10},
+    "flash-lite": {"rates": (0.8, 1.2, 1.8), "end_turn": 300, "stall_mult": 1.08},
     "gemini": {"rates": (3.0, 5.0, 7.0), "end_turn": 280, "stall_mult": 1.12},
     "sonnet": {"rates": (1.3, 2.2, 3.0), "end_turn": 300, "stall_mult": 1.08},
 }
