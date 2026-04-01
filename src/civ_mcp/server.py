@@ -415,8 +415,9 @@ async def _logged(
                 log.error("CONNECTION RECOVERY: restart failed", exc_info=True)
 
         return result
-    # Success — reset connection error counter
+    # Success — reset connection error counter + refresh heartbeat
     _logged._conn_errors = 0
+    heartbeat.write("playing", turn=turn or 0)
     ms = int((time.monotonic() - start) * 1000)
     log.info(
         "[T%s] %s(%s) OK %dms: %s",

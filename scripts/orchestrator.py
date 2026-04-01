@@ -824,8 +824,9 @@ def cmd_launch(
                 if not job.run_id and hb.get("run_id"):
                     job.run_id = hb["run_id"]
 
-                # Boot phases get 5 min (OCR/loading is slow); playing gets 90s
-                stale_threshold = 300 if phase != "playing" else 90
+                # Boot phases get 5 min (OCR/loading is slow); playing gets
+                # 3 min (a single turn with many tool calls can take 2+ min)
+                stale_threshold = 300 if phase != "playing" else 180
 
                 if phase in ("error", "finished"):
                     # Will be caught by completion sentinel check below

@@ -16,7 +16,7 @@ import { slugFromFilename, groupTurnData } from "./diary-types";
 
 /** Convex-backed diary list — real-time, no polling. */
 export function useDiaryListConvex(): DiaryFile[] {
-  const games = useQuery(api.diary.listGames) ?? [];
+  const games = useQuery(api.diary.listGames, {}) ?? [];
   return games.map((g) => ({
     filename: g.filename,
     label: g.label,
