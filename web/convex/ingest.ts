@@ -322,6 +322,21 @@ export const patchEvalTrack = mutation({
   },
 });
 
+export const markCompleted = mutation({
+  args: { gameId: v.string() },
+  handler: async (ctx, { gameId }) => {
+    const game = await ctx.db
+      .query("games")
+      .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (game) {
+      await ctx.db.patch(game._id, { status: "completed" });
+      return { gameId, status: "completed" };
+    }
+    return { gameId, status: "not_found" };
+  },
+});
+
 /** Delete up to `limit` rows from a single table for a game.
  *  Returns how many were deleted — call repeatedly until 0. */
 export const deleteGameBatch = mutation({
