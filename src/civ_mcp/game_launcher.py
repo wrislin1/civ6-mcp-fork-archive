@@ -1668,19 +1668,14 @@ def _click_win32(x: int, y: int) -> None:
 def _click_linux(x: int, y: int) -> None:
     """Click at screen coordinates using xdotool (Linux)."""
     log.info("Click: screen=(%d,%d) via xdotool", x, y)
-    # Use mousemove + click in a single xdotool chain to avoid focus races.
-    # --clearmodifiers ensures no stuck modifier keys interfere.
     subprocess.run(
-        [
-            "xdotool",
-            "mousemove",
-            "--sync",
-            str(x),
-            str(y),
-            "click",
-            "--clearmodifiers",
-            "1",
-        ],
+        ["xdotool", "mousemove", str(x), str(y)],
+        capture_output=True,
+        timeout=5,
+    )
+    time.sleep(0.15)
+    subprocess.run(
+        ["xdotool", "click", "1"],
         capture_output=True,
         timeout=5,
     )
