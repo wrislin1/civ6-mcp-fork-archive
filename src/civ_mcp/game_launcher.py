@@ -764,17 +764,16 @@ def _find_game_window_linux() -> WindowInfo | None:
             )
             pid = int(r3.stdout.strip()) if r3.returncode == 0 else 0
 
-            # Compensate for GNOME window decorations (title bar).
-            # xdotool reports the decorated window bounds; we need the
-            # content area for accurate OCR→click coordinate mapping.
-            fl, fr, ft, fb = _get_frame_extents(wid)
-
+            # NOTE: On GNOME/X11, xdotool getwindowgeometry already
+            # returns the content area (excluding title bar). The
+            # _NET_FRAME_EXTENTS property describes additional decoration
+            # but xdotool accounts for it. No compensation needed.
             info = WindowInfo(
                 window_id=wid,
-                x=geo.get("X", 0) + fl,
-                y=geo.get("Y", 0) + ft,
-                w=geo.get("WIDTH", 0) - fl - fr,
-                h=geo.get("HEIGHT", 0) - ft - fb,
+                x=geo.get("X", 0),
+                y=geo.get("Y", 0),
+                w=geo.get("WIDTH", 0),
+                h=geo.get("HEIGHT", 0),
                 pid=pid,
             )
 
@@ -982,11 +981,8 @@ def _capture_window_linux(window_id: int) -> "PIL.Image.Image":
             if v.isdigit():
                 geo[k] = int(v)
 
-    # Compensate for GNOME window decorations (same as _find_game_window_linux)
-    fl, fr, ft, fb = _get_frame_extents(window_id)
-
-    x, y = geo.get("X", 0) + fl, geo.get("Y", 0) + ft
-    w, h = geo.get("WIDTH", 0) - fl - fr, geo.get("HEIGHT", 0) - ft - fb
+    x, y = geo.get("X", 0), geo.get("Y", 0)
+    w, h = geo.get("WIDTH", 0), geo.get("HEIGHT", 0)
     if w <= 0 or h <= 0:
         raise RuntimeError(f"Window {window_id} has no geometry ({w}x{h})")
 
@@ -1672,14 +1668,19 @@ def _click_win32(x: int, y: int) -> None:
 def _click_linux(x: int, y: int) -> None:
     """Click at screen coordinates using xdotool (Linux)."""
     log.info("Click: screen=(%d,%d) via xdotool", x, y)
+    # Use mousemove + click in a single xdotool chain to avoid focus races.
+    # --clearmodifiers ensures no stuck modifier keys interfere.
     subprocess.run(
-        ["xdotool", "mousemove", str(x), str(y)],
-        capture_output=True,
-        timeout=5,
-    )
-    time.sleep(0.15)
-    subprocess.run(
-        ["xdotool", "click", "1"],
+        [
+            "xdotool",
+            "mousemove",
+            "--sync",
+            str(x),
+            str(y),
+            "click",
+            "--clearmodifiers",
+            "1",
+        ],
         capture_output=True,
         timeout=5,
     )
