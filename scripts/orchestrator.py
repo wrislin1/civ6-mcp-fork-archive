@@ -552,6 +552,33 @@ def cmd_preflight(
         if version == "UNKNOWN":
             all_ok = False
 
+        # Package sync — check if uv sync is needed (dry run)
+        if m.os == "windows":
+            rc, sync_out = m.ssh(
+                f"cd /d {m.repo} && uv sync --extra evals --extra cloud "
+                f"--extra launcher-windows --dry-run 2>&1",
+                timeout=30,
+            )
+        else:
+            rc, sync_out = m.ssh(
+                f"cd {m.repo} && uv sync --extra evals --extra cloud "
+                f"--extra launcher-linux --dry-run 2>&1",
+                timeout=30,
+            )
+        # If dry-run shows no changes, packages are in sync
+        needs_install = "install" in sync_out.lower() or "uninstall" in sync_out.lower()
+        if not needs_install:
+            print("    ✓ Packages: in sync")
+        else:
+            changes = [
+                line.strip()
+                for line in sync_out.splitlines()
+                if line.strip().startswith(("+", "-", "~"))
+            ]
+            n = len(changes)
+            print(f"    ✗ Packages: {n} change(s) pending — run uv sync")
+            all_ok = False
+
         # Game running
         game = m.is_game_running()
         runner = m.is_runner_running()
