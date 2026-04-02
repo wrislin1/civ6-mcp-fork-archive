@@ -41,3 +41,4 @@ eval-logs/
 .vercel
 scripts/mission_control.sh
 docs/agent-essays/
+mission-control/
