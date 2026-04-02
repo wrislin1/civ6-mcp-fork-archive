@@ -1151,7 +1151,9 @@ async def execute_end_turn(gs: GameState) -> str:
         # Return structured HANG: prefix so server.py can auto-recover.
         turn_num = turn_after or turn_before
         if turn_num is not None:
-            hang_save = f"0_MCP_{turn_num:04d}"
+            from .autosave import get_autosave_for_turn
+
+            hang_save = get_autosave_for_turn(turn_num)
             return (
                 f"HANG:{turn_num}:{hang_save}|"
                 f"End turn requested (turn is still {turn_num}). "
@@ -1166,7 +1168,9 @@ async def execute_end_turn(gs: GameState) -> str:
     # Turn regression detection — catch accidental wrong-save loads
     if turn_after is not None and gs._high_water_turn > 0:
         if turn_after < gs._high_water_turn - 1:
-            latest_autosave = f"0_MCP_{gs._high_water_turn:04d}"
+            from .autosave import get_autosave_for_turn
+
+            latest_autosave = get_autosave_for_turn(gs._high_water_turn)
             log.warning(
                 "Turn regressed from %d to %d — possible wrong save loaded",
                 gs._high_water_turn,
@@ -1207,11 +1211,14 @@ async def execute_end_turn(gs: GameState) -> str:
         log.debug("Post-turn snapshot failed", exc_info=True)
         return f"Turn {turn_before} -> {turn_after}"
 
-    # MCP per-turn autosave — fire-and-forget after successful turn advance
-    if turn_after is not None:
+    # MCP per-turn autosave — fire-and-forget after successful turn advance.
+    # On Linux (Aspyr port), Network.SaveGame silently fails for custom names.
+    # We rely on the game's own AutoSave_NNNN instead.
+    from .autosave import saves_work_on_this_platform
+
+    if turn_after is not None and saves_work_on_this_platform():
         try:
             await save_game(gs.conn, f"0_MCP_{turn_after:04d}")
-            # Keep enough saves for hang recovery (3 retries) + manual fallback
             cleanup_old_autosaves(keep=8)
         except Exception:
             log.debug("MCP autosave failed for T%s", turn_after, exc_info=True)

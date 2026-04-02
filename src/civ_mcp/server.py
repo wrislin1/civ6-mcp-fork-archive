@@ -397,8 +397,14 @@ async def _logged(
             )
             _logged._conn_errors = 0
             try:
+                from civ_mcp.autosave import get_autosave_for_turn, get_latest_autosave
+
                 turn_num = logger._turn
-                save = f"0_MCP_{int(turn_num):04d}" if turn_num else None
+                save = (
+                    get_autosave_for_turn(int(turn_num))
+                    if turn_num
+                    else get_latest_autosave()
+                )
                 restart_result = await game_launcher.restart_and_load(save)
                 log.info("CONNECTION RECOVERY: %s", restart_result)
                 gs = _get_game(ctx)
@@ -1883,12 +1889,18 @@ async def end_turn(
 
     if result.startswith("HANG:") and not gs._hang_retry_active:
         parts = result.split("|", 1)
-        hang_info = parts[0]  # "HANG:57:0_MCP_0057"
+        hang_info = parts[
+            0
+        ]  # "HANG:57:AutoSave_0057" (Linux) or "HANG:57:0_MCP_0057" (Windows)
         _, hang_turn, hang_save = hang_info.split(":")
         hang_turn_int = int(hang_turn)
 
-        # Check save file exists before attempting recovery
+        # Check save file exists before attempting recovery.
+        # MCP saves (0_MCP_*) are in SINGLE_SAVE_DIR; game autosaves
+        # (AutoSave_*) are in SAVE_DIR (auto/ subdir).
         save_path = os.path.join(game_launcher.SINGLE_SAVE_DIR, f"{hang_save}.Civ6Save")
+        if not os.path.exists(save_path):
+            save_path = os.path.join(game_launcher.SAVE_DIR, f"{hang_save}.Civ6Save")
         if not os.path.exists(save_path):
             log.error(
                 "HANG RECOVERY: Save file %s not found, cannot auto-recover",
@@ -2012,7 +2024,7 @@ async def end_turn(
                         f"{_MAX_HANG_RETRIES} automatic restart attempts "
                         f"with escalating waits. The hang may be "
                         f"probabilistic — another attempt could work. "
-                        f"Try restart_and_load('0_MCP_{earlier:04d}') "
+                        f"Try restart_and_load('{hang_save.replace(hang_turn, str(earlier))}') "
                         f"to skip back a few turns."
                     )
             except Exception:
@@ -2061,7 +2073,8 @@ async def end_turn(
                 if gs._wc_blocker_count >= 3:
                     log.warning(
                         "WC blocker repeated %d times on T%d — auto-submitting",
-                        gs._wc_blocker_count, current,
+                        gs._wc_blocker_count,
+                        current,
                     )
                     try:
                         await gs.submit_congress()
