@@ -909,7 +909,10 @@ def cmd_launch(
 
             if hb is not None:
                 phase = hb.get("phase", "")
-                hb_turn = int(hb.get("turn", 0))
+                try:
+                    hb_turn = int(hb.get("turn", 0))
+                except (ValueError, TypeError):
+                    hb_turn = 0
                 hb_ts = hb.get("ts", 0)
                 age = time.time() - hb_ts
 
