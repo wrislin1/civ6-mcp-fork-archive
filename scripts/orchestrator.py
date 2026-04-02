@@ -314,7 +314,9 @@ class Machine:
             if hb_pid and str(hb_pid).isdigit():
                 self.ssh(f"kill -9 {hb_pid} 2>/dev/null", timeout=10)
             self.ssh(
-                "tmux kill-session -t civbench 2>/dev/null; pkill -f runner.py 2>/dev/null",
+                "tmux kill-session -t civbench 2>/dev/null; "
+                "pkill -f runner.py 2>/dev/null; "
+                "pkill -f civ-mcp 2>/dev/null",
                 timeout=10,
             )
 
