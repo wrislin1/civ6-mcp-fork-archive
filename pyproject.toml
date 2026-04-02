@@ -24,13 +24,13 @@ dependencies = [
 
 [project.optional-dependencies]
 evals = [
-    "inspect-ai>=0.3.175",
+    "inspect-ai>=0.3.203",
     "openai>=1.0",
     "google-cloud-aiplatform>=1.38",
 ]
 scout = [
     "inspect-scout>=0.4",
-    "inspect-ai>=0.3.175",
+    "inspect-ai>=0.3.203",
 ]
 cloud = [
     "fsspec>=2024.6",

@@ -477,7 +477,7 @@ wheels = [
 
 [[package]]
 name = "civ6-mcp"
-version = "1.1.1"
+version = "1.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -534,8 +534,8 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128" },
     { name = "fsspec", marker = "extra == 'cloud'", specifier = ">=2024.6" },
     { name = "google-cloud-aiplatform", marker = "extra == 'evals'", specifier = ">=1.38" },
-    { name = "inspect-ai", marker = "extra == 'evals'", specifier = ">=0.3.175" },
-    { name = "inspect-ai", marker = "extra == 'scout'", specifier = ">=0.3.175" },
+    { name = "inspect-ai", marker = "extra == 'evals'", specifier = ">=0.3.203" },
+    { name = "inspect-ai", marker = "extra == 'scout'", specifier = ">=0.3.203" },
     { name = "inspect-scout", marker = "extra == 'scout'", specifier = ">=0.4" },
     { name = "mcp", specifier = ">=1.20" },
     { name = "mss", marker = "extra == 'launcher-linux'", specifier = ">=9.0" },
@@ -1530,7 +1530,7 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.201"
+version = "0.3.203"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aioboto3" },
@@ -1571,9 +1571,9 @@ dependencies = [
     { name = "zipp" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/df/fd52f1c292c52b65294767d2e994299821c655abbe7b69a7b6c3e68aac09/inspect_ai-0.3.201.tar.gz", hash = "sha256:9631dfe8c3517b2ec0583e3590b64f47b2c18b5c83643b556bec7b2b64cc5028", size = 45372996, upload-time = "2026-03-25T21:55:26.393Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/78/54882838ccfb70dd9e35a4a4f30d811e4b29249961aaf44b88e3bf1cfef5/inspect_ai-0.3.203.tar.gz", hash = "sha256:576d8fbc15a2ad64b9080520f9088d57934c112b99a747505916e1c95a1d289c", size = 42476985, upload-time = "2026-04-01T20:17:44.464Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/55/77826076a72a246c27048e1c39743f6887fbbe35299b73e98a95e96f6547/inspect_ai-0.3.201-py3-none-any.whl", hash = "sha256:1fbe48e4a0146caf5ca58448a40facf00fa7514aeeca3c98aad80ece59d42eaf", size = 36357577, upload-time = "2026-03-25T21:55:15.235Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/0a/79e771a4eb862cc874ac08c2e88332023b961594267651d0b54a6e982f52/inspect_ai-0.3.203-py3-none-any.whl", hash = "sha256:894cff8873f033a7dd8391bb5317fbfa6bb35478622a72504ef32822b4f2bf79", size = 33271783, upload-time = "2026-04-01T20:17:36.187Z" },
 ]
 
 [[package]]

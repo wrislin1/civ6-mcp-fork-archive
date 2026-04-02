@@ -368,7 +368,25 @@ def run_scenario(
     print(f"  {' '.join(cmd)}")
     print(f"{'=' * 60}\n")
 
-    result = subprocess.run(cmd, cwd=str(EVALS_DIR.parent))
+    result = subprocess.run(
+        cmd,
+        cwd=str(EVALS_DIR.parent),
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0 and result.stderr:
+        print(f"  STDERR (last 2000 chars):\n{result.stderr[-2000:]}")
+
+    # Cleanup orphaned game/MCP processes after eval exits
+    try:
+        project_src = str(EVALS_DIR.parent / "src")
+        if project_src not in sys.path:
+            sys.path.insert(0, project_src)
+        from civ_mcp.game_launcher import _kill_game_sync
+
+        _kill_game_sync()
+    except Exception:
+        pass
 
     # Upload .eval logs to cloud storage (retry-safe, won't crash on DNS failure)
     if cloud_bucket:
