@@ -1150,6 +1150,610 @@ def cmd_reflection_gap(args):
 
 
 # ---------------------------------------------------------------------------
+# Domain scoring — 8 dimensions from the paper (Table 5)
+# ---------------------------------------------------------------------------
+
+CHECKPOINTS = [50, 100, 150, 200, 250, 300]
+TOTAL_TOOLS = 76  # current tool count
+
+# Exploration benchmarks from CLAUDE.md
+_EXPLORE_BENCHMARKS = {25: 15, 50: 25, 75: 35, 100: 50}
+# City founding benchmarks
+_CITY_BENCHMARKS = {40: 2, 60: 3, 80: 4, 100: 5}
+
+
+def _diary_by_turn(diary: list[dict]) -> dict[int, list[dict]]:
+    """Group diary rows by turn."""
+    by_turn: dict[int, list[dict]] = defaultdict(list)
+    for row in diary:
+        by_turn[row.get("turn", 0)].append(row)
+    return by_turn
+
+
+def _agent_rows(diary: list[dict]) -> list[dict]:
+    """Extract agent-only rows, one per turn (last entry wins)."""
+    by_turn: dict[int, dict] = {}
+    for row in diary:
+        if row.get("is_agent"):
+            by_turn[row.get("turn", 0)] = row
+    return [by_turn[t] for t in sorted(by_turn)]
+
+
+def _all_at_turn(diary: list[dict], turn: int) -> list[dict]:
+    """Get all player rows at the nearest turn <= target."""
+    by_turn = _diary_by_turn(diary)
+    for t in range(turn, -1, -1):
+        if t in by_turn:
+            return by_turn[t]
+    return []
+
+
+def _agent_at_turn(rows: list[dict], turn: int) -> dict | None:
+    """Get agent's row at nearest turn <= target."""
+    result = None
+    for row in rows:
+        if row.get("is_agent") and row.get("turn", 0) <= turn:
+            result = row
+    return result
+
+
+def _percentile(value: float, all_values: list[float]) -> float:
+    """Percentile rank of value among all_values (0-100)."""
+    if not all_values:
+        return 50.0
+    below = sum(1 for v in all_values if v < value)
+    return min(100, below / len(all_values) * 100)
+
+
+def _clamp(v: float, lo: float = 0, hi: float = 100) -> float:
+    return max(lo, min(hi, v))
+
+
+def _city_founding_turns(agent: list[dict]) -> list[int]:
+    """Return list of turns when a new city was founded."""
+    turns = []
+    prev = 0
+    for row in agent:
+        c = int(row.get("cities", 0))
+        if c > prev:
+            turns.extend([row.get("turn", 0)] * (c - prev))
+            prev = c
+    return turns
+
+
+# ── Per-dimension scorers ────────────────────────────────────────
+
+
+def score_overall(diary: list[dict]) -> dict:
+    """Score relative to AI leader at checkpoints."""
+    agent = _agent_rows(diary)
+    if not agent:
+        return {"score": 0, "details": "No agent data", "checkpoints": {}}
+    scores = {}
+    for cp in CHECKPOINTS:
+        all_players = _all_at_turn(diary, cp)
+        if not all_players:
+            continue
+        agent_row = _agent_at_turn(agent, cp)
+        if not agent_row:
+            continue
+        leader_score = max(r.get("score", 0) for r in all_players)
+        agent_score = agent_row.get("score", 0)
+        scores[cp] = _clamp(agent_score / max(leader_score, 1) * 100)
+    avg = sum(scores.values()) / len(scores) if scores else 0
+    last = agent[-1]
+    return {
+        "score": round(avg),
+        "details": f"Score {last.get('score', 0)} at T{last.get('turn', 0)}",
+        "checkpoints": {k: round(v) for k, v in scores.items()},
+    }
+
+
+def score_economic(diary: list[dict]) -> dict:
+    """Yield growth vs AI average + hoarding penalty."""
+    agent = _agent_rows(diary)
+    if not agent or len(agent) < 2:
+        return {"score": 0, "details": "Insufficient data", "checkpoints": {}}
+
+    # Yield growth percentile at checkpoints
+    scores = {}
+    for cp in CHECKPOINTS:
+        all_players = _all_at_turn(diary, cp)
+        if not all_players:
+            continue
+        agent_row = _agent_at_turn(agent, cp)
+        if not agent_row:
+            continue
+
+        # Combined yield = science + culture + gold_per_turn
+        def combined(r):
+            return r.get("science", 0) + r.get("culture", 0) + r.get("gold_per_turn", 0)
+
+        agent_yield = combined(agent_row)
+        all_yields = [combined(r) for r in all_players]
+        scores[cp] = _percentile(agent_yield, all_yields)
+
+    # Hoarding penalty: count turns where gold > 1000 (late-game economies
+    # naturally sit above 500; 1000+ with no spending plan is the real issue)
+    hoard_turns = sum(1 for r in agent if r.get("gold", 0) > 1000)
+    hoard_penalty = min(15, hoard_turns * 0.3)  # max 15 point penalty
+
+    avg = sum(scores.values()) / len(scores) if scores else 50
+    final = _clamp(avg - hoard_penalty)
+    last = agent[-1]
+    return {
+        "score": round(final),
+        "details": (
+            f"Sci {last.get('science', 0):.1f}/t, "
+            f"Cul {last.get('culture', 0):.1f}/t, "
+            f"Gold {last.get('gold_per_turn', 0):.1f}/t, "
+            f"hoarded {hoard_turns} turns"
+        ),
+        "checkpoints": {k: round(v) for k, v in scores.items()},
+    }
+
+
+def score_military(diary: list[dict], log: list[dict]) -> dict:
+    """Military strength percentile + attack efficiency."""
+    agent = _agent_rows(diary)
+    if not agent:
+        return {"score": 0, "details": "No data", "checkpoints": {}}
+
+    # Military strength percentile at checkpoints
+    scores = {}
+    for cp in CHECKPOINTS:
+        all_players = _all_at_turn(diary, cp)
+        if not all_players:
+            continue
+        agent_row = _agent_at_turn(agent, cp)
+        if not agent_row:
+            continue
+        mil = agent_row.get("military", 0)
+        all_mils = [r.get("military", 0) for r in all_players]
+        scores[cp] = _percentile(mil, all_mils)
+
+    # Attack efficiency from log
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+    attacks = [
+        e
+        for e in tool_calls
+        if e.get("tool") == "unit_action"
+        and (e.get("params") or {}).get("action") == "attack"
+    ]
+    successful = [e for e in attacks if e.get("success", True)]
+    efficiency = len(successful) / max(len(attacks), 1) * 100
+
+    avg = sum(scores.values()) / len(scores) if scores else 50
+    final = _clamp(avg * 0.7 + efficiency * 0.3)  # 70% strength, 30% efficiency
+    last = agent[-1]
+    return {
+        "score": round(final),
+        "details": (
+            f"Mil {last.get('military', 0)}, "
+            f"{len(attacks)} attacks ({len(successful)} successful)"
+        ),
+        "checkpoints": {k: round(v) for k, v in scores.items()},
+    }
+
+
+def score_scientific(diary: list[dict]) -> dict:
+    """Tech parity with AI leader + science yield percentile."""
+    agent = _agent_rows(diary)
+    if not agent:
+        return {"score": 0, "details": "No data", "checkpoints": {}}
+
+    scores = {}
+    for cp in CHECKPOINTS:
+        all_players = _all_at_turn(diary, cp)
+        if not all_players:
+            continue
+        agent_row = _agent_at_turn(agent, cp)
+        if not agent_row:
+            continue
+        agent_techs = agent_row.get("techs_completed", 0)
+        leader_techs = max(r.get("techs_completed", 0) for r in all_players)
+        tech_parity = _clamp(agent_techs / max(leader_techs, 1) * 100)
+        # Also factor in science yield percentile
+        agent_sci = agent_row.get("science", 0)
+        all_sci = [r.get("science", 0) for r in all_players]
+        sci_pct = _percentile(agent_sci, all_sci)
+        scores[cp] = tech_parity * 0.6 + sci_pct * 0.4
+
+    avg = sum(scores.values()) / len(scores) if scores else 50
+    last = agent[-1]
+    turns = last.get("turn", 1)
+    techs = last.get("techs_completed", 0)
+    return {
+        "score": round(avg),
+        "details": (
+            f"{techs} techs by T{turns} "
+            f"({turns / max(techs, 1):.1f} turns/tech), "
+            f"Sci {last.get('science', 0):.1f}/t"
+        ),
+        "checkpoints": {k: round(v) for k, v in scores.items()},
+    }
+
+
+def score_diplomatic(diary: list[dict], log: list[dict]) -> dict:
+    """Diplomatic engagement: actions, favor, alliances, suzerainties."""
+    agent = _agent_rows(diary)
+    if not agent:
+        return {"score": 0, "details": "No data", "checkpoints": {}}
+
+    # Count diplomatic actions from log
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+    diplo_tools = {
+        "send_diplomatic_action",
+        "form_alliance",
+        "propose_trade",
+        "send_envoy",
+        "respond_to_diplomacy",
+    }
+    diplo_actions = [e for e in tool_calls if e.get("tool") in diplo_tools]
+
+    # Final state diplomacy metrics
+    last = agent[-1]
+    favor_pt = last.get("favor_per_turn", 0)
+    suzerainties = last.get("suzerainties", 0) or 0
+    diplo_vp = last.get("diplo_vp", 0)
+    diplo_states = last.get("diplo_states") or {}
+    alliances = sum(
+        1 for ds in diplo_states.values() if isinstance(ds, dict) and ds.get("alliance")
+    )
+
+    # Score components (tuned so typical games score 30-70, not easy 100)
+    turns_played = last.get("turn", 1)
+    actions_per_turn = len(diplo_actions) / max(turns_played, 1)
+    action_score = min(40, actions_per_turn * 100)  # 0.4 actions/turn = 40
+    relationship_score = min(
+        60,
+        alliances * 12 + suzerainties * 8 + favor_pt * 3 + diplo_vp * 2,
+    )
+    final = _clamp(action_score + relationship_score)
+
+    return {
+        "score": round(final),
+        "details": (
+            f"{len(diplo_actions)} actions, "
+            f"{alliances} alliances, "
+            f"{suzerainties} suzerainties, "
+            f"{favor_pt:.0f} favor/t"
+        ),
+        "checkpoints": {},
+    }
+
+
+def score_spatial(diary: list[dict], log: list[dict]) -> dict:
+    """Exploration vs benchmarks + city founding pace + territory."""
+    agent = _agent_rows(diary)
+    if not agent:
+        return {"score": 0, "details": "No data", "checkpoints": {}}
+
+    # Exploration vs benchmarks
+    explore_scores = []
+    for turn, benchmark in _EXPLORE_BENCHMARKS.items():
+        row = _agent_at_turn(agent, turn)
+        if row:
+            actual = row.get("exploration_pct", 0)
+            explore_scores.append(_clamp(actual / benchmark * 100))
+
+    # City founding vs benchmarks
+    city_turns = _city_founding_turns(agent)
+    city_scores = []
+    for turn, target_count in _CITY_BENCHMARKS.items():
+        actual = sum(1 for t in city_turns if t <= turn)
+        city_scores.append(_clamp(actual / target_count * 100))
+
+    # Territory percentile at final turn
+    last = agent[-1]
+    all_final = _all_at_turn(diary, last.get("turn", 0))
+    territory_pct = _percentile(
+        last.get("territory", 0),
+        [r.get("territory", 0) for r in all_final],
+    )
+
+    # Map scan frequency from log
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+    map_scans = sum(1 for e in tool_calls if e.get("tool") == "get_map_area")
+    turns_played = last.get("turn", 1)
+    scan_freq = map_scans / max(turns_played, 1)
+
+    explore_avg = sum(explore_scores) / len(explore_scores) if explore_scores else 50
+    city_avg = sum(city_scores) / len(city_scores) if city_scores else 50
+    final = _clamp(
+        explore_avg * 0.3
+        + city_avg * 0.3
+        + territory_pct * 0.2
+        + min(100, scan_freq * 200) * 0.2
+    )
+
+    return {
+        "score": round(final),
+        "details": (
+            f"{last.get('exploration_pct', 0):.0f}% explored, "
+            f"{last.get('cities', 0)} cities, "
+            f"{last.get('territory', 0)} territory, "
+            f"{scan_freq:.1f} scans/turn"
+        ),
+        "checkpoints": {},
+    }
+
+
+def score_tool_fluency(log: list[dict]) -> dict:
+    """Error rate, tool diversity, repeated failure penalty."""
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+    if not tool_calls:
+        return {"score": 0, "details": "No tool calls", "checkpoints": {}}
+
+    errors = [e for e in tool_calls if not e.get("success", True)]
+    error_rate = len(errors) / len(tool_calls)
+    unique_tools = len(set(e.get("tool") for e in tool_calls))
+    diversity = unique_tools / TOTAL_TOOLS
+
+    # Repeated failure penalty (3+ consecutive errors to same tool)
+    stuck_count = 0
+    streak = 0
+    last_tool = None
+    for e in tool_calls:
+        if not e.get("success", True):
+            if e.get("tool") == last_tool:
+                streak += 1
+                if streak >= 3:
+                    stuck_count += 1
+            else:
+                streak = 1
+            last_tool = e.get("tool")
+        else:
+            streak = 0
+            last_tool = None
+
+    accuracy = (1 - error_rate) * 100
+    diversity_score = diversity * 100
+    stuck_penalty = min(20, stuck_count * 5)
+
+    final = _clamp(accuracy * 0.5 + diversity_score * 0.3 + (100 - stuck_penalty) * 0.2)
+
+    return {
+        "score": round(final),
+        "details": (
+            f"{error_rate:.1%} error rate, "
+            f"{unique_tools}/{TOTAL_TOOLS} tools used, "
+            f"{stuck_count} stuck loops"
+        ),
+        "checkpoints": {},
+    }
+
+
+def score_coherence(diary: list[dict], log: list[dict]) -> dict:
+    """Score rank stability + proactive monitoring + reflection follow-through."""
+    agent = _agent_rows(diary)
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+    if not agent or not tool_calls:
+        return {"score": 0, "details": "No data", "checkpoints": {}}
+
+    # 1. Score rank stability (low variance = good)
+    ranks = []
+    by_turn = _diary_by_turn(diary)
+    for turn in sorted(by_turn.keys()):
+        players = by_turn[turn]
+        scores_at = sorted([r.get("score", 0) for r in players], reverse=True)
+        agent_score = next((r.get("score", 0) for r in players if r.get("is_agent")), 0)
+        rank = (
+            scores_at.index(agent_score) + 1
+            if agent_score in scores_at
+            else len(scores_at)
+        )
+        n_players = len(scores_at)
+        if n_players > 1:
+            ranks.append(rank / n_players)  # 0=first, 1=last
+    rank_stability = 0
+    if len(ranks) >= 2:
+        import statistics
+
+        variance = statistics.variance(ranks)
+        rank_stability = _clamp((1 - min(variance * 10, 1)) * 100)
+
+    # 2. Proactive attention ratio
+    proactive_count = sum(
+        1 for e in tool_calls if _classify_tool(e.get("tool", "")) == "proactive"
+    )
+    proactive_ratio = proactive_count / max(len(tool_calls), 1)
+    proactive_score = _clamp(proactive_ratio * 500)  # 20% proactive = 100
+
+    # 3. Reflection follow-through (simplified from reflection-gap)
+    planning_mentions = 0
+    follow_throughs = 0
+    check_tools = {
+        "victory": ["get_victory_progress"],
+        "religion": ["get_religion_spread"],
+        "diplomacy": ["get_diplomacy"],
+        "trade": ["get_trade_routes"],
+        "great people": ["get_great_people"],
+    }
+    for row in agent:
+        planning = (row.get("reflections") or {}).get("planning", "")
+        turn = row.get("turn", 0)
+        for keyword, tools in check_tools.items():
+            if keyword in planning.lower():
+                planning_mentions += 1
+                nearby = [
+                    e
+                    for e in tool_calls
+                    if e.get("tool") in tools and abs(e.get("turn", 0) - turn) <= 5
+                ]
+                if nearby:
+                    follow_throughs += 1
+    follow_rate = follow_throughs / max(planning_mentions, 1) * 100
+
+    final = _clamp(rank_stability * 0.3 + proactive_score * 0.4 + follow_rate * 0.3)
+
+    return {
+        "score": round(final),
+        "details": (
+            f"Rank stability {rank_stability:.0f}, "
+            f"proactive {proactive_ratio:.1%}, "
+            f"follow-through {follow_rate:.0f}%"
+        ),
+        "checkpoints": {},
+    }
+
+
+def score_game(diary: list[dict], log: list[dict]) -> dict[str, dict]:
+    """Run all 8 dimension scorers."""
+    return {
+        "Overall Score": score_overall(diary),
+        "Economic Management": score_economic(diary),
+        "Military Competence": score_military(diary, log),
+        "Scientific Progress": score_scientific(diary),
+        "Diplomatic Skill": score_diplomatic(diary, log),
+        "Spatial Reasoning": score_spatial(diary, log),
+        "Tool-Use Fluency": score_tool_fluency(log),
+        "Long-Horizon Coherence": score_coherence(diary, log),
+    }
+
+
+def cmd_score(args):
+    """Score a game across all 8 evaluation dimensions."""
+    games = _list_games()
+    targets = _resolve_run_ids([args.game_id], games)
+    if not targets:
+        print(f"Game '{args.game_id}' not found")
+        return
+    g = targets[0]
+    rid = g["runId"]
+    model = g.get("agentModel") or "?"
+    o = g.get("outcome") or {}
+
+    diary = cloud_diary(rid)
+    log_entries = cloud_log(rid)
+
+    if not diary:
+        print(f"No diary data for {rid}")
+        return
+
+    results = score_game(diary, log_entries)
+
+    agent = _agent_rows(diary)
+    last = agent[-1] if agent else {}
+    turns = last.get("turn", 0)
+
+    print(f"\n{'=' * 70}")
+    print(f"  Game Score: {rid} | {model} | T{turns}")
+    print(
+        f"  {o.get('result', g.get('status', '?'))} "
+        f"{o.get('victoryType', '')} {o.get('winnerCiv', '')}"
+    )
+    print(f"{'=' * 70}")
+
+    # Dimension table
+    headers = ["Dimension", "Score", "Details"]
+    align = ["<", ">", "<"]
+    rows = []
+    total = 0
+    for dim, r in results.items():
+        rows.append([dim, r["score"], r["details"][:60]])
+        total += r["score"]
+    avg = total / len(results) if results else 0
+    rows.append(["─" * 22, "─" * 5, "─" * 40])
+    rows.append(["AGGREGATE", round(avg), f"(mean of {len(results)} dimensions)"])
+    _table(headers, rows, align)
+
+    # Checkpoint trajectory
+    has_checkpoints = any(r.get("checkpoints") for r in results.values())
+    if has_checkpoints:
+        print(f"\n  Checkpoint Trajectory:")
+        for cp in CHECKPOINTS:
+            parts = []
+            for dim, r in results.items():
+                cp_val = r.get("checkpoints", {}).get(cp)
+                if cp_val is not None:
+                    short = dim.split()[0][:4]
+                    parts.append(f"{short}:{cp_val}")
+            if parts:
+                print(f"    T{cp:>3}: {', '.join(parts)}")
+    print()
+
+
+def cmd_scorecard(args):
+    """Side-by-side dimension scores averaged across games per model."""
+    games = _list_games()
+
+    if args.models:
+        model_names = [m.strip() for m in args.models.split(",")]
+    else:
+        model_names = sorted(set(g.get("agentModel") or "unknown" for g in games))
+
+    model_scores: dict[str, list[dict]] = defaultdict(list)
+    for g in games:
+        m = g.get("agentModel") or "unknown"
+        if m not in model_names:
+            continue
+        if g.get("excludeReason"):
+            continue
+        rid = g.get("runId")
+        if not rid:
+            continue
+        diary = cloud_diary(rid)
+        log_entries = cloud_log(rid)
+        if not diary:
+            continue
+        results = score_game(diary, log_entries)
+        model_scores[m].append(results)
+
+    if not model_scores:
+        print("No scoreable games found")
+        return
+
+    dimensions = [
+        "Overall Score",
+        "Economic Management",
+        "Military Competence",
+        "Scientific Progress",
+        "Diplomatic Skill",
+        "Spatial Reasoning",
+        "Tool-Use Fluency",
+        "Long-Horizon Coherence",
+    ]
+
+    headers = ["Dimension"] + [m.rsplit("/", 1)[-1][:20] for m in model_names]
+    align = ["<"] + [">"] * len(model_names)
+    rows = []
+    for dim in dimensions:
+        row = [dim]
+        for m in model_names:
+            game_results = model_scores.get(m, [])
+            if game_results:
+                vals = [gr[dim]["score"] for gr in game_results]
+                avg = sum(vals) / len(vals)
+                row.append(f"{avg:.0f} ({len(vals)}g)")
+            else:
+                row.append("-")
+        rows.append(row)
+
+    # Aggregate row
+    rows.append(["─" * 22] + ["─" * 10] * len(model_names))
+    agg_row = ["AGGREGATE"]
+    for m in model_names:
+        game_results = model_scores.get(m, [])
+        if game_results:
+            all_scores = []
+            for gr in game_results:
+                all_scores.append(
+                    sum(gr[d]["score"] for d in dimensions) / len(dimensions)
+                )
+            avg = sum(all_scores) / len(all_scores)
+            agg_row.append(f"{avg:.0f} ({len(game_results)}g)")
+        else:
+            agg_row.append("-")
+    rows.append(agg_row)
+
+    print(f"\n  CivBench Scorecard")
+    print(f"  {'─' * 60}")
+    _table(headers, rows, align)
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1197,6 +1801,14 @@ def main():
     )
     p_refl.add_argument("game_id", help="Game or run ID")
 
+    # score
+    p_score = sub.add_parser("score", help="Score a game across 8 dimensions")
+    p_score.add_argument("game_id", help="Game or run ID")
+
+    # scorecard
+    p_card = sub.add_parser("scorecard", help="Side-by-side model scorecard")
+    p_card.add_argument("--models", help="Comma-separated model names")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1210,6 +1822,8 @@ def main():
         "turns": cmd_turns,
         "sensorium": cmd_sensorium,
         "reflection-gap": cmd_reflection_gap,
+        "score": cmd_score,
+        "scorecard": cmd_scorecard,
     }
     dispatch[args.command](args)
 
