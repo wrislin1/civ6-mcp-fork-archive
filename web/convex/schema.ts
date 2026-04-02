@@ -152,6 +152,7 @@ export default defineSchema({
     game_speed: v.optional(v.string()),
     eval_track: v.optional(v.string()),
     model_id: v.optional(v.string()),
+    mcp_git_describe: v.optional(v.string()),
   })
     .index("by_game_turn", ["gameId", "turn"])
     .index("by_game_turn_pid", ["gameId", "turn", "pid"]),
