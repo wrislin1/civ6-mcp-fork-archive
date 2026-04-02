@@ -302,29 +302,102 @@ if winnerId >= 0 then
         victoryType = "VICTORY_SCORE"
     end
 end
+-- Emit per-player VP data so Python can cross-check victory type
+-- (EndGameMenu APIs for tourism/staycationers are unreliable)
+pcall(function()
+    for i = 0, 62 do
+        local q = Players[i]
+        if q and q:IsMajor() and q:IsAlive() then
+            local tourism, stay, sciVP, sciNeeded, diploVP = 0, 0, 0, 50, 0
+            pcall(function() tourism = q:GetStats():GetTourism() end)
+            pcall(function() stay = q:GetCulture():GetStaycationers() end)
+            pcall(function() sciVP = q:GetStats():GetScienceVictoryPoints() end)
+            pcall(function() sciNeeded = q:GetStats():GetScienceVictoryPointsTotalNeeded() end)
+            pcall(function() diploVP = q:GetStats():GetDiplomaticVictoryPoints() end)
+            print("VP_DATA|" .. i .. "|" .. tourism .. "|" .. stay .. "|" .. sciVP .. "|" .. sciNeeded .. "|" .. diploVP)
+        end
+    end
+end)
 local isDefeat = winTeam >= 0 and Players[me]:GetTeam() ~= winTeam
 local result = isDefeat and "DEFEAT" or "VICTORY"
-print("GAME_OVER|" .. result .. "|" .. winnerName .. "|" .. victoryType .. "|" .. (meAlive and "alive" or "dead") .. "|" .. winnerLeader)
+print("GAME_OVER|" .. result .. "|" .. winnerName .. "|" .. victoryType .. "|" .. (meAlive and "alive" or "dead") .. "|" .. winnerLeader .. "|" .. winnerId)
 print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
+def _infer_victory_from_vp_data(vp_data: dict[int, dict], winner_id: int) -> str | None:
+    """Infer victory type from per-player VP data when Lua detection fails.
+
+    Returns a VICTORY_* string or None if Score is genuine.
+    """
+    winner = vp_data.get(winner_id)
+    if not winner:
+        return None
+
+    # Science: winner completed all space projects
+    if winner["sci_vp"] > 0 and winner["sci_vp"] >= winner["sci_needed"]:
+        return "VICTORY_TECHNOLOGY"
+
+    # Diplomatic: 20+ DVP
+    if winner["diplo_vp"] >= 20:
+        return "VICTORY_DIPLOMATIC"
+
+    # Culture: winner's tourism exceeds all rivals' staycationers
+    rivals = {pid: d for pid, d in vp_data.items() if pid != winner_id}
+    if winner["tourism"] > 0 and rivals:
+        max_rival_stay = max(r["stay"] for r in rivals.values())
+        if winner["tourism"] > max_rival_stay:
+            return "VICTORY_CULTURE"
+
+    return None
+
+
 def parse_gameover_response(lines: list[str]) -> GameOverStatus | None:
     """Parse game-over check response. Returns None if game is still active."""
+    game_over_line = None
+    vp_data: dict[int, dict] = {}
+
     for line in lines:
         if line == "GAME_ACTIVE":
             return None
         if line.startswith("GAME_OVER|"):
+            game_over_line = line
+        elif line.startswith("VP_DATA|"):
             parts = line.split("|")
-            return GameOverStatus(
-                is_game_over=True,
-                is_defeat=parts[1] == "DEFEAT",
-                winner_name=parts[2] if len(parts) > 2 else "Unknown",
-                winner_leader=parts[5] if len(parts) > 5 else "Unknown",
-                victory_type=parts[3] if len(parts) > 3 else "Unknown",
-                player_alive=parts[4] == "alive" if len(parts) > 4 else True,
-            )
-    return None
+            if len(parts) >= 7:
+                pid = int(parts[1])
+                vp_data[pid] = {
+                    "tourism": int(parts[2]),
+                    "stay": int(parts[3]),
+                    "sci_vp": int(parts[4]),
+                    "sci_needed": int(parts[5]),
+                    "diplo_vp": int(parts[6]),
+                }
+
+    if not game_over_line:
+        return None
+
+    parts = game_over_line.split("|")
+    victory_type = parts[3] if len(parts) > 3 else "Unknown"
+    winner_name = parts[2] if len(parts) > 2 else "Unknown"
+
+    # Cross-check: if Lua reported Score but VP data suggests otherwise
+    winner_id = (
+        int(parts[6]) if len(parts) > 6 and parts[6].lstrip("-").isdigit() else -1
+    )
+    if victory_type == "VICTORY_SCORE" and vp_data and winner_id >= 0:
+        corrected = _infer_victory_from_vp_data(vp_data, winner_id)
+        if corrected:
+            victory_type = corrected
+
+    return GameOverStatus(
+        is_game_over=True,
+        is_defeat=parts[1] == "DEFEAT",
+        winner_name=winner_name,
+        winner_leader=parts[5] if len(parts) > 5 else "Unknown",
+        victory_type=victory_type,
+        player_alive=parts[4] == "alive" if len(parts) > 4 else True,
+    )
 
 
 def parse_overview_response(lines: list[str]) -> GameOverview:
