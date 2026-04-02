@@ -363,8 +363,21 @@ def _click_continue_positional() -> None:
             log.debug("Positional click: could not detect title bar offset")
 
     # Try multiple positions — the button's relative position varies across
-    # resolutions and window modes (observed: 38%/75% on 4K, 35%/82% on 1080p).
-    positions = [(0.38, 0.75), (0.35, 0.82), (0.38, 0.80), (0.35, 0.78)]
+    # resolutions and window modes:
+    #   4K fullscreen:    ~38%, 75%
+    #   1080p fullscreen: ~35%, 82%
+    #   1600x900 window:  ~15%, 88% (button shifts left on smaller windows)
+    #   1280x973 window:  ~15-20%, 85-88%
+    positions = [
+        (0.15, 0.88),  # small windowed (left-aligned panel)
+        (0.20, 0.86),  # small windowed (slight offset)
+        (0.15, 0.85),  # small windowed (slightly higher)
+        (0.25, 0.84),  # medium windowed
+        (0.35, 0.82),  # 1080p fullscreen
+        (0.38, 0.80),  # between 1080p and 4K
+        (0.35, 0.78),  # 1080p variant
+        (0.38, 0.75),  # 4K fullscreen
+    ]
 
     # Log all positions upfront for debugging
     coords = [
