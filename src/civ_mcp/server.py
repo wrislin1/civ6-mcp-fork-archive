@@ -110,7 +110,7 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
         heartbeat.write("error")
         return
 
-    # 3. Load save
+    # 3. Load save (Lua on Windows/macOS, OCR menu nav on Linux)
     log.info("Auto-boot: loading save '%s'...", save_name)
     result = await load_game_save(conn, save_name)
     log.info("Auto-boot: load result: %s", result)

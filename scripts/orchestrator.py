@@ -376,7 +376,7 @@ class Machine:
                 f"{env_str} tmux new-session -d -s civbench "
                 f'"cd {self.repo} && uv run python -u evals/runner.py '
                 f"--model {model} --scenarios {scenario} --runs {runs} "
-                f'2>&1 | tee ~/civbench_run.log && touch ~/civbench_done"'
+                f'2>&1 | tee -a ~/civbench_run.log && touch ~/civbench_done"'
             )
             return rc == 0
 

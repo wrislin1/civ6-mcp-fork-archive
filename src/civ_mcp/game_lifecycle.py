@@ -452,59 +452,69 @@ async def load_game_save(conn: GameConnection, save_name: str) -> str:
        reliable — works for autosaves and quicksaves that Lua can't find).
     """
     import asyncio
+    import sys
 
-    # Tier 1: Lua query-match-load
-    try:
-        await conn.execute_write(
-            f"if not ExposedMembers then ExposedMembers = {{}} end; "
-            f"ExposedMembers.MCPLoadResult = nil; "
-            f"ExposedMembers.MCPLoadDone = false; "
-            f"local function OnResults(fileList, qid) "
-            f"  UI.CloseFileListQuery(qid); "
-            f"  LuaEvents.FileListQueryResults.Remove(OnResults); "
-            f"  for i, s in ipairs(fileList) do "
-            f'    if s.Name == "{save_name}" then '
-            f'      ExposedMembers.MCPLoadResult = "FOUND"; '
-            f"      ExposedMembers.MCPLoadDone = true; "
-            f"      Network.LeaveGame(); "
-            f"      Network.LoadGame(s, ServerType.SERVER_TYPE_NONE); "
-            f"      return "
-            f"    end "
-            f"  end; "
-            f'  ExposedMembers.MCPLoadResult = "NOT_FOUND"; '
-            f"  ExposedMembers.MCPLoadDone = true; "
-            f"end; "
-            f"LuaEvents.FileListQueryResults.Add(OnResults); "
-            f"local opts = SaveLocationOptions.NORMAL + SaveLocationOptions.AUTOSAVE "
-            f"  + SaveLocationOptions.QUICKSAVE + SaveLocationOptions.LOAD_METADATA; "
-            f"UI.QuerySaveGameList(SaveLocations.LOCAL_STORAGE, SaveTypes.SINGLE_PLAYER, opts); "
-            f'print("QUERY_SENT"); '
-            f'print("{lq.SENTINEL}")'
-        )
-
-        for _ in range(20):
-            await asyncio.sleep(0.25)
-            check = await conn.execute_write(
-                f"if ExposedMembers.MCPLoadDone then "
-                f'  print("RESULT|" .. tostring(ExposedMembers.MCPLoadResult)) '
-                f'else print("PENDING") end; '
+    # On the Aspyr Linux port, Network.LoadGame silently does nothing
+    # (same as Network.SaveGame). Skip Lua tier and go straight to OCR
+    # menu navigation which actually works.
+    if sys.platform != "linux":
+        # Tier 1: Lua query-match-load (Windows/macOS only)
+        try:
+            await conn.execute_write(
+                f"if not ExposedMembers then ExposedMembers = {{}} end; "
+                f"ExposedMembers.MCPLoadResult = nil; "
+                f"ExposedMembers.MCPLoadDone = false; "
+                f"local function OnResults(fileList, qid) "
+                f"  UI.CloseFileListQuery(qid); "
+                f"  LuaEvents.FileListQueryResults.Remove(OnResults); "
+                f"  for i, s in ipairs(fileList) do "
+                f'    if s.Name == "{save_name}" then '
+                f'      ExposedMembers.MCPLoadResult = "FOUND"; '
+                f"      ExposedMembers.MCPLoadDone = true; "
+                f"      Network.LeaveGame(); "
+                f"      Network.LoadGame(s, ServerType.SERVER_TYPE_NONE); "
+                f"      return "
+                f"    end "
+                f"  end; "
+                f'  ExposedMembers.MCPLoadResult = "NOT_FOUND"; '
+                f"  ExposedMembers.MCPLoadDone = true; "
+                f"end; "
+                f"LuaEvents.FileListQueryResults.Add(OnResults); "
+                f"local opts = SaveLocationOptions.NORMAL + SaveLocationOptions.AUTOSAVE "
+                f"  + SaveLocationOptions.QUICKSAVE + SaveLocationOptions.LOAD_METADATA; "
+                f"UI.QuerySaveGameList(SaveLocations.LOCAL_STORAGE, SaveTypes.SINGLE_PLAYER, opts); "
+                f'print("QUERY_SENT"); '
                 f'print("{lq.SENTINEL}")'
             )
-            for line in check:
-                if line == "RESULT|FOUND":
-                    return (
-                        f"Loading save: {save_name}. Game will reload — "
-                        f"wait ~10 seconds then call get_game_overview to verify."
-                    )
-                if line == "RESULT|NOT_FOUND":
-                    break  # fall through to Tier 2
-            else:
-                continue
-            break  # NOT_FOUND — try filesystem
 
-        log.info("Lua query did not find '%s', trying filesystem", save_name)
-    except Exception:
-        log.debug("Lua load_game_save failed", exc_info=True)
+            for _ in range(20):
+                await asyncio.sleep(0.25)
+                check = await conn.execute_write(
+                    f"if ExposedMembers.MCPLoadDone then "
+                    f'  print("RESULT|" .. tostring(ExposedMembers.MCPLoadResult)) '
+                    f'else print("PENDING") end; '
+                    f'print("{lq.SENTINEL}")'
+                )
+                for line in check:
+                    if line == "RESULT|FOUND":
+                        return (
+                            f"Loading save: {save_name}. Game will reload — "
+                            f"wait ~10 seconds then call get_game_overview to verify."
+                        )
+                    if line == "RESULT|NOT_FOUND":
+                        break  # fall through to Tier 2
+                else:
+                    continue
+                break  # NOT_FOUND — try filesystem
+
+            log.info("Lua query did not find '%s', trying filesystem", save_name)
+        except Exception:
+            log.debug("Lua load_game_save failed", exc_info=True)
+    else:
+        log.info(
+            "Linux: skipping Lua load (Aspyr port bug), using OCR nav for '%s'",
+            save_name,
+        )
 
     # Tier 2: Filesystem verify + OCR menu load
     import os
