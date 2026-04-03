@@ -55,6 +55,8 @@ def clean_machine(machine: Machine) -> None:
 
 def dispatch_job(job: JobState, machine: Machine, is_retry: bool = False) -> bool:
     """Launch a job on a machine. Returns True on success."""
+    job.transition("launching", "dispatched")
+
     if not machine.is_reachable():
         job.transition("failed", "machine unreachable")
         return False

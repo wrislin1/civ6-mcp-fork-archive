@@ -204,6 +204,8 @@ class Machine:
 
     def launch_runner(self, model: str, scenario: str, runs: int = 1) -> bool:
         if self.os == "windows":
+            # Write batch file, then launch it hidden via PowerShell wrapper
+            # to prevent CMD window from obscuring the game (blocks OCR).
             bat_content = (
                 f"@echo off\r\n"
                 f"cd /d {self.repo}\r\n"
@@ -212,15 +214,24 @@ class Machine:
                 f">> %USERPROFILE%\\civbench_run.log 2>&1\r\n"
                 f"if %ERRORLEVEL% EQU 0 echo DONE > %USERPROFILE%\\civbench_done\r\n"
             )
-            encoded = base64.b64encode(bat_content.encode("utf-8")).decode("ascii")
+            encoded_bat = base64.b64encode(bat_content.encode("utf-8")).decode("ascii")
             self.ssh(
                 f'powershell -Command "[System.Text.Encoding]::UTF8.GetString('
-                f"[System.Convert]::FromBase64String('{encoded}'))"
+                f"[System.Convert]::FromBase64String('{encoded_bat}'))"
                 f" | Set-Content -Path '{self.repo}\\run_bench.bat' -NoNewline\""
             )
+            # Launch via schtasks with PowerShell -WindowStyle Hidden wrapper
+            # so the CMD window doesn't appear on screen and block OCR
+            ps_wrapper = (
+                f"powershell -WindowStyle Hidden -Command "
+                f"\"Start-Process cmd -ArgumentList '/c {self.repo}\\run_bench.bat' "
+                f'-WindowStyle Hidden"'
+            )
             self.ssh(
-                'schtasks /Create /TN "CivBench" /TR '
-                f'"{self.repo}\\run_bench.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F'
+                f'schtasks /Create /TN "CivBench" /TR '
+                f'"powershell -WindowStyle Hidden -Command '
+                f"Start-Process cmd -ArgumentList '/c {self.repo}\\run_bench.bat' "
+                f'-WindowStyle Hidden" /SC ONCE /ST 00:00 /RL HIGHEST /F'
             )
             rc, out = self.ssh('schtasks /Run /TN "CivBench"')
             return "SUCCESS" in out or rc == 0
