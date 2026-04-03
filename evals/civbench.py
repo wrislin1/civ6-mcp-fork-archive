@@ -528,6 +528,7 @@ def civbench_standard(
             compaction=CompactionSummary(threshold=0.5),
         ),
         scorer=civbench_scorer(),
+        fail_on_error=False,  # Record errors in .eval rather than crash silently
         message_limit=message_limit,
         token_limit=token_limit,
         time_limit=time_limit,
@@ -586,6 +587,7 @@ def civbench_open(
             compaction=CompactionSummary(threshold=0.5),
         ),
         scorer=civbench_scorer(),
+        fail_on_error=False,
         message_limit=message_limit,
         token_limit=token_limit,
         time_limit=time_limit,
