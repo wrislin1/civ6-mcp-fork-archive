@@ -936,10 +936,31 @@ async def execute_end_turn(gs: GameState) -> str:
     # Phase 2: Slow polling (5 min) — AI can take 1-5 min on large maps,
     # especially during wars with many units. GameCore-only queries.
     if not advanced:
-        for delay in [2.0, 2.0, 3.0, 3.0, 5.0, 5.0, 5.0, 5.0,
-                      10.0, 10.0, 10.0, 10.0, 10.0, 10.0,
-                      15.0, 15.0, 15.0, 15.0, 15.0, 15.0,
-                      20.0, 20.0, 20.0]:
+        for delay in [
+            2.0,
+            2.0,
+            3.0,
+            3.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            20.0,
+            20.0,
+            20.0,
+        ]:
             await asyncio.sleep(delay)
             turn_after = await _get_turn_number(gs)
             if (
@@ -1149,6 +1170,24 @@ async def execute_end_turn(gs: GameState) -> str:
         gs._pending_end_turn = False
         gs._pending_end_turn_from = None
         if details:
+            # Before returning blocker, check if game actually ended —
+            # victory can trigger during AI processing while blockers coexist
+            gameover = await gs.check_game_over()
+            if gameover is not None:
+                gs._pending_end_turn = False
+                gs._pending_end_turn_from = None
+                vtype = (
+                    gameover.victory_type.replace("VICTORY_", "")
+                    .replace("_", " ")
+                    .title()
+                )
+                if gameover.is_defeat:
+                    return (
+                        f"GAME OVER — DEFEAT. {gameover.winner_leader} of {gameover.winner_name} won a {vtype} victory. "
+                        f"The game has ended. No further actions are possible."
+                    )
+                else:
+                    return f"GAME OVER — VICTORY! You won a {vtype} victory! The game has ended."
             return f"End turn blocked (turn {turn_after or turn_before}): {'; '.join(details)}"
         # No blockers, no diplomacy, no game over — true AI turn hang.
         # Return structured HANG: prefix so server.py can auto-recover.

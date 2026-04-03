@@ -185,11 +185,18 @@ def build_gameover_check() -> str:
     Each check is pcall-wrapped so failures don't block detection.
     """
     return """
-local egm = ContextPtr:LookUpControl("/InGame/EndGameMenu")
-if not egm or egm:IsHidden() then
-    print("GAME_ACTIVE")
-    print("{SENTINEL}")
-    return
+-- Primary check: GetWinningTeam is reliable regardless of UI state.
+-- EndGameMenu control lookup can fail when blockers coexist with victory screen.
+local winTeam = -1
+pcall(function() winTeam = Game.GetWinningTeam() end)
+if winTeam < 0 then
+    -- No winner — also check EndGameMenu as fallback
+    local egm = ContextPtr:LookUpControl("/InGame/EndGameMenu")
+    if not egm or egm:IsHidden() then
+        print("GAME_ACTIVE")
+        print("{SENTINEL}")
+        return
+    end
 end
 local me = Game.GetLocalPlayer()
 local meAlive = Players[me]:IsAlive()

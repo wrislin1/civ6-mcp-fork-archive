@@ -110,6 +110,44 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
         heartbeat.write("error")
         return
 
+    # 2b. Verify Lua states exist (port can open before game initialises).
+    # A hung splash screen ("Loading, Please Wait...") has port open but
+    # GameCore never appears. Retry for 60s, then kill and relaunch.
+    if conn.gamecore_index is None:
+        log.warning(
+            "Auto-boot: FireTuner connected but GameCore not found "
+            "— game may be hung at splash screen"
+        )
+        for retry in range(30):
+            await asyncio.sleep(2)
+            try:
+                await conn.reconnect()
+                if conn.gamecore_index is not None:
+                    log.info("Auto-boot: GameCore found after %ds", (retry + 1) * 2)
+                    break
+            except ConnectionError:
+                pass
+        else:
+            log.error("Auto-boot: GameCore never appeared — killing hung game")
+            heartbeat.write("error")
+            await asyncio.to_thread(game_launcher._kill_game_sync)
+            await asyncio.sleep(5)
+            result = await asyncio.to_thread(game_launcher._launch_game_sync)
+            log.info("Auto-boot: relaunched after hung splash: %s", result)
+            for attempt in range(90):
+                try:
+                    await conn.connect()
+                    if conn.gamecore_index is not None:
+                        log.info("Auto-boot: GameCore found on relaunch")
+                        break
+                except ConnectionError:
+                    pass
+                await asyncio.sleep(1)
+            if conn.gamecore_index is None:
+                log.error("Auto-boot: relaunch also failed — giving up")
+                heartbeat.write("error")
+                return
+
     # 3. Load save (Lua on Windows/macOS, OCR menu nav on Linux)
     log.info("Auto-boot: loading save '%s'...", save_name)
     result = await load_game_save(conn, save_name)
