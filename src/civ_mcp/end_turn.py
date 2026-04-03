@@ -933,10 +933,13 @@ async def execute_end_turn(gs: GameState) -> str:
             advanced = True
             break
 
-    # Phase 2: Slow polling (30s) — AI can take 5-30s on large maps.
-    # GameCore-only: _get_turn_number uses execute_read (GameCore context).
+    # Phase 2: Slow polling (5 min) — AI can take 1-5 min on large maps,
+    # especially during wars with many units. GameCore-only queries.
     if not advanced:
-        for delay in [2.0, 2.0, 3.0, 3.0, 5.0, 5.0, 5.0, 5.0]:
+        for delay in [2.0, 2.0, 3.0, 3.0, 5.0, 5.0, 5.0, 5.0,
+                      10.0, 10.0, 10.0, 10.0, 10.0, 10.0,
+                      15.0, 15.0, 15.0, 15.0, 15.0, 15.0,
+                      20.0, 20.0, 20.0]:
             await asyncio.sleep(delay)
             turn_after = await _get_turn_number(gs)
             if (
@@ -947,7 +950,7 @@ async def execute_end_turn(gs: GameState) -> str:
                 advanced = True
                 break
 
-    # Phase 3: After 34s, now safe to check InGame state.
+    # Phase 3: After ~5 min, now safe to check InGame state.
     # AI processing either completed (blocker is on our side) or is
     # truly hung.  Do ONE round of InGame checks, not a loop.
     if not advanced:
