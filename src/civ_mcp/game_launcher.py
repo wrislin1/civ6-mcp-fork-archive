@@ -341,11 +341,23 @@ def _click_continue_positional() -> None:
         log.warning("Positional click: no game window found")
         return
 
-    # On macOS, kCGWindowBounds includes title bar + shadow.
-    # Detect the content area offset the same way _ocr_game_window does.
+    # Detect the content area offset to avoid clicking on decorations.
+    # macOS: kCGWindowBounds includes title bar + shadow → measure via capture.
+    # Linux: xdotool geometry may include decorations → use mss capture region.
+    content_x = win.x
     content_y = win.y
+    content_w = win.w
     content_h = win.h
-    if sys.platform == "darwin":
+    if sys.platform == "linux":
+        try:
+            _, capture_geo = _capture_window_linux(win.window_id)
+            content_x = capture_geo["left"]
+            content_y = capture_geo["top"]
+            content_w = capture_geo["width"]
+            content_h = capture_geo["height"]
+        except Exception:
+            log.debug("Positional click: could not get capture geometry")
+    elif sys.platform == "darwin":
         try:
             import Quartz
 
@@ -381,7 +393,7 @@ def _click_continue_positional() -> None:
 
     # Log all positions upfront for debugging
     coords = [
-        (win.x + int(win.w * px), content_y + int(content_h * py), px, py)
+        (content_x + int(content_w * px), content_y + int(content_h * py), px, py)
         for px, py in positions
     ]
     log.info(
@@ -970,13 +982,21 @@ def _capture_window_win32(hwnd: int) -> "PIL.Image.Image":
     return img
 
 
-def _capture_window_linux(window_id: int) -> "PIL.Image.Image":
+def _capture_window_linux(
+    window_id: int,
+) -> tuple["PIL.Image.Image", dict[str, int]]:
     """Capture a window region on Linux using python-mss.
 
     mss captures screen regions (not window content by ID), so we use
     xdotool to get the window geometry and grab that screen region.
     The window should be in the foreground for accurate capture.
     Clamps the region to display bounds to avoid XGetImage failures.
+
+    Returns (pil_image, capture_region) where capture_region is the exact
+    screen region captured (left, top, width, height). The caller should
+    use this — not the WindowInfo geometry — as the OCR origin/extent,
+    because xdotool geometry may include window decorations that mss
+    doesn't capture (or vice versa depending on WM).
     """
     import mss
     from PIL import Image
@@ -1013,7 +1033,8 @@ def _capture_window_linux(window_id: int) -> "PIL.Image.Image":
 
         monitor = {"left": x, "top": y, "width": w, "height": h}
         screenshot = sct.grab(monitor)
-        return Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+        img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+        return img, monitor
 
 
 def _ocr_vision(
@@ -1297,8 +1318,17 @@ def _ocr_game_window(win: WindowInfo) -> list[tuple[str, int, int, int, int]]:
         pil_image = _capture_window_win32(win.window_id)
         return _ocr_winrt(pil_image, win.x, win.y, win.w, win.h)
     if sys.platform == "linux":
-        pil_image = _capture_window_linux(win.window_id)
-        return _ocr_tesseract(pil_image, win.x, win.y, win.w, win.h)
+        pil_image, capture_geo = _capture_window_linux(win.window_id)
+        # Use the actual capture region as OCR origin/extent — not the
+        # WindowInfo geometry, which may differ due to title bar / WM
+        # decoration offsets on some compositors.
+        return _ocr_tesseract(
+            pil_image,
+            capture_geo["left"],
+            capture_geo["top"],
+            capture_geo["width"],
+            capture_geo["height"],
+        )
     cg_image = _capture_window(win.window_id)
     # On macOS 15+, CGWindowListCreateImage returns nil and we fall back
     # to `screencapture -l` which captures the FULL window (title bar +
