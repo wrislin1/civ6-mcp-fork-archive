@@ -536,8 +536,8 @@ def _launch_game_sync() -> str:
     if launcher_err:
         return f"WARNING: {launcher_err}"
 
-    # Wait for actual game process
-    waited = _wait_for_game_process(timeout=15)
+    # Wait for actual game process (Linux/Proton can be slow to start)
+    waited = _wait_for_game_process(timeout=60)
     if waited is None and sys.platform == "win32":
         # steam://run may have silently failed — try direct EXE launch
         exe_path = _find_game_exe_win32()
