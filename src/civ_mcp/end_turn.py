@@ -955,6 +955,28 @@ async def execute_end_turn(gs: GameState) -> str:
             ):
                 advanced = True
                 break
+            # Check for game-over during longer polling intervals.
+            # An opponent victory (Science, Culture, etc.) fires during
+            # their turn — without this we'd wait the full 9-min timeout.
+            if delay >= 10.0:
+                gameover = await gs.check_game_over()
+                if gameover is not None:
+                    gs._pending_end_turn = False
+                    gs._pending_end_turn_from = None
+                    vtype = gameover.victory_type.replace(
+                        "VICTORY_", ""
+                    ).replace("_", " ").title()
+                    if gameover.is_defeat:
+                        return (
+                            f"GAME OVER — DEFEAT. {gameover.winner_leader} "
+                            f"of {gameover.winner_name} won a {vtype} victory. "
+                            f"The game has ended. No further actions are possible."
+                        )
+                    else:
+                        return (
+                            f"GAME OVER — VICTORY! You won a {vtype} victory! "
+                            f"The game has ended."
+                        )
 
     # Phase 3: After ~5 min, now safe to check InGame state.
     # AI processing either completed (blocker is on our side) or is

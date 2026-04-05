@@ -176,6 +176,46 @@ print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
+def build_gameover_check_gamecore() -> str:
+    """GameCore: minimal game-over check that survives the defeat screen.
+
+    Uses only Game.GetWinningTeam() and Players[] — no ContextPtr or UI
+    lookups. Victory type is reported as Unknown (TestVictory may not work
+    in GameCore). Better to detect the game-over with unknown type than
+    miss it entirely.
+    """
+    return f"""
+local winTeam = -1
+pcall(function() winTeam = Game.GetWinningTeam() end)
+if winTeam < 0 then
+    print("GAME_ACTIVE")
+    print("{SENTINEL}")
+    return
+end
+local me = Game.GetLocalPlayer()
+local winnerId = -1
+local winnerName = "Unknown"
+local winnerLeader = "Unknown"
+for i = 0, 62 do
+    local p = Players[i]
+    if p and p:IsMajor() and p:IsAlive() and p:GetTeam() == winTeam then
+        winnerId = i
+        local cfg = PlayerConfigurations[i]
+        pcall(function()
+            winnerName = Locale.Lookup(cfg:GetCivilizationShortDescription())
+            winnerLeader = Locale.Lookup(cfg:GetLeaderName())
+        end)
+        break
+    end
+end
+local isDefeat = (winnerId ~= me)
+local meAlive = true
+pcall(function() meAlive = Players[me]:IsAlive() end)
+print("GAME_OVER|" .. (isDefeat and "DEFEAT" or "VICTORY") .. "|" .. winnerName .. "|Unknown|" .. (meAlive and "alive" or "dead") .. "|" .. winnerLeader .. "|" .. tostring(winnerId))
+print("{SENTINEL}")
+"""
+
+
 def build_gameover_check() -> str:
     """InGame: check if the game is over (EndGameMenu visible).
 

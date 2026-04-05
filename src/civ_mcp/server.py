@@ -2125,7 +2125,33 @@ async def end_turn(
                 gs._wc_blocker_turn = current
                 gs._wc_blocker_count = 1
 
-    # Log structured game-over entry
+    # Log structured game-over entry.
+    # Also check on HANG — the game may have ended during AI processing but
+    # InGame Lua froze, so end_turn returned HANG instead of GAME OVER.
+    # The GameCore fallback in check_game_over can detect this.
+    if "HANG:" in result and "GAME OVER" not in result:
+        try:
+            hang_check = await gs.check_game_over()
+            if hang_check is not None:
+                vtype = (
+                    hang_check.victory_type.replace("VICTORY_", "")
+                    .replace("_", " ")
+                    .title()
+                )
+                if hang_check.is_defeat:
+                    result = (
+                        f"GAME OVER — DEFEAT. {hang_check.winner_leader} "
+                        f"of {hang_check.winner_name} won a {vtype} victory. "
+                        f"The game has ended. No further actions are possible."
+                    )
+                else:
+                    result = (
+                        f"GAME OVER — VICTORY! You won a {vtype} victory! "
+                        f"The game has ended."
+                    )
+        except Exception:
+            log.debug("HANG game-over recheck failed", exc_info=True)
+
     if "GAME OVER" in result:
         heartbeat.write("finished", turn=_diary_turn or 0)
         try:

@@ -104,12 +104,25 @@ class GameState:
         return lq.parse_rival_snapshot_response(lines)
 
     async def check_game_over(self) -> lq.GameOverStatus | None:
-        """Check if the game has ended (victory/defeat screen showing)."""
+        """Check if the game has ended (victory/defeat screen showing).
+
+        Tries InGame context first (full detection with UI checks).
+        Falls back to GameCore context (read-only, survives defeat screen)
+        when InGame fails — this catches victories that freeze the InGame UI.
+        """
         try:
             lines = await self.conn.execute_write(lq.build_gameover_check())
             return lq.parse_gameover_response(lines)
         except Exception:
-            log.debug("Game-over check failed", exc_info=True)
+            log.debug("Game-over check failed in InGame, trying GameCore")
+        # Fallback: GameCore-only check (survives defeat screen)
+        try:
+            lines = await self.conn.execute_read(
+                lq.build_gameover_check_gamecore()
+            )
+            return lq.parse_gameover_response(lines)
+        except Exception:
+            log.debug("Game-over check failed in GameCore too", exc_info=True)
             return None
 
     async def get_units(self) -> list[lq.UnitInfo]:
