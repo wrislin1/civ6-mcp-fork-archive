@@ -61,14 +61,29 @@ def dispatch_job(job: JobState, machine: Machine, is_retry: bool = False) -> boo
         job.transition("failed", "machine unreachable")
         return False
 
+    # Verify inspect CLI exists — if not, try uv sync
+    pkg_ok, pkg_info = machine.verify_packages()
+    if not pkg_ok:
+        log.warning("Packages missing on %s: %s — running uv sync", machine.name, pkg_info)
+        machine.sync_packages()
+        pkg_ok, pkg_info = machine.verify_packages()
+        if not pkg_ok:
+            job.transition("failed", f"packages broken: {pkg_info}")
+            return False
+    log.info("Package check OK on %s: %s", machine.name, pkg_info)
+
     # Only clean autosaves on first attempt — retries resume from autosave
     if not is_retry:
         machine.clean_autosaves()
     machine.clear_completion_sentinel()
+    machine.clear_heartbeat()
 
-    # Kill stale processes
+    # Kill stale processes — only kill the game on retries (fresh dispatches
+    # must not destroy a running game from a previous orchestrator instance)
     machine.kill_runner()
-    time.sleep(2)
+    if is_retry:
+        machine.kill_game()
+    time.sleep(5)
 
     # Launch
     ok = machine.launch_runner(job.model, job.scenario, 1)

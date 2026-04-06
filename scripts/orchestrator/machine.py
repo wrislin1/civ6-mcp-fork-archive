@@ -75,6 +75,43 @@ class Machine:
         rc, out = self.ssh(cmd)
         return out if rc == 0 else "UNKNOWN"
 
+    def verify_packages(self) -> tuple[bool, str]:
+        """Check that inspect CLI and key packages are installed."""
+        if self.os == "windows":
+            cmd = (
+                f"cd /d {self.repo} && "
+                f".venv\\Scripts\\inspect.exe --version 2>nul"
+            )
+        else:
+            cmd = (
+                f"cd {self.repo} && "
+                f".venv/bin/inspect --version 2>/dev/null"
+            )
+        rc, out = self.ssh(cmd, timeout=15)
+        if rc != 0:
+            return False, "inspect CLI not found"
+        return True, out.strip()
+
+    def sync_packages(self) -> bool:
+        """Run uv sync with all required extras for this machine."""
+        launcher = f"launcher-{self.os}"
+        extras = f"--extra evals --extra {launcher} --extra cloud"
+        if self.os == "windows":
+            cmd = f"cd /d {self.repo} && uv sync {extras} 2>&1"
+        else:
+            cmd = f"cd {self.repo} && uv sync {extras} 2>&1"
+        rc, out = self.ssh(cmd, timeout=120)
+        if rc != 0:
+            log.warning("uv sync failed on %s: %s", self.name, out[:200])
+        return rc == 0
+
+    def clear_heartbeat(self) -> None:
+        """Remove stale heartbeat file before launching a new runner."""
+        if self.os == "windows":
+            self.ssh("del %USERPROFILE%\\.civ6-mcp\\heartbeat.json 2>nul", timeout=5)
+        else:
+            self.ssh("rm -f ~/.civ6-mcp/heartbeat.json", timeout=5)
+
     def is_game_running(self) -> bool:
         if self.os == "windows":
             rc, out = self.ssh(
@@ -220,7 +257,7 @@ class Machine:
             )
             self.ssh(
                 'schtasks /Create /TN "CivBench" /TR '
-                f'"{self.repo}\\run_bench.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F'
+                f'"{self.repo}\\run_bench.bat" /SC ONCE /ST 00:00 /RL HIGHEST /IT /F'
             )
             rc, out = self.ssh('schtasks /Run /TN "CivBench"')
             return "SUCCESS" in out or rc == 0
