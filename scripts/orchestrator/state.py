@@ -8,7 +8,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .config import STATE_PATH
+from pathlib import Path
+
+from .config import CONFIG_DIR, STATE_PATH
 
 log = logging.getLogger("orchestrator")
 
@@ -89,27 +91,39 @@ class BatchState:
     started_at: float = 0
     jobs: dict[str, JobState] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
+    _path: Path = field(default=STATE_PATH, repr=False)
+
+    @staticmethod
+    def path_for_machines(machine_names: set[str] | list[str]) -> Path:
+        """Derive a state file path from machine names.
+
+        Each orchestrator instance gets its own state file so multiple
+        orchestrators can run concurrently without overwriting each other.
+        """
+        tag = "_".join(sorted(machine_names))
+        return CONFIG_DIR / f"state_{tag}.json"
 
     def save(self) -> None:
         """Atomic write to state file."""
-        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "started_at": self.started_at,
             "config_snapshot": self.config_snapshot,
             "jobs": {jid: j.to_dict() for jid, j in self.jobs.items()},
         }
         # Atomic: write to tmp then rename
-        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(STATE_PATH)
+        tmp.replace(self._path)
 
     @classmethod
-    def load(cls) -> BatchState:
+    def load(cls, path: Path | None = None) -> BatchState:
         """Load from state file, or return empty state."""
-        if not STATE_PATH.exists():
-            return cls()
+        p = path or STATE_PATH
+        if not p.exists():
+            return cls(_path=p)
         try:
-            raw = json.loads(STATE_PATH.read_text())
+            raw = json.loads(p.read_text())
             jobs = {
                 jid: JobState.from_dict(jdata)
                 for jid, jdata in raw.get("jobs", {}).items()
@@ -118,6 +132,7 @@ class BatchState:
                 started_at=raw.get("started_at", 0),
                 jobs=jobs,
                 config_snapshot=raw.get("config_snapshot", {}),
+                _path=p,
             )
         except Exception:
             log.warning("Failed to load state file, starting fresh", exc_info=True)

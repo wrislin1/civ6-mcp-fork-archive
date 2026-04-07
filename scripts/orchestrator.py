@@ -176,9 +176,34 @@ def cmd_preflight(
     return all_ok
 
 
+def _find_state_for_job(job_id: str) -> BatchState | None:
+    """Search all state files for a job ID."""
+    for p in CONFIG_DIR.glob("state_*.json"):
+        state = BatchState.load(p)
+        if job_id in state.jobs:
+            return state
+    # Also check legacy state.json
+    state = BatchState.load()
+    if job_id in state.jobs:
+        return state
+    return None
+
+
+def _load_all_states() -> BatchState:
+    """Load and merge all state files into one view."""
+    merged = BatchState()
+    for p in CONFIG_DIR.glob("state_*.json"):
+        state = BatchState.load(p)
+        merged.jobs.update(state.jobs)
+    # Also check legacy state.json
+    legacy = BatchState.load()
+    merged.jobs.update(legacy.jobs)
+    return merged
+
+
 def cmd_status(machines: dict[str, Machine]) -> None:
     """Show fleet status dashboard."""
-    state = BatchState.load()
+    state = _load_all_states()
 
     print("\n╔═══════════════════════════════════════════════════╗")
     print(f"║  CivBench Orchestrator     {time.strftime('%H:%M %b %d %Y')}  ║")
@@ -235,9 +260,20 @@ def cmd_kill_all(machines: dict[str, Machine]) -> None:
         m.kill_game()
         print("done")
 
+    # Mark all active jobs as failed across all state files
+    for p in CONFIG_DIR.glob("state_*.json"):
+        state = BatchState.load(p)
+        changed = False
+        for j in state.jobs.values():
+            if j.state in ("launching", "booting", "running", "completing", "needs_attention"):
+                j.transition("failed", "killed by operator")
+                changed = True
+        if changed:
+            state.save()
+    # Also check legacy
     state = BatchState.load()
     for j in state.jobs.values():
-        if j.state in ("launching", "booting", "running", "completing"):
+        if j.state in ("launching", "booting", "running", "completing", "needs_attention"):
             j.transition("failed", "killed by operator")
     state.save()
     print("  All active jobs marked as failed.")
@@ -382,11 +418,11 @@ def main() -> None:
         run_batch(config, state=state)
 
     elif args.command == "retry":
-        state = BatchState.load()
-        job = state.jobs.get(args.job_id)
-        if not job:
-            print(f"Unknown job: {args.job_id}")
+        state = _find_state_for_job(args.job_id)
+        if state is None:
+            print(f"Unknown job: {args.job_id} (not found in any state file)")
             sys.exit(1)
+        job = state.jobs[args.job_id]
         if job.state not in ("needs_attention", "failed"):
             print(f"Job {args.job_id} is in state '{job.state}' — can only retry needs_attention or failed")
             sys.exit(1)
@@ -403,11 +439,11 @@ def main() -> None:
         return
 
     elif args.command == "abandon":
-        state = BatchState.load()
-        job = state.jobs.get(args.job_id)
-        if not job:
-            print(f"Unknown job: {args.job_id}")
+        state = _find_state_for_job(args.job_id)
+        if state is None:
+            print(f"Unknown job: {args.job_id} (not found in any state file)")
             sys.exit(1)
+        job = state.jobs[args.job_id]
         if job.state != "needs_attention":
             print(f"Job {args.job_id} is in state '{job.state}' — can only abandon needs_attention")
             sys.exit(1)

@@ -266,11 +266,16 @@ def run_batch(config: Config, state: BatchState | None = None) -> None:
     """Main orchestrator loop — dispatch and monitor until all jobs complete."""
     machines = build_machines(config)
 
+    # Derive per-machine state file path
+    machine_names = {s.machine for s in config.jobs}
+    state_path = BatchState.path_for_machines(machine_names)
+
     # Build or resume job queue
     if state is None:
         state = BatchState(
             started_at=time.time(),
             jobs=build_job_queue(config),
+            _path=state_path,
             config_snapshot={
                 "scenario": config.scenario,
                 "job_count": sum(s.runs for s in config.jobs),
@@ -360,7 +365,7 @@ def run_batch(config: Config, state: BatchState | None = None) -> None:
         # Re-read state from disk to pick up external retry/abandon mutations
         # (must happen BEFORE poll_jobs so polling operates on merged state)
         if poll_count > 0 and poll_count % 5 == 0:
-            disk_state = BatchState.load()
+            disk_state = BatchState.load(state._path)
             for jid, disk_job in disk_state.jobs.items():
                 if jid in state.jobs and disk_job.state != state.jobs[jid].state:
                     log.info(
