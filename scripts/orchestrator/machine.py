@@ -108,7 +108,12 @@ class Machine:
     def clear_heartbeat(self) -> None:
         """Remove stale heartbeat file before launching a new runner."""
         if self.os == "windows":
-            self.ssh("del %USERPROFILE%\\.civ6-mcp\\heartbeat.json 2>nul", timeout=5)
+            # CMD `del` cannot handle dot-prefixed directories — use PowerShell
+            self.ssh(
+                'powershell -Command "Remove-Item $env:USERPROFILE\\.civ6-mcp\\heartbeat.json '
+                '-Force -ErrorAction SilentlyContinue"',
+                timeout=5,
+            )
         else:
             self.ssh("rm -f ~/.civ6-mcp/heartbeat.json", timeout=5)
 

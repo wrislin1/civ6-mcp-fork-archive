@@ -76,7 +76,6 @@ def dispatch_job(job: JobState, machine: Machine, is_retry: bool = False) -> boo
     if not is_retry:
         machine.clean_autosaves()
     machine.clear_completion_sentinel()
-    machine.clear_heartbeat()
 
     # Only kill processes on retries — fresh dispatches must not destroy
     # a running game from a previous orchestrator instance. Discovery
@@ -85,6 +84,10 @@ def dispatch_job(job: JobState, machine: Machine, is_retry: bool = False) -> boo
         machine.kill_runner()
         machine.kill_game()
         time.sleep(5)
+
+    # Clear heartbeat AFTER killing processes so the old runner can't
+    # re-write it between deletion and process termination
+    machine.clear_heartbeat()
 
     # Launch
     ok = machine.launch_runner(job.model, job.scenario, 1)
