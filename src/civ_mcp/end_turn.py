@@ -17,6 +17,129 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+async def _check_mid_turn_diplomacy(
+    gs: GameState,
+    lua: str,
+    turn_before: int | None,
+) -> tuple[str | None, bool]:
+    """Probe for AI diplomatic proposals during end_turn polling.
+
+    Returns (message, advanced) where message is a string to return to the
+    agent if diplomacy was found, or None if no diplomacy detected.
+    ``advanced`` is True if the turn advanced during war-declaration handling.
+
+    Handles war auto-dismiss, deal formatting, and session info.  Extracted
+    from the Phase 3 inline logic so both the early probe (Phase 2, ~45s)
+    and the full-timeout fallback (Phase 3) can share the same code.
+    """
+    try:
+        mid_sessions = await gs.get_diplomacy_sessions()
+        if not mid_sessions:
+            return None, False
+
+        # DiplomacyActionView text can take 1-2s to populate after session
+        # opens during AI processing. If text is empty, retry once.
+        if any(not s.dialogue_text for s in mid_sessions):
+            await asyncio.sleep(2.0)
+            mid_sessions = await gs.get_diplomacy_sessions()
+
+        # Auto-dismiss war declarations — these are informational only
+        # (you can't decline a war). Dismiss and report to the agent.
+        war_sessions = [s for s in mid_sessions if s.is_at_war]
+        if war_sessions:
+            war_names = []
+            for ws in war_sessions:
+                close_lua = lq.build_diplomacy_respond(
+                    ws.other_player_id, "EXIT"
+                )
+                await gs.conn.execute_write(close_lua)
+                war_names.append(
+                    f"{ws.other_civ_name} ({ws.other_leader_name})"
+                )
+                log.info(
+                    "Auto-dismissed war declaration from %s",
+                    ws.other_civ_name,
+                )
+            # Remove war sessions from the list
+            mid_sessions = [s for s in mid_sessions if not s.is_at_war]
+            # If only war sessions, resume polling (original ACTION_ENDTURN
+            # is still in flight — do NOT re-send or turns will skip)
+            if not mid_sessions:
+                war_msg = ", ".join(war_names)
+                advanced = False
+                for _ in range(10):
+                    await asyncio.sleep(2.0)
+                    turn_after = await _get_turn_number(gs)
+                    if (
+                        turn_after is not None
+                        and turn_before is not None
+                        and turn_after > turn_before
+                    ):
+                        advanced = True
+                        break
+                if advanced:
+                    return None, True  # turn advanced, caller handles snapshot
+                # Original ACTION_ENDTURN was consumed — next call must re-send
+                gs._pending_end_turn = False
+                gs._pending_end_turn_from = None
+                return (
+                    f"WAR DECLARED by {war_msg}! Session dismissed.\n"
+                    f"Turn did not advance — call end_turn again.\n"
+                    f"Reassess: check unit positions, city defenses, and military strength."
+                ), False
+
+        if not mid_sessions:
+            # All sessions were war declarations and turn advanced
+            return None, True if war_sessions else False
+
+        # Non-war sessions: format for agent
+        session_info = []
+        for s in mid_sessions:
+            phase = (
+                "deal"
+                if s.deal_summary
+                else ("goodbye" if s.buttons == "GOODBYE" else "active")
+            )
+            session_info.append(
+                f"{s.other_civ_name} ({s.other_leader_name}) [{phase}]"
+            )
+        has_deal = any(s.deal_summary for s in mid_sessions)
+        lines: list[str] = []
+        if war_sessions:
+            war_names_str = ", ".join(
+                f"{ws.other_civ_name}" for ws in war_sessions
+            )
+            lines.append(
+                f"WAR DECLARED by {war_names_str}! (auto-dismissed)"
+            )
+        lines.append(
+            f"Turn paused — AI diplomatic proposal from {', '.join(session_info)}.",
+        )
+        for s in mid_sessions:
+            if s.dialogue_text:
+                lines.append(
+                    f'{s.other_civ_name} says: "{s.dialogue_text}"'
+                )
+            if s.reason_text:
+                lines.append(f"Reason: {s.reason_text}")
+            if s.deal_summary:
+                lines.append(
+                    f"Deal from {s.other_civ_name}: {s.deal_summary}"
+                )
+        if has_deal:
+            lines.append(
+                "Use respond_to_trade(other_player_id=X, accept=True/False) to handle it, then end_turn again."
+            )
+        else:
+            lines.append(
+                "Use respond_to_diplomacy to handle it, then end_turn again."
+            )
+        return "\n".join(lines), False
+    except Exception:
+        log.debug("Mid-turn diplomacy check failed", exc_info=True)
+        return None, False
+
+
 async def _get_turn_number(gs: GameState) -> int | None:
     """Read the current game turn number."""
     try:
@@ -938,6 +1061,8 @@ async def execute_end_turn(gs: GameState) -> str:
     if not advanced:
         # 10 min total: AI can take several minutes on large maps with wars.
         # Quick polls early (catch fast turns), then escalate to 30s intervals.
+        diplomacy_probed = False
+        cumulative_wait = 4.0  # Phase 1 already waited ~4s
         for delay in [
             2.0, 2.0, 3.0, 3.0, 5.0, 5.0,           # 20s: catch fast turns
             10.0, 10.0, 10.0, 10.0, 10.0, 10.0,       # 80s: mid wait
@@ -947,6 +1072,7 @@ async def execute_end_turn(gs: GameState) -> str:
             30.0, 30.0, 30.0, 30.0,                    # 550s (~9 min)
         ]:
             await asyncio.sleep(delay)
+            cumulative_wait += delay
             turn_after = await _get_turn_number(gs)
             if (
                 turn_after is not None
@@ -977,121 +1103,38 @@ async def execute_end_turn(gs: GameState) -> str:
                             f"GAME OVER — VICTORY! You won a {vtype} victory! "
                             f"The game has ended."
                         )
+            # Early diplomacy probe — ONE InGame query after ~45s of silence.
+            # The CRITICAL constraint (Games 1-5) was about REPEATED InGame
+            # queries in a tight loop. A single probe after 45s is safe: if
+            # the AI paused for a trade deal, the game is idle. If the AI is
+            # still processing, the query may be slow/fail (caught below).
+            if not diplomacy_probed and cumulative_wait >= 45:
+                diplomacy_probed = True
+                diplo_msg, diplo_advanced = await _check_mid_turn_diplomacy(
+                    gs, lua, turn_before
+                )
+                if diplo_msg is not None:
+                    return diplo_msg
+                if diplo_advanced:
+                    advanced = True
+                    break
 
     # Phase 3: After ~5 min, now safe to check InGame state.
     # AI processing either completed (blocker is on our side) or is
     # truly hung.  Do ONE round of InGame checks, not a loop.
     if not advanced:
-        # Check for AI diplomatic proposals
-        try:
-            mid_sessions = await gs.get_diplomacy_sessions()
-            if mid_sessions:
-                # DiplomacyActionView text can take 1-2s to populate after session
-                # opens during AI processing. If text is empty, retry once.
-                if any(not s.dialogue_text for s in mid_sessions):
-                    await asyncio.sleep(2.0)
-                    mid_sessions = await gs.get_diplomacy_sessions()
+        # Check for AI diplomatic proposals (reuses the same helper
+        # as the early Phase 2 probe — Phase 3 is the fallback if the
+        # probe didn't fire or missed the diplomacy window).
+        diplo_msg, diplo_advanced = await _check_mid_turn_diplomacy(
+            gs, lua, turn_before
+        )
+        if diplo_msg is not None:
+            return diplo_msg
+        if diplo_advanced:
+            advanced = True
 
-                # Auto-dismiss war declarations — these are informational only
-                # (you can't decline a war). Dismiss and report to the agent.
-                war_sessions = [s for s in mid_sessions if s.is_at_war]
-                if war_sessions:
-                    war_names = []
-                    for ws in war_sessions:
-                        close_lua = lq.build_diplomacy_respond(
-                            ws.other_player_id, "EXIT"
-                        )
-                        await gs.conn.execute_write(close_lua)
-                        war_names.append(
-                            f"{ws.other_civ_name} ({ws.other_leader_name})"
-                        )
-                        log.info(
-                            "Auto-dismissed war declaration from %s",
-                            ws.other_civ_name,
-                        )
-                    # Remove war sessions from the list
-                    mid_sessions = [s for s in mid_sessions if not s.is_at_war]
-                    # If only war sessions, resume polling (original ACTION_ENDTURN
-                    # is still in flight — do NOT re-send or turns will skip)
-                    if not mid_sessions:
-                        war_msg = ", ".join(war_names)
-                        for _ in range(10):
-                            await asyncio.sleep(2.0)
-                            turn_after = await _get_turn_number(gs)
-                            if (
-                                turn_after is not None
-                                and turn_before is not None
-                                and turn_after > turn_before
-                            ):
-                                advanced = True
-                                break
-                        if advanced:
-                            # Fall through to snapshot/diff — war info added below
-                            pass
-                        else:
-                            # Original ACTION_ENDTURN was consumed — next call must re-send
-                            gs._pending_end_turn = False
-                            gs._pending_end_turn_from = None
-                            return (
-                                f"WAR DECLARED by {war_msg}! Session dismissed.\n"
-                                f"Turn did not advance — call end_turn again.\n"
-                                f"Reassess: check unit positions, city defenses, and military strength."
-                            )
-                    # If there were also non-war sessions, continue to handle them below
-
-                if not mid_sessions:
-                    # All sessions were war declarations and turn advanced
-                    if advanced and war_sessions:
-                        # Inject war event into post-turn processing below
-                        pass
-                    elif not advanced:
-                        pass  # fall through to other checks
-                else:
-                    session_info = []
-                    for s in mid_sessions:
-                        phase = (
-                            "deal"
-                            if s.deal_summary
-                            else ("goodbye" if s.buttons == "GOODBYE" else "active")
-                        )
-                        session_info.append(
-                            f"{s.other_civ_name} ({s.other_leader_name}) [{phase}]"
-                        )
-                    has_deal = any(s.deal_summary for s in mid_sessions)
-                    lines = []
-                    if war_sessions:
-                        war_names_str = ", ".join(
-                            f"{ws.other_civ_name}" for ws in war_sessions
-                        )
-                        lines.append(
-                            f"WAR DECLARED by {war_names_str}! (auto-dismissed)"
-                        )
-                    lines.append(
-                        f"Turn paused — AI diplomatic proposal from {', '.join(session_info)}.",
-                    )
-                    for s in mid_sessions:
-                        if s.dialogue_text:
-                            lines.append(
-                                f'{s.other_civ_name} says: "{s.dialogue_text}"'
-                            )
-                        if s.reason_text:
-                            lines.append(f"Reason: {s.reason_text}")
-                        if s.deal_summary:
-                            lines.append(
-                                f"Deal from {s.other_civ_name}: {s.deal_summary}"
-                            )
-                    if has_deal:
-                        lines.append(
-                            "Use respond_to_trade(other_player_id=X, accept=True/False) to handle it, then end_turn again."
-                        )
-                    else:
-                        lines.append(
-                            "Use respond_to_diplomacy to handle it, then end_turn again."
-                        )
-                    return "\n".join(lines)
-        except Exception:
-            log.debug("Mid-turn diplomacy check failed", exc_info=True)
-
+    if not advanced:
         # Check for incoming trade deals
         try:
             mid_deals = await gs.get_pending_deals()
