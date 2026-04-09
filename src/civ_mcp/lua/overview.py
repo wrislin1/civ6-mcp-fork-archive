@@ -189,19 +189,27 @@ local winTeam = -1
 pcall(function() winTeam = Game.GetWinningTeam() end)
 local me = Game.GetLocalPlayer()
 if winTeam < 0 then
-    -- No formal winner yet — but check if the player has been eliminated.
-    -- Player elimination triggers a defeat screen without setting a winning
-    -- team (no civ has achieved a victory condition, the player just lost
-    -- all cities). Detect via IsAlive() which returns false when eliminated.
+    -- No formal winner yet — check for player elimination or turn limit.
     local meAlive = true
     pcall(function() meAlive = Players[me]:IsAlive() end)
-    if meAlive then
-        print("GAME_ACTIVE")
+    -- Check turn limit: Quick speed = 330, Standard = 500.
+    -- Game.GetMaxTurns() returns 0 if no limit is set.
+    local curTurn = Game.GetCurrentGameTurn()
+    local maxTurns = 0
+    pcall(function() maxTurns = Game.GetMaxTurns() end)
+    if not meAlive then
+        -- Player eliminated — all cities lost
+        print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
         print("{SENTINEL}")
         return
     end
-    -- Player eliminated — report as defeat with no specific winner
-    print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
+    if maxTurns > 0 and curTurn >= maxTurns then
+        -- Turn limit reached — "Out of Time"
+        print("GAME_OVER|DEFEAT|Unknown|TurnLimit|alive|Unknown|-1")
+        print("{SENTINEL}")
+        return
+    end
+    print("GAME_ACTIVE")
     print("{SENTINEL}")
     return
 end
@@ -243,21 +251,25 @@ local winTeam = -1
 pcall(function() winTeam = Game.GetWinningTeam() end)
 local me = Game.GetLocalPlayer()
 if winTeam < 0 then
-    -- No formal winner — check EndGameMenu as fallback
+    -- No formal winner — check EndGameMenu, elimination, and turn limit
     local egm = ContextPtr:LookUpControl("/InGame/EndGameMenu")
     if not egm or egm:IsHidden() then
-        -- EndGameMenu not visible — also check player elimination.
-        -- Player can be defeated (all cities lost) without any civ
-        -- achieving a formal victory condition.
         local meAlive = true
         pcall(function() meAlive = Players[me]:IsAlive() end)
-        if meAlive then
-            print("GAME_ACTIVE")
+        local curTurn = Game.GetCurrentGameTurn()
+        local maxTurns = 0
+        pcall(function() maxTurns = Game.GetMaxTurns() end)
+        if not meAlive then
+            print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
             print("{SENTINEL}")
             return
         end
-        -- Player eliminated — report as defeat
-        print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
+        if maxTurns > 0 and curTurn >= maxTurns then
+            print("GAME_OVER|DEFEAT|Unknown|TurnLimit|alive|Unknown|-1")
+            print("{SENTINEL}")
+            return
+        end
+        print("GAME_ACTIVE")
         print("{SENTINEL}")
         return
     end
