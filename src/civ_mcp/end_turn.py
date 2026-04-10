@@ -425,6 +425,7 @@ async def execute_end_turn(gs: GameState) -> str:
     if gameover is not None:
         gs._pending_end_turn = False
         gs._pending_end_turn_from = None
+        gs._last_game_over = gameover
         vtype = gameover.victory_type.replace("VICTORY_", "").replace("_", " ").title()
         if gameover.is_defeat:
             return (
@@ -1089,6 +1090,7 @@ async def execute_end_turn(gs: GameState) -> str:
                 if gameover is not None:
                     gs._pending_end_turn = False
                     gs._pending_end_turn_from = None
+                    gs._last_game_over = gameover
                     vtype = gameover.victory_type.replace(
                         "VICTORY_", ""
                     ).replace("_", " ").title()
@@ -1183,6 +1185,7 @@ async def execute_end_turn(gs: GameState) -> str:
         if gameover is not None:
             gs._pending_end_turn = False
             gs._pending_end_turn_from = None
+            gs._last_game_over = gameover
             vtype = (
                 gameover.victory_type.replace("VICTORY_", "").replace("_", " ").title()
             )
@@ -1226,6 +1229,7 @@ async def execute_end_turn(gs: GameState) -> str:
             if gameover is not None:
                 gs._pending_end_turn = False
                 gs._pending_end_turn_from = None
+                gs._last_game_over = gameover
                 vtype = (
                     gameover.victory_type.replace("VICTORY_", "")
                     .replace("_", " ")
@@ -1282,6 +1286,7 @@ async def execute_end_turn(gs: GameState) -> str:
     # Must check here so "GAME OVER" appears in result for log_game_over.
     gameover = await gs.check_game_over()
     if gameover is not None:
+        gs._last_game_over = gameover
         vtype = gameover.victory_type.replace("VICTORY_", "").replace("_", " ").title()
         if gameover.is_defeat:
             return (

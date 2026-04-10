@@ -48,6 +48,7 @@ class GameState:
         self._high_water_turn: int = 0  # highest turn seen (for regression detection)
         self._local_player_id: int = 0  # human player (always 0 in single-player)
         self._hang_retry_active: bool = False  # guard against recursive hang recovery
+        self._last_game_over: lq.GameOverStatus | None = None  # captured by execute_end_turn for server.py
 
     async def get_game_identity(self) -> tuple[str, int]:
         """Return (civ_type_lower, random_seed) for the current game.
@@ -73,6 +74,7 @@ class GameState:
                     log.info("Game changed: %s → %s", self._game_identity, new_id)
                     self._last_snapshot = None
                     self._diary_written_turn = None
+                    self._last_game_over = None
                 self._game_identity = new_id
                 return self._game_identity
         return ("unknown", 0)

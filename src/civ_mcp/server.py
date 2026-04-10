@@ -2143,6 +2143,7 @@ async def end_turn(
         try:
             hang_check = await gs.check_game_over()
             if hang_check is not None:
+                gs._last_game_over = hang_check
                 vtype = (
                     hang_check.victory_type.replace("VICTORY_", "")
                     .replace("_", " ")
@@ -2165,8 +2166,11 @@ async def end_turn(
     if "GAME OVER" in result:
         heartbeat.write("finished", turn=_diary_turn or 0)
         try:
-            gameover = await gs.check_game_over()
+            gameover = gs._last_game_over
+            if gameover is None:
+                gameover = await gs.check_game_over()
             if gameover is not None:
+                gs._last_game_over = None
                 vtype = (
                     gameover.victory_type.replace("VICTORY_", "")
                     .replace("_", " ")
@@ -2178,6 +2182,11 @@ async def end_turn(
                     winner_leader=gameover.winner_leader,
                     victory_type=vtype,
                     player_alive=gameover.player_alive,
+                )
+            else:
+                log.error(
+                    "GAME OVER detected but no GameOverStatus available "
+                    "— outcome will be missing from log"
                 )
         except Exception:
             log.warning("Failed to log game-over entry", exc_info=True)

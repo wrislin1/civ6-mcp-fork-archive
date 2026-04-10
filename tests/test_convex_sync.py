@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from convex_sync import (
     _chunk_map_frames,
     _extract_outcome,
+    _extract_outcome_from_tool_calls,
     classify_file,
     extract_game_id,
 )
@@ -150,6 +151,90 @@ class TestExtractOutcome:
 
     def test_empty_lines(self):
         assert _extract_outcome([]) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_outcome_from_tool_calls
+# ---------------------------------------------------------------------------
+
+
+class TestExtractOutcomeFromToolCalls:
+    def test_defeat_from_end_turn_result(self):
+        lines = [
+            json.dumps({"type": "tool_call", "tool": "get_units", "turn": 320, "result": "..."}),
+            json.dumps({
+                "type": "tool_call",
+                "tool": "end_turn",
+                "turn": 326,
+                "result": (
+                    "GAME OVER — DEFEAT. Hojo Tokimune of Japan won a Culture victory. "
+                    "The game has ended. No further actions are possible."
+                ),
+            }),
+        ]
+        result = _extract_outcome_from_tool_calls(lines, civ="Babylon", leader="Hammurabi")
+        assert result is not None
+        assert result["result"] == "defeat"
+        assert result["winnerLeader"] == "Hojo Tokimune"
+        assert result["winnerCiv"] == "Japan"
+        assert result["victoryType"] == "Culture"
+        assert result["turn"] == 326
+        assert result["playerAlive"] is True
+
+    def test_victory_from_end_turn_result(self):
+        lines = [
+            json.dumps({
+                "type": "tool_call",
+                "tool": "end_turn",
+                "turn": 238,
+                "result": (
+                    "Turn 237 -> 238\n"
+                    "GAME OVER — VICTORY! You won a Technology victory! The game has ended."
+                ),
+            }),
+        ]
+        result = _extract_outcome_from_tool_calls(lines, civ="Babylon", leader="Hammurabi")
+        assert result is not None
+        assert result["result"] == "victory"
+        assert result["winnerCiv"] == "Babylon"
+        assert result["winnerLeader"] == "Hammurabi"
+        assert result["victoryType"] == "Technology"
+        assert result["turn"] == 238
+        assert result["playerAlive"] is True
+
+    def test_no_game_over_in_tool_calls(self):
+        lines = [
+            json.dumps({"type": "tool_call", "tool": "end_turn", "turn": 10, "result": "Turn 10 -> 11"}),
+            json.dumps({"type": "tool_call", "tool": "get_units", "turn": 11, "result": "..."}),
+        ]
+        assert _extract_outcome_from_tool_calls(lines) is None
+
+    def test_ignores_non_tool_call_entries(self):
+        lines = [
+            json.dumps({"type": "game_over", "turn": 100, "outcome": {}}),
+            json.dumps({"type": "diary", "turn": 100}),
+        ]
+        assert _extract_outcome_from_tool_calls(lines) is None
+
+    def test_empty_lines(self):
+        assert _extract_outcome_from_tool_calls([]) is None
+
+    def test_elimination_detected(self):
+        lines = [
+            json.dumps({
+                "type": "tool_call",
+                "tool": "end_turn",
+                "turn": 150,
+                "result": (
+                    "GAME OVER — DEFEAT. Alexander of Macedon won a Domination victory. "
+                    "You have been eliminated. The game has ended."
+                ),
+            }),
+        ]
+        result = _extract_outcome_from_tool_calls(lines, civ="Egypt", leader="Cleopatra")
+        assert result is not None
+        assert result["result"] == "defeat"
+        assert result["playerAlive"] is False
 
 
 # ---------------------------------------------------------------------------
