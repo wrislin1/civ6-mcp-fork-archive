@@ -26,7 +26,7 @@ export const listGames = query({
       leader: g.leader,
       lastUpdated: g.lastUpdated,
       outcome: g.outcome ?? null,
-      agentModel: g.agentModelOverride ?? g.agentModel ?? null,
+      agentModel: g.agentModel ?? null,
       score: g.agentScore ?? null,
       scenarioId: g.scenarioId ?? null,
       difficulty: g.difficulty ?? null,
@@ -36,6 +36,7 @@ export const listGames = query({
       excludeReason: g.excludeReason ?? null,
       gitDescribe: g.gitDescribe ?? null,
       runId: g.runId ?? null,
+      admissible: g.admissible ?? null,
     }));
   },
 });
@@ -59,7 +60,8 @@ export const getLiveGame = query({
   },
 });
 
-/** Get ELO data — completed games with winner + player info */
+/** Get ELO data — admissible games only. Admissibility is precomputed on the
+ *  game doc by completeGame/recomputeAdmissible. */
 export const getEloData = query({
   args: {},
   handler: async (ctx) => {
@@ -69,28 +71,21 @@ export const getEloData = query({
       .collect();
 
     return games
-      .filter((g) => g.outcome?.winnerCiv && g.eloPlayers && g.eloPlayers.length >= 2)
-      // Exclude development games and explicitly excluded games from Elo
-      .filter((g) => g.evalTrack && g.evalTrack !== "development")
-      .filter((g) => !g.excludeReason)
-      .filter((g) => g.turnCount >= 50) // minimum game length for meaningful Elo
-      .map((g) => {
-        const override = g.agentModelOverride ?? null;
-        return {
-          gameId: g.gameId,
-          scenarioId: g.scenarioId ?? null,
-          difficulty: g.difficulty ?? null,
-          evalTrack: g.evalTrack ?? null,
-          winnerCiv: g.outcome!.winnerCiv,
-          players: g.eloPlayers!.map((p) => ({
-            pid: p.pid,
-            civ: p.civ,
-            leader: p.leader,
-            is_agent: p.is_agent,
-            agent_model: p.is_agent && override ? override : p.agent_model,
-          })),
-        };
-      });
+      .filter((g) => g.admissible === true)
+      .map((g) => ({
+        gameId: g.gameId,
+        scenarioId: g.scenarioId ?? null,
+        difficulty: g.difficulty ?? null,
+        evalTrack: g.evalTrack ?? null,
+        winnerCiv: g.outcome!.winnerCiv,
+        players: g.eloPlayers!.map((p) => ({
+          pid: p.pid,
+          civ: p.civ,
+          leader: p.leader,
+          is_agent: p.is_agent,
+          agent_model: p.agent_model,
+        })),
+      }));
   },
 });
 

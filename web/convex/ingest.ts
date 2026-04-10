@@ -143,10 +143,6 @@ export const ingestPlayerRows = mutation({
     const agentRow = rows.find(
       (r: { is_agent: boolean }) => r.is_agent,
     );
-    const latestRows = rows.filter(
-      (r: { turn: number }) => r.turn === maxTurn,
-    );
-
     // Extract eval metadata from agent row (set by MCP server from env vars)
     const evalMeta = agentRow ? extractEvalMeta(agentRow) : {};
 
@@ -167,21 +163,10 @@ export const ingestPlayerRows = mutation({
         const existing = game.evalFiles ?? [];
         patch.evalFiles = [...new Set([...existing, ...evalFiles])];
       }
-      // Denormalized fields
+      // Denormalized fields (eloPlayers set at completion by completeGame, not here)
       if (agentRow) {
         if (agentRow.agent_model) patch.agentModel = agentRow.agent_model;
         if (typeof agentRow.score === "number") patch.agentScore = agentRow.score;
-      }
-      if (latestRows.length >= 2) {
-        patch.eloPlayers = latestRows.map(
-          (r: { pid: number; civ: string; leader: string; is_agent: boolean; agent_model?: string }) => ({
-            pid: r.pid,
-            civ: r.civ,
-            leader: r.leader,
-            is_agent: r.is_agent,
-            agent_model: r.agent_model ?? null,
-          }),
-        );
       }
       // Update sparkline series
       patch.turnSeries = mergeTurnSeries(game.turnSeries, rows);
@@ -203,19 +188,6 @@ export const ingestPlayerRows = mutation({
         ...(evalFiles?.length ? { evalFiles } : {}),
         ...(agentRow?.agent_model ? { agentModel: agentRow.agent_model } : {}),
         ...(typeof agentRow?.score === "number" ? { agentScore: agentRow.score } : {}),
-        ...(latestRows.length >= 2
-          ? {
-              eloPlayers: latestRows.map(
-                (r: { pid: number; civ: string; leader: string; is_agent: boolean; agent_model?: string }) => ({
-                  pid: r.pid,
-                  civ: r.civ,
-                  leader: r.leader,
-                  is_agent: r.is_agent,
-                  agent_model: r.agent_model ?? null,
-                }),
-              ),
-            }
-          : {}),
         turnSeries: mergeTurnSeries(undefined, rows),
       });
     }
@@ -294,6 +266,257 @@ export const patchGameOutcome = mutation({
   },
 });
 
+// ── Admissibility helpers ────────────────────────────────────────────────────
+
+// ── Admissibility helpers ────────────────────────────────────────────────────
+
+type EloPlayer = {
+  pid: number;
+  civ: string;
+  leader: string;
+  is_agent: boolean;
+  agent_model: string | null;
+};
+
+type PlayerRow = {
+  pid: number;
+  civ: string;
+  leader: string;
+  is_agent: boolean;
+  agent_model?: string | null;
+};
+
+type GameIdentity = {
+  civ: string;
+  leader: string;
+  agentModel?: string | null;
+  agentModelOverride?: string | null;
+};
+
+function resolveAgentModel(
+  game: GameIdentity,
+  argModel?: string,
+): string | null {
+  return argModel ?? game.agentModel ?? game.agentModelOverride ?? null;
+}
+
+/** Build eloPlayers from playerRows, inferring agent identity and injecting
+ *  eliminated agents when necessary. */
+function buildEloPlayers(
+  playerRows: PlayerRow[],
+  existing: EloPlayer[] | undefined,
+  game: GameIdentity,
+  model: string | null,
+): EloPlayer[] | undefined {
+  let players: EloPlayer[] | undefined = existing;
+
+  if (playerRows.length >= 2) {
+    const hasAgent = playerRows.some((r) => r.is_agent);
+    players = playerRows.map((r) => {
+      const isAgent = hasAgent ? r.is_agent : r.civ === game.civ;
+      return {
+        pid: r.pid,
+        civ: r.civ,
+        leader: r.leader,
+        is_agent: isAgent,
+        agent_model: isAgent && model ? model : (r.agent_model ?? null),
+      };
+    });
+  }
+
+  // If the agent was eliminated, their civ won't be in lastTurn rows.
+  // Inject them from the game doc so ELO can identify the model.
+  if (model && players && !players.some((p) => p.is_agent && p.agent_model)) {
+    const agentExists = players.some((p) => p.civ === game.civ);
+    if (!agentExists) {
+      players = [
+        ...players,
+        { pid: 0, civ: game.civ, leader: game.leader, is_agent: true, agent_model: model },
+      ];
+    } else {
+      players = players.map((p) =>
+        p.civ === game.civ
+          ? { ...p, is_agent: true, agent_model: model }
+          : p,
+      );
+    }
+  }
+
+  return players;
+}
+
+type AdmissibilityInputs = {
+  outcome?: { result: string; winnerCiv: string } | null;
+  excludeReason?: string;
+  turnCount: number;
+  evalTrack?: string;
+  eloPlayers?: EloPlayer[];
+};
+
+function isAdmissible(game: AdmissibilityInputs): boolean {
+  return (
+    !!game.outcome &&
+    !!game.eloPlayers &&
+    game.eloPlayers.length >= 2 &&
+    game.eloPlayers.some((p) => p.is_agent && !!p.agent_model) &&
+    !game.excludeReason &&
+    game.turnCount >= 50 &&
+    !!game.evalTrack &&
+    game.evalTrack !== "development"
+  );
+}
+
+// ── Completion mutations ─────────────────────────────────────────────────────
+
+/** Atomically complete a game: set outcome, snapshot eloPlayers, compute admissible.
+ *  Idempotent — no-op if game is already completed (unless force=true). */
+export const completeGame = mutation({
+  args: {
+    gameId: v.string(),
+    outcome: v.optional(
+      v.object({
+        result: v.union(v.literal("victory"), v.literal("defeat")),
+        winnerCiv: v.string(),
+        winnerLeader: v.string(),
+        victoryType: v.string(),
+        turn: v.number(),
+        playerAlive: v.boolean(),
+      }),
+    ),
+    agentModel: v.optional(v.string()),
+    force: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { gameId, outcome, agentModel, force }) => {
+    const game = await ctx.db
+      .query("games")
+      .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (!game) throw new Error(`Game not found: ${gameId}`);
+    if (game.status === "completed" && !force) {
+      return { gameId, admissible: game.admissible ?? false, skipped: true };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const patch: Record<string, any> = { status: "completed" as const };
+
+    if (outcome) patch.outcome = outcome;
+    const finalOutcome = outcome ?? game.outcome;
+
+    const model = resolveAgentModel(game, agentModel);
+    if (model && !game.agentModel) patch.agentModel = model;
+
+    const playerRows = await ctx.db
+      .query("playerRows")
+      .withIndex("by_game_turn", (q) =>
+        q.eq("gameId", gameId).eq("turn", game.lastTurn),
+      )
+      .collect();
+
+    const eloPlayers = buildEloPlayers(playerRows, game.eloPlayers, game, model);
+    if (eloPlayers) patch.eloPlayers = eloPlayers;
+
+    if (game.agentModelOverride) {
+      if (!patch.agentModel) patch.agentModel = game.agentModelOverride;
+      patch.agentModelOverride = undefined;
+    }
+
+    patch.admissible = isAdmissible({
+      outcome: finalOutcome,
+      excludeReason: game.excludeReason,
+      turnCount: game.turnCount,
+      evalTrack: game.evalTrack,
+      eloPlayers,
+    });
+
+    await ctx.db.patch(game._id, patch);
+    return { gameId, admissible: patch.admissible, skipped: false };
+  },
+});
+
+/** Recompute admissible + eloPlayers for completed games. Migration/admin tool. */
+export const recomputeAdmissible = mutation({
+  args: { gameId: v.optional(v.string()) },
+  handler: async (ctx, { gameId }) => {
+    let games;
+    if (gameId) {
+      const game = await ctx.db
+        .query("games")
+        .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+        .unique();
+      games = game ? [game] : [];
+    } else {
+      games = await ctx.db.query("games").collect();
+      games = games.filter((g) => g.status === "completed");
+    }
+
+    let patched = 0;
+    for (const game of games) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const patch: Record<string, any> = {};
+
+      const model = resolveAgentModel(game);
+
+      const playerRows = await ctx.db
+        .query("playerRows")
+        .withIndex("by_game_turn", (q) =>
+          q.eq("gameId", game.gameId).eq("turn", game.lastTurn),
+        )
+        .collect();
+
+      const eloPlayers = buildEloPlayers(playerRows, game.eloPlayers, game, model);
+      if (eloPlayers) patch.eloPlayers = eloPlayers;
+
+      // Fold agentModelOverride
+      if (game.agentModelOverride) {
+        if (!game.agentModel) patch.agentModel = game.agentModelOverride;
+        patch.agentModelOverride = undefined;
+      }
+
+      // Denormalize agentModel/agentScore from agent row
+      const agentRow = playerRows.find((r) => r.is_agent);
+      if (agentRow) {
+        if (agentRow.agent_model && !game.agentModel) patch.agentModel = agentRow.agent_model;
+        if (typeof agentRow.score === "number") patch.agentScore = agentRow.score;
+      }
+
+      patch.admissible = isAdmissible({
+        outcome: game.outcome,
+        excludeReason: game.excludeReason,
+        turnCount: game.turnCount,
+        evalTrack: game.evalTrack,
+        eloPlayers,
+      });
+
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(game._id, patch);
+        patched++;
+      }
+    }
+    return { patched, total: games.length };
+  },
+});
+
+export const patchExcludeReason = mutation({
+  args: { gameId: v.string(), excludeReason: v.optional(v.string()) },
+  handler: async (ctx, { gameId, excludeReason }) => {
+    const game = await ctx.db
+      .query("games")
+      .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (!game) throw new Error(`Game not found: ${gameId}`);
+    // Re-evaluate admissibility with the new excludeReason
+    const admissible = isAdmissible({
+      outcome: game.outcome,
+      excludeReason,
+      turnCount: game.turnCount,
+      evalTrack: game.evalTrack,
+      eloPlayers: game.eloPlayers,
+    });
+    await ctx.db.patch(game._id, { excludeReason, admissible });
+    return { gameId, excludeReason: excludeReason ?? null, admissible };
+  },
+});
+
 export const setModelOverride = mutation({
   args: { gameId: v.string(), model: v.optional(v.string()) },
   handler: async (ctx, { gameId, model }) => {
@@ -314,7 +537,14 @@ export const patchEvalTrack = mutation({
     let patched = 0;
     for (const game of games) {
       if (game.evalTrack === fromTrack) {
-        await ctx.db.patch(game._id, { evalTrack: toTrack });
+        const admissible = isAdmissible({
+          outcome: game.outcome,
+          excludeReason: game.excludeReason,
+          turnCount: game.turnCount,
+          evalTrack: toTrack,
+          eloPlayers: game.eloPlayers,
+        });
+        await ctx.db.patch(game._id, { evalTrack: toTrack, admissible });
         patched++;
       }
     }

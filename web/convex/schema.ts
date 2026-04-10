@@ -51,6 +51,7 @@ export default defineSchema({
     gameSpeed: v.optional(v.string()),
     evalTrack: v.optional(v.string()),
     // Data quality / provenance
+    admissible: v.optional(v.boolean()), // single source of truth for ELO eligibility
     excludeReason: v.optional(v.string()), // "micro_run", "wrong_save", "failed_launch", null = valid
     gitDescribe: v.optional(v.string()), // e.g. "v1.0.4-3-g2630adb"
     outcome: v.optional(
