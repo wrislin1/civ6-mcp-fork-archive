@@ -33,6 +33,21 @@ from orchestrator.state import BatchState
 
 log = logging.getLogger("orchestrator")
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Feature markers checked by preflight and launch. Each tuple is
+# (module_path, attribute). A launch is aborted if any marker is missing on
+# a target machine, even if the git commit hash matches — this catches the
+# class of bug where a machine is "on latest main" but main itself doesn't
+# contain the fix you expected to deploy (uncommitted local work).
+#
+# One marker per feature area is enough: if `_check_save_scumming` imports
+# from civ_mcp.end_turn, the adjacent scumming/budget infrastructure in the
+# same PR must also be present. Keep the list small so preflight stays fast.
+FEATURE_MARKERS: list[tuple[str, str]] = [
+    ("civ_mcp.end_turn", "_check_save_scumming"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Legacy commands (preflight, status, kill-all, sync, summary, logs)
@@ -62,6 +77,13 @@ def cmd_preflight(
         version = m.get_version()
         print(f"    {'✓' if version != 'UNKNOWN' else '✗'} Version: {version}")
         if version == "UNKNOWN":
+            all_ok = False
+
+        # Feature markers — verify expected code is actually importable on
+        # the remote Python, not just that the git hash matches.
+        feat_ok, feat_msg = m.verify_features(FEATURE_MARKERS)
+        print(f"    {'✓' if feat_ok else '✗'} Features: {feat_msg}")
+        if not feat_ok:
             all_ok = False
 
         # Package sync
@@ -315,6 +337,16 @@ def main() -> None:
         "--runs", type=int, default=3, help="Runs per (model, scenario)"
     )
     p_launch.add_argument("--machines", help="Comma-separated machine names")
+    p_launch.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Permit launch with uncommitted local changes (default: refuse)",
+    )
+    p_launch.add_argument(
+        "--skip-feature-check",
+        action="store_true",
+        help="Skip the preflight feature-marker verification (NOT RECOMMENDED)",
+    )
 
     # resume
     sub.add_parser("resume", help="Resume from saved state")
@@ -393,6 +425,53 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+        # Discipline gate 1: local working tree must be clean.
+        import subprocess
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        dirty = result.stdout.strip()
+        if dirty and not args.allow_dirty:
+            log.error(
+                "LOCAL WORKING TREE IS DIRTY — uncommitted changes will NOT "
+                "be deployed to the fleet:"
+            )
+            for line in dirty.splitlines():
+                log.error("  %s", line)
+            log.error(
+                "Untracked files (??) are also blocked — `git add` or move "
+                "them out of the repo."
+            )
+            log.error(
+                "Commit and push first, or pass --allow-dirty to proceed anyway."
+            )
+            sys.exit(1)
+        if dirty and args.allow_dirty:
+            log.warning("Launching with dirty working tree (--allow-dirty)")
+
+        # Discipline gate 2: feature markers must be present on every target.
+        # This catches the "deployed to right commit but missing uncommitted
+        # fix" failure mode.
+        if not args.skip_feature_check:
+            log.info("Verifying feature markers on all target machines...")
+            target_names = {job.machine for job in config.jobs}
+            targets = {n: machines[n] for n in target_names if n in machines}
+            for name, m in targets.items():
+                ok, msg = m.verify_features(FEATURE_MARKERS)
+                if ok:
+                    log.info("  %s: %s", name, msg)
+                else:
+                    log.error("  %s: FAILED — %s", name, msg)
+                    log.error(
+                        "Aborting launch. Pull latest on %s or pass "
+                        "--skip-feature-check (NOT RECOMMENDED).",
+                        name,
+                    )
+                    sys.exit(1)
+
         run_batch(config)
 
     elif args.command == "resume":

@@ -92,6 +92,49 @@ class Machine:
             return False, "inspect CLI not found"
         return True, out.strip()
 
+    def verify_features(self, markers: list[tuple[str, str]]) -> tuple[bool, str]:
+        """Verify each (module, attribute) exists on the remote Python.
+
+        Prevents deploying to a machine whose code doesn't contain an
+        expected feature — catches the class of bug where a commit is
+        "latest main" but main is missing an uncommitted local fix.
+
+        Markers are passed as (module_path, attribute_name) tuples, e.g.
+        ("civ_mcp.end_turn", "_check_save_scumming").
+        """
+        # Reject markers with shell metacharacters — the Python one-liner is
+        # embedded in a double-quoted string inside an SSH command, and any
+        # &|<>^"\' in the identifier would break the shell parsing silently.
+        unsafe = set('^&|<>"\'`$;()')
+        for module, attr in markers:
+            combined = module + attr
+            if any(c in combined for c in unsafe):
+                return False, f"unsafe marker chars in {module}.{attr}"
+
+        # Build a one-liner that imports each module and checks for the attr
+        imports = []
+        checks = []
+        for i, (module, attr) in enumerate(markers):
+            imports.append(f"import {module} as m{i}")
+            checks.append(f"assert hasattr(m{i}, {attr!r}), {module + '.' + attr!r}")
+        py = "; ".join(imports + checks)
+        if self.os == "windows":
+            cmd = (
+                f"cd /d {self.repo} && "
+                f'.venv\\Scripts\\python.exe -c "{py}" 2>&1'
+            )
+        else:
+            cmd = (
+                f"cd {self.repo} && "
+                f'.venv/bin/python -c "{py}" 2>&1'
+            )
+        rc, out = self.ssh(cmd, timeout=20)
+        if rc != 0:
+            stripped = out.strip()
+            msg = stripped.splitlines()[-1] if stripped else "import failed"
+            return False, msg
+        return True, f"{len(markers)} markers present"
+
     def sync_packages(self) -> bool:
         """Run uv sync with all required extras for this machine."""
         launcher = f"launcher-{self.os}"
