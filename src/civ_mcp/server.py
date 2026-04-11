@@ -2321,7 +2321,12 @@ async def get_district_advisor(ctx: Context, city_id: int, district_type: str) -
         result = await gs.get_district_advisor(city_id, district_type)
         if isinstance(result, str):
             return f"Error: {result}"  # propagate specific error reason
-        return nr.narrate_district_advisor(result, district_type)
+        narrated = nr.narrate_district_advisor(result, district_type)
+        if gs._advisor_budget_warning:
+            warn = gs._advisor_budget_warning
+            gs._advisor_budget_warning = None
+            return f"!! {warn}\n\n{narrated}"
+        return narrated
 
     return await _logged(
         ctx,
@@ -2349,7 +2354,14 @@ async def get_wonder_advisor(ctx: Context, city_id: int, wonder_name: str) -> st
 
     async def _run():
         placements = await gs.get_wonder_advisor(city_id, wonder_name)
-        return nr.narrate_wonder_advisor(placements, wonder_name)
+        if isinstance(placements, str):
+            return f"Error: {placements}"  # propagate budget/error string
+        narrated = nr.narrate_wonder_advisor(placements, wonder_name)
+        if gs._advisor_budget_warning:
+            warn = gs._advisor_budget_warning
+            gs._advisor_budget_warning = None
+            return f"!! {warn}\n\n{narrated}"
+        return narrated
 
     return await _logged(
         ctx,
