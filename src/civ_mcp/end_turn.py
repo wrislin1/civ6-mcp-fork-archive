@@ -418,8 +418,105 @@ async def _check_empire_warnings(
     return events, game_score
 
 
+def _check_save_scumming(gs: GameState) -> tuple[list[lq.TurnEvent], bool]:
+    """Detect save-scumming patterns from recent save load history.
+
+    Benchmark runs should play forward — save loads are only legitimate for
+    recovering from engine hangs or loading the initial scenario. Repeated
+    loads across different turns indicate the agent is rolling back to retry
+    unfavorable outcomes.
+
+    Thresholds (tuned against Opus T326 legitimate deadlock debugging and
+    Gemini's 19-load scumming run):
+      - MINOR warn: 3+ loads across 3+ distinct turns (span >= 10)
+      - STRONG warn: 5+ loads across 5+ distinct turns (span >= 20)
+      - HARD STOP: 8+ loads across 8+ distinct turns (span >= 30)
+
+    The "distinct turns" signal is critical — 25 loads all at T326 is a
+    deadlock, 25 loads spread across T100-T300 is scumming.
+
+    Returns (events, hard_stop).
+    """
+    events: list[lq.TurnEvent] = []
+    history = gs._save_load_history
+
+    if len(history) < 3:
+        return events, False
+
+    # Only consider in-play loads (high water turn > 0)
+    play_loads = [(ts, turn, name) for ts, turn, name in history if turn > 0]
+    if len(play_loads) < 3:
+        return events, False
+
+    n_loads = len(play_loads)
+    distinct_turns = sorted({turn for _, turn, _ in play_loads})
+    n_distinct = len(distinct_turns)
+    span = distinct_turns[-1] - distinct_turns[0] if distinct_turns else 0
+
+    # Hard stop — abort the run
+    if n_loads >= 8 and n_distinct >= 8 and span >= 30:
+        events.append(
+            lq.TurnEvent(
+                priority=1,
+                category="abuse",
+                message=(
+                    f"!!! RUN ABORTED — save scumming threshold exceeded. "
+                    f"{n_loads} save loads across {n_distinct} distinct turns "
+                    f"(span {span}). Benchmark runs must play forward from a "
+                    f"single starting save. Repeated save loads to retry "
+                    f"turns are considered cheating and invalidate the run. "
+                    f"No further actions will be processed."
+                ),
+            )
+        )
+        return events, True
+
+    # Strong warning
+    if n_loads >= 5 and n_distinct >= 5 and span >= 20:
+        events.append(
+            lq.TurnEvent(
+                priority=1,
+                category="abuse",
+                message=(
+                    f"SAVE SCUMMING CRITICAL: {n_loads} save loads across "
+                    f"{n_distinct} distinct turns (span {span}). STOP loading "
+                    f"saves — this is a benchmark run. Play forward from the "
+                    f"current state. The next load will abort the run."
+                ),
+            )
+        )
+        return events, False
+
+    # Soft warning
+    if n_loads >= 3 and n_distinct >= 3 and span >= 10:
+        events.append(
+            lq.TurnEvent(
+                priority=2,
+                category="abuse",
+                message=(
+                    f"SAVE SCUMMING WARNING: {n_loads} save loads across "
+                    f"{n_distinct} different turns. Benchmark runs must play "
+                    f"forward — save loads are only for recovering from engine "
+                    f"hangs. Continuing to reload will result in disqualification."
+                ),
+            )
+        )
+
+    return events, False
+
+
 async def execute_end_turn(gs: GameState) -> str:
     """End the turn with snapshot-diff event detection."""
+    # 0a. Run aborted due to save scumming — refuse to advance
+    if gs._run_aborted:
+        return (
+            "RUN ABORTED — save scumming threshold exceeded. "
+            "This benchmark run has been invalidated because the agent "
+            "loaded saves across too many distinct turns. Benchmark runs "
+            "must play forward from a single starting save. No further "
+            "actions will be processed."
+        )
+
     # 0. Game-over check — don't try to advance a finished game
     gameover = await gs.check_game_over()
     if gameover is not None:
@@ -1279,6 +1376,12 @@ async def execute_end_turn(gs: GameState) -> str:
                 f'Use load_game_save("{latest_autosave}") to recover.'
             )
     if turn_after is not None:
+        # Reset per-turn counters only on TRUE advance. Blocker turns have
+        # turn_after == turn_before, so the counter must NOT reset — this
+        # prevents the agent from advisor-spamming between blocker retries
+        # within a single game turn.
+        if turn_after > gs._high_water_turn:
+            gs._advisor_calls_this_turn = 0
         gs._high_water_turn = max(gs._high_water_turn, turn_after)
 
     # Post-advance game-over check — victory can trigger during the turn
@@ -1453,6 +1556,15 @@ async def execute_end_turn(gs: GameState) -> str:
         events.extend(warning_events)
     except Exception:
         log.debug("Empire warnings failed", exc_info=True)
+
+    # Save scumming detection
+    try:
+        scum_events, hard_stop = _check_save_scumming(gs)
+        events.extend(scum_events)
+        if hard_stop:
+            gs._run_aborted = True
+    except Exception:
+        log.debug("Save scumming check failed", exc_info=True)
 
     events.sort(key=lambda e: e.priority)
     return gs._build_turn_report(

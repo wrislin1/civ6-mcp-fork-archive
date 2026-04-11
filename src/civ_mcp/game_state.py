@@ -49,6 +49,17 @@ class GameState:
         self._local_player_id: int = 0  # human player (always 0 in single-player)
         self._hang_retry_active: bool = False  # guard against recursive hang recovery
         self._last_game_over: lq.GameOverStatus | None = None  # captured by execute_end_turn for server.py
+        # (ts, turn, save_name) for each successful save load — used to detect
+        # save scumming in _check_save_scumming(). Bounded to last 50 entries.
+        self._save_load_history: list[tuple[float, int, str]] = []
+        self._run_aborted: bool = False  # set when save scumming threshold is exceeded
+        # Per-turn advisor call budget — prevents compulsive advisor loops
+        # (e.g. Gemini Pro's 1,567 get_wonder_advisor calls in a single turn).
+        # Reset in execute_end_turn on successful turn advance.
+        self._advisor_calls_this_turn: int = 0
+        # One-shot warning from the most recent advisor call, consumed and
+        # cleared by the server wrapper.
+        self._advisor_budget_warning: str | None = None
 
     async def get_game_identity(self) -> tuple[str, int]:
         """Return (civ_type_lower, random_seed) for the current game.
@@ -75,6 +86,10 @@ class GameState:
                     self._last_snapshot = None
                     self._diary_written_turn = None
                     self._last_game_over = None
+                    self._save_load_history = []
+                    self._run_aborted = False
+                    self._advisor_calls_this_turn = 0
+                    self._advisor_budget_warning = None
                 self._game_identity = new_id
                 return self._game_identity
         return ("unknown", 0)
@@ -1154,13 +1169,52 @@ class GameState:
         return _action_result(lines)
 
     # ------------------------------------------------------------------
-    # District advisor
+    # District / wonder advisor (with per-turn budget)
     # ------------------------------------------------------------------
+
+    # Pathological loops (Gemini Pro's 1,567 calls in one turn) motivate a
+    # per-turn budget. Opus averages 2-4 advisor calls/turn so 20 leaves
+    # 5x headroom for legitimate exploration.
+    ADVISOR_BUDGET_SOFT = 10
+    ADVISOR_BUDGET_HARD = 20
+
+    def _advisor_budget_check(self) -> tuple[str | None, str | None]:
+        """Check advisor budget. Returns (hard_error, soft_warning).
+
+        - hard_error: short-circuit string if budget exceeded (caller returns it)
+        - soft_warning: string to prepend to the result, or None
+        """
+        # Increment unconditionally — the hard-cap path stays sticky until
+        # the end-of-turn reset, and reporting the true call count is more
+        # honest for logs and telemetry.
+        self._advisor_calls_this_turn += 1
+        n = self._advisor_calls_this_turn
+        if n > self.ADVISOR_BUDGET_HARD:
+            return (
+                f"ERR:ADVISOR_BUDGET_EXCEEDED|You have made {n} advisor calls "
+                f"this turn (limit {self.ADVISOR_BUDGET_HARD}). The advisors "
+                f"rank placements; they are not for brute-forcing every "
+                f"wonder or district. Make a decision with the information "
+                f"you already have, skip this step, or end your turn. Budget "
+                f"resets next turn.",
+                None,
+            )
+        if n >= self.ADVISOR_BUDGET_SOFT:
+            return (
+                None,
+                f"ADVISOR BUDGET WARNING: {n}/{self.ADVISOR_BUDGET_HARD} "
+                f"advisor calls this turn. Consolidate your queries — the "
+                f"advisors rank placements, not iterate through options.",
+            )
+        return None, None
 
     async def get_district_advisor(
         self, city_id: int, district_type: str
     ) -> list[lq.DistrictPlacement] | str:
         """Returns placements list, or an error string if placement is impossible."""
+        hard_err, soft_warn = self._advisor_budget_check()
+        if hard_err:
+            return hard_err
         lua = lq.build_district_advisor_query(city_id, district_type)
         lines = await self.conn.execute_write(lua)
         # Check for error bail lines (parser only looks for DPLOT| and silently
@@ -1168,13 +1222,23 @@ class GameState:
         for line in lines:
             if line.startswith("ERR:"):
                 return line  # propagate the specific error to the agent
+        # Warning only attaches to the success path — error-string returns
+        # bypass the server wrapper's narration branch and would otherwise
+        # leave a stale warning for the next advisor call.
+        self._advisor_budget_warning = soft_warn
         return lq.parse_district_advisor_response(lines)
 
     async def get_wonder_advisor(
         self, city_id: int, wonder_name: str
-    ) -> list[lq.WonderPlacement]:
+    ) -> list[lq.WonderPlacement] | str:
+        """Returns placements list, or an error string if budget exceeded."""
+        hard_err, soft_warn = self._advisor_budget_check()
+        if hard_err:
+            return hard_err
         lua = lq.build_wonder_advisor_query(city_id, wonder_name)
         lines = await self.conn.execute_write(lua)
+        # Warning only attaches to the success path (same reason as above)
+        self._advisor_budget_warning = soft_warn
         return lq.parse_wonder_advisor_response(lines)
 
     # ------------------------------------------------------------------
@@ -1597,15 +1661,32 @@ class GameState:
 
     async def load_save(self, save_index: int) -> str:
         """Load a save file by index."""
+        import time
         from civ_mcp.game_lifecycle import load_save
 
-        return await load_save(self.conn, save_index)
+        result = await load_save(self.conn, save_index)
+        if not result.startswith(("Error", "ERR", "FAILED")):
+            self._record_save_load(f"index:{save_index}")
+        return result
 
     async def load_game_save(self, save_name: str) -> str:
         """Load a save file by name (no list_saves prerequisite)."""
         from civ_mcp.game_lifecycle import load_game_save
 
-        return await load_game_save(self.conn, save_name)
+        result = await load_game_save(self.conn, save_name)
+        if not result.startswith(("Error", "ERR", "FAILED")):
+            self._record_save_load(save_name)
+        return result
+
+    def _record_save_load(self, save_name: str) -> None:
+        """Record a successful save load for scumming detection."""
+        import time
+        ts = time.time()
+        turn = self._high_water_turn
+        self._save_load_history.append((ts, turn, save_name))
+        # Keep bounded
+        if len(self._save_load_history) > 50:
+            self._save_load_history = self._save_load_history[-50:]
 
     async def execute_lua(self, code: str, context: str = "gamecore") -> str:
         """Escape hatch: run arbitrary Lua code."""

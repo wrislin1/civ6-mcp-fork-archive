@@ -2338,6 +2338,307 @@ def cmd_context_growth(args):
 
 
 # ---------------------------------------------------------------------------
+# Save scumming detection
+# ---------------------------------------------------------------------------
+
+_SAVE_TOOLS = {"load_game_save", "load_save", "list_saves", "restart_and_load"}
+
+
+def _analyze_scumming(run_id: str, log: list[dict]) -> dict:
+    """Analyze a game log for save-scumming patterns.
+
+    Key signals:
+    - **distinct_play_turns_with_loads**: loads at different *in-play* turns
+      (T0 loads are boot retries, not scumming). This is the primary signal —
+      a legitimate deadlock has all loads clustered at one turn; scumming
+      spreads them across many turns.
+    - **play_regressions**: turn drops observed via tool_call turn field while
+      *playing* (not at T0 or during a single-turn debug cluster).
+    - **non_recovery_loads**: loads not immediately preceded by a HANG or error.
+
+    Verdicts:
+        CLEAN       — zero loads
+        MINOR       — boot retries only, or <3 distinct-play-turn loads
+        SUSPICIOUS  — 3-4 distinct-play-turn loads or any real regression
+        SCUMMING    — 5+ distinct-play-turn loads with regressions
+    """
+    tool_calls = [e for e in log if e.get("type") == "tool_call"]
+
+    save_events = []  # list of (idx, turn, tool)
+    for i, e in enumerate(tool_calls):
+        tool = e.get("tool", "")
+        if tool in _SAVE_TOOLS:
+            save_events.append((i, e.get("turn", 0) or 0, tool))
+
+    load_events = [
+        se for se in save_events
+        if se[2] in ("load_game_save", "load_save", "restart_and_load")
+    ]
+
+    # Boot loads (turn 0) vs play loads (turn > 0)
+    boot_loads = [se for se in load_events if se[1] == 0]
+    play_loads = [se for se in load_events if se[1] > 0]
+
+    distinct_play_turns = sorted({se[1] for se in play_loads})
+    n_distinct_play_turns = len(distinct_play_turns)
+
+    # Turn regressions: detect drops in max-turn-seen across tool_call turn field,
+    # but only count "play regressions" — drops that are meaningfully backwards
+    # during play, not just flickers within a debug cluster at a single turn.
+    max_turn_seen = 0
+    raw_regressions: list[tuple[int, int]] = []
+    for e in tool_calls:
+        t = e.get("turn", 0) or 0
+        if t == 0:
+            continue
+        if max_turn_seen > 0 and t < max_turn_seen - 1:
+            raw_regressions.append((max_turn_seen, t))
+        if t > max_turn_seen:
+            max_turn_seen = t
+
+    # Deduplicate and keep unique (from, to) pairs
+    seen = set()
+    unique_regressions: list[tuple[int, int]] = []
+    for r in raw_regressions:
+        if r not in seen:
+            seen.add(r)
+            unique_regressions.append(r)
+
+    max_regression = max((a - b for a, b in unique_regressions), default=0)
+
+    # A regression is a "play rollback" (i.e., save scumming) if the agent
+    # went from max_turn_seen DOWN to an earlier turn AND then continued to
+    # make progress from the earlier turn (i.e., not just flickering within
+    # a debug cluster at one sticking point).
+    #
+    # Key distinction:
+    # - Deadlock debugging: loads at T326, sees T316-326 flickering, but
+    #   never progresses past T326 — all play stops at the same terminal turn.
+    # - Scumming: loads at T122 back to T114, then plays T114-T122 again,
+    #   possibly reaching higher max later.
+    #
+    # Detection: a "real rollback" exists if there are load events at
+    # non-sequential turns — e.g. loads at T106, T110, T116, T122 means the
+    # agent kept reloading at different points as the game progressed.
+    real_regressions: list[tuple[int, int]] = []
+    if play_loads:
+        load_turns_sorted = sorted(set(se[1] for se in play_loads))
+        # If loads span more than 5 distinct turns AND the turns are spread
+        # (not all within 5 turns of each other), this is rollback behaviour
+        if len(load_turns_sorted) >= 3:
+            span = load_turns_sorted[-1] - load_turns_sorted[0]
+            if span >= 10:
+                # Spread-out loads are the primary signal
+                real_regressions = [
+                    (from_t, to_t)
+                    for from_t, to_t in unique_regressions
+                    if from_t - to_t >= 3
+                ]
+
+    # Hang/error recovery context
+    hang_recovery = 0
+    for idx, turn, tool in load_events:
+        if turn == 0:
+            continue  # boot loads aren't "recovery" in play terms
+        for j in range(max(0, idx - 5), idx):
+            prior = tool_calls[j]
+            prior_result = str(prior.get("result", ""))
+            if ("HANG" in prior_result or "Blocker:" in prior_result
+                    or prior.get("type") == "error"):
+                hang_recovery += 1
+                break
+
+    load_count = len(load_events)
+    play_load_count = len(play_loads)
+
+    # Check load turn spread (distance between first and last load turn)
+    load_span = 0
+    if play_loads:
+        load_turns = sorted(se[1] for se in play_loads)
+        load_span = load_turns[-1] - load_turns[0]
+
+    # Hang context ratio — if most loads follow a HANG/Blocker/error,
+    # it's legitimate recovery, not scumming
+    hang_ratio = hang_recovery / play_load_count if play_load_count else 1.0
+
+    # Verdict logic — the key distinction is WHETHER THE LOADS ARE SPREAD
+    # across the game (scumming) or CLUSTERED at a few sticking points
+    # (legitimate deadlock debugging).
+    if load_count == 0:
+        verdict = "CLEAN"
+        reason = "no save loads"
+    elif play_load_count == 0:
+        verdict = "MINOR"
+        reason = f"{len(boot_loads)} boot loads only (no in-play loads)"
+    elif n_distinct_play_turns >= 5 and load_span >= 30 and hang_ratio < 0.5:
+        # Loads across many turns, spread across the game, not driven by hangs
+        verdict = "SCUMMING"
+        reason = (
+            f"{play_load_count} loads across {n_distinct_play_turns} play turns "
+            f"(span {load_span}), hang ratio {hang_ratio:.0%}"
+        )
+    elif n_distinct_play_turns >= 3 and load_span >= 20 and hang_ratio < 0.7:
+        verdict = "SUSPICIOUS"
+        reason = (
+            f"{play_load_count} loads across {n_distinct_play_turns} play turns "
+            f"(span {load_span}), hang ratio {hang_ratio:.0%}"
+        )
+    elif hang_ratio >= 0.7 or n_distinct_play_turns <= 2:
+        # High hang context or clustered loads = legitimate recovery
+        verdict = "MINOR"
+        reason = (
+            f"{play_load_count} loads, {hang_recovery}/{play_load_count} in hang context, "
+            f"{n_distinct_play_turns} distinct turns"
+        )
+    else:
+        verdict = "SUSPICIOUS"
+        reason = (
+            f"{play_load_count} loads across {n_distinct_play_turns} play turns "
+            f"(span {load_span})"
+        )
+
+    return {
+        "run_id": run_id,
+        "save_calls": len(save_events),
+        "load_calls": load_count,
+        "play_load_count": play_load_count,
+        "boot_load_count": len(boot_loads),
+        "distinct_play_turns": n_distinct_play_turns,
+        "hang_recovery_loads": hang_recovery,
+        "max_regression": max_regression,
+        "real_regressions": real_regressions,
+        "all_regressions": unique_regressions,
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
+def cmd_scumming(args):
+    """Detect save-scumming patterns across games."""
+    games = _list_games()
+    targets = games
+    if args.game_id:
+        targets = _resolve_run_ids([args.game_id], games)
+        if not targets:
+            return
+
+    print(f"\n  Save Scumming Audit ({len(targets)} games)")
+    print("  " + "=" * 80)
+
+    results = []
+    for g in targets:
+        rid = g.get("runId")
+        if not rid:
+            continue
+        try:
+            log = cloud_log(rid)
+        except Exception as exc:
+            print(f"  [skip] {rid}: {exc}", file=sys.stderr)
+            continue
+        if not log:
+            continue
+        r = _analyze_scumming(rid, log)
+        r["model"] = g.get("agentModel") or "?"
+        r["scenario"] = g.get("scenarioId") or "?"
+        r["turns"] = int(g.get("count") or 0)
+        r["game_id"] = g.get("gameId", "")
+        r["admissible"] = g.get("admissible")
+        results.append(r)
+
+    # Sort: scumming first, then suspicious, then minor, then clean
+    verdict_order = {"SCUMMING": 0, "SUSPICIOUS": 1, "MINOR": 2, "CLEAN": 3}
+    results.sort(key=lambda x: (verdict_order.get(x["verdict"], 9), -x["load_calls"]))
+
+    headers = [
+        "Verdict",
+        "Model",
+        "Scenario",
+        "T",
+        "PlayLoads",
+        "PlayTurns",
+        "RealReg",
+        "Recovery",
+        "Run ID",
+    ]
+    align = ["<", "<", "<", ">", ">", ">", ">", ">", "<"]
+    rows = []
+    for r in results:
+        model_short = r["model"].rsplit("/", 1)[-1][:20]
+        scenario_short = r["scenario"][:15]
+        rows.append(
+            [
+                r["verdict"],
+                model_short,
+                scenario_short,
+                r["turns"],
+                r["play_load_count"],
+                r["distinct_play_turns"],
+                len(r["real_regressions"]),
+                f"{r['hang_recovery_loads']}/{r['play_load_count']}" if r["play_load_count"] else "-",
+                r["run_id"][:40],
+            ]
+        )
+    _table(headers, rows, align)
+
+    counts = Counter(r["verdict"] for r in results)
+    print()
+    print(f"  Summary: CLEAN={counts['CLEAN']}  MINOR={counts['MINOR']}  "
+          f"SUSPICIOUS={counts['SUSPICIOUS']}  SCUMMING={counts['SCUMMING']}")
+
+    scumming = [r for r in results if r["verdict"] == "SCUMMING"]
+    if scumming:
+        print()
+        print("  SCUMMING games:")
+        for r in scumming:
+            print(f"    {r['game_id']}")
+            print(f"      reason: {r['reason']}")
+            if r["real_regressions"]:
+                print(f"      real regressions: {r['real_regressions'][:5]}")
+
+    # --apply: mark scumming games with excludeReason
+    if args.apply and scumming:
+        print()
+        print(f"  Applying excludeReason='save_scumming' to {len(scumming)} games...")
+        import httpx
+
+        env = _load_env()
+        # Try web/.env.prod first
+        prod_env = {}
+        prod_path = Path(__file__).parent.parent / "web" / ".env.prod"
+        if prod_path.exists():
+            for line in prod_path.read_text().splitlines():
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    prod_env[k.strip()] = v.strip()
+        url = prod_env.get("CONVEX_URL", "").rstrip("/")
+        key = prod_env.get("CONVEX_DEPLOY_KEY", "")
+        if not url or not key:
+            print("  Error: need CONVEX_URL and CONVEX_DEPLOY_KEY in web/.env.prod", file=sys.stderr)
+            return
+        client = httpx.Client(
+            timeout=30,
+            headers={"Content-Type": "application/json", "Authorization": f"Convex {key}"},
+        )
+        for r in scumming:
+            resp = client.post(
+                f"{url}/api/mutation",
+                json={
+                    "path": "ingest:patchExcludeReason",
+                    "args": {
+                        "gameId": r["game_id"],
+                        "excludeReason": "save_scumming",
+                    },
+                    "format": "json",
+                },
+            )
+            data = resp.json()
+            if data.get("status") == "success":
+                print(f"    OK  {r['game_id']}")
+            else:
+                print(f"    FAIL {r['game_id']}: {data}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2406,6 +2707,14 @@ def main():
     p_ctx = sub.add_parser("context", help="Context growth analysis")
     p_ctx.add_argument("--model", help="Filter by model name")
 
+    # scumming
+    p_scum = sub.add_parser("scumming", help="Detect save-scumming patterns")
+    p_scum.add_argument("--game-id", help="Analyze a single game")
+    p_scum.add_argument(
+        "--apply", action="store_true",
+        help="Mark detected scumming games as excludeReason='save_scumming'",
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2424,6 +2733,7 @@ def main():
         "performance": cmd_performance,
         "efficiency": cmd_efficiency,
         "context": cmd_context_growth,
+        "scumming": cmd_scumming,
     }
     dispatch[args.command](args)
 
