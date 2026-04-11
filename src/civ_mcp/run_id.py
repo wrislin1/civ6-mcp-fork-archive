@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import socket as _socket
 import time as _time
 
 _ADJECTIVES = (
@@ -311,18 +312,19 @@ def generate_run_id(
     model_id: str = "",
     scenario_id: str = "",
     timestamp: float | None = None,
+    hostname: str | None = None,
 ) -> str:
     """Generate a human-readable run ID like ``crimson-amber-falcon-47``.
 
-    Deterministic when *model_id* and *scenario_id* are provided — seeded
-    from a hash of inputs + hour-truncated timestamp so the same benchmark
-    config within the same hour produces the same name (useful for resume).
-    Falls back to random selection when no context is given.
+    Deterministic on (hostname, model, scenario, hour) when model/scenario
+    are set — same machine resumes stably, parallel fleet launches get
+    distinct IDs. Random fallback when no context is given.
     """
     ts = timestamp or _time.time()
     hour_bucket = int(ts) // 3600
 
-    seed_str = f"{model_id}:{scenario_id}:{hour_bucket}"
+    host = hostname if hostname is not None else _socket.gethostname()
+    seed_str = f"{host}:{model_id}:{scenario_id}:{hour_bucket}"
     if model_id or scenario_id:
         h = hashlib.sha256(seed_str.encode()).digest()
         adj_idx = h[0] % len(_ADJECTIVES)

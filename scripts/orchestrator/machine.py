@@ -167,8 +167,10 @@ class Machine:
                 "| findstr /I Civ >nul && echo YES || echo NO"
             )
         else:
+            # Match either Civ6 (current Aspyr builds) or Civ6Sub (legacy).
             rc, out = self.ssh(
-                "pgrep -x Civ6Sub >/dev/null 2>&1 && echo YES || echo NO"
+                "(pgrep -x Civ6 >/dev/null 2>&1 || pgrep -x Civ6Sub >/dev/null 2>&1) "
+                "&& echo YES || echo NO"
             )
         return "YES" in out
 
