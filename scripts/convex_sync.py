@@ -1,18 +1,38 @@
 #!/usr/bin/env python3
-"""Sync civ-mcp JSONL files to Convex — watch mode or batch upload.
+"""Sync civ-mcp JSONL files to Convex.
 
-Modes:
-  --watch            Stream local file changes in real-time (default).
-  --upload DIR       One-shot batch upload of all local files in DIR.
-  --cloud BUCKET     Batch sync from a cloud bucket (Azure Blob / GCS / S3).
-  --watch --cloud BUCKET  Poll cloud bucket for changes every 30s.
+Three modes, different roles:
+
+  --watch  (default, local file watching)
+    Long-running process. Uses watchfiles.awatch on ~/.civ6-mcp/ and streams
+    diary/log updates incrementally as the MCP server writes them. Tracks
+    per-file line counts in .sync_state.json so re-runs are idempotent. Runs
+    check_idle_games every 5 min to auto-complete stalled games. This is
+    what the orchestrator runs in a persistent tmux session per machine so
+    live games stream to Convex in real time.
+
+  --upload DIR  (one-shot batch)
+    Scans a directory for game files, applies should_sync_game() quality
+    gate (skip <10 turn micro-runs), ingests each game, and calls
+    completeGame to set outcome + admissibility. Called by the orchestrator
+    at post-game as a "finalisation" step — runs in 10-30s and is mostly a
+    no-op for files the watcher has already streamed.
+
+  --cloud BUCKET  (one-shot batch from cloud)
+    Reads game files from Azure/GCS/S3 instead of a local dir. Used for
+    historical backfill and cross-machine recovery, not live operation.
+
+  --backfill-outcomes --cloud BUCKET
+    Scans completed games with missing outcomes, fetches their log.jsonl
+    from cloud storage, parses game_over events (or falls back to tool_call
+    regex), and patches completeGame. For recovering outcomes from games
+    that completed before the scumming/game-over detection fixes landed.
 
 Usage:
-    python scripts/convex_sync.py                              # watch local (dev)
-    python scripts/convex_sync.py --prod                       # watch local (prod)
-    python scripts/convex_sync.py --upload ./results/          # batch local
-    python scripts/convex_sync.py --cloud az://civbench --prod # batch cloud
-    python scripts/convex_sync.py --watch --cloud az://civbench --prod
+    python scripts/convex_sync.py --prod                       # live watch (prod)
+    python scripts/convex_sync.py --upload ~/.civ6-mcp --prod  # post-game batch
+    python scripts/convex_sync.py --cloud az://telemetry --prod
+    python scripts/convex_sync.py --backfill-outcomes --cloud az://telemetry --prod
 
 Env files are loaded from web/ relative to this script. Environment variables
 CONVEX_URL and CONVEX_DEPLOY_KEY override file values if set.
@@ -1266,7 +1286,16 @@ async def batch_upload_cloud(bucket_url: str, client: ConvexClient) -> None:
 
 
 async def watch_loop(diary_dir: Path, client: ConvexClient) -> None:
-    """Watch directory and stream changes to Convex in real-time."""
+    """Watch directory and stream changes to Convex in real-time.
+
+    NOTE: `should_sync_game()` quality gate is deliberately NOT applied here.
+    The watcher streams everything as it arrives so the frontend can show
+    games from turn 0 onward. Filtering happens at the display layer via
+    `MIN_LIVE_TURNS` in web/src/lib/diary-types.ts. Early-abort games will
+    accumulate as short-lived `status="live"` rows that get marked
+    `completed` by `check_idle_games` after 30 min and then filtered out
+    by the frontend because they fail the `admissible` threshold (T<50).
+    """
     state = load_state()
 
     # Graceful shutdown
@@ -1311,91 +1340,6 @@ async def watch_loop(diary_dir: Path, client: ConvexClient) -> None:
     finally:
         save_state(state)
         log.info("State saved, exiting")
-
-
-async def watch_loop_cloud(bucket_url: str, client: ConvexClient) -> None:
-    """Poll cloud bucket for new/changed runs and sync to Convex.
-
-    Uses a persistent temp directory so that incremental sync state (line
-    counts, byte offsets) works correctly across poll iterations.
-    """
-    import tempfile
-
-    shutdown = asyncio.Event()
-
-    def on_signal(*_: Any) -> None:
-        log.info("Shutting down...")
-        shutdown.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, on_signal)
-
-    fs, prefix = _get_cloud_fs(bucket_url)
-    state: dict[str, Any] = {"files": {}, "game_last_seen": {}}
-    completed_runs: set[str] = set()
-
-    with tempfile.TemporaryDirectory(prefix="civbench_watch_") as tmp:
-        tmp_dir = Path(tmp)
-
-        while not shutdown.is_set():
-            try:
-                manifests = discover_cloud_runs(bucket_url)
-
-                for manifest in manifests:
-                    run_id = manifest.get("run_id", "")
-                    if not run_id or run_id in completed_runs:
-                        continue
-
-                    game_id = _download_cloud_run(fs, prefix, run_id, manifest, tmp_dir)
-                    if not game_id:
-                        continue
-
-                    # Sync using stateful functions (track line counts etc.)
-                    games = discover_games(tmp_dir)
-                    if game_id in games:
-                        for ftype in (
-                            "diary",
-                            "cities",
-                            "spatial",
-                            "mapturns",
-                        ):
-                            if ftype in games[game_id]:
-                                await sync_file(games[game_id][ftype], state, client)
-
-                    # Check completion via game_over entry or tool_call fallback in log
-                    civ = manifest.get("civ", "")
-                    leader = manifest.get("leader", "")
-                    outcome = _cloud_run_outcome(
-                        fs, prefix, run_id, civ=civ, leader=leader
-                    )
-                    if outcome is not None:
-                        agent_model = manifest.get("model_id", "")
-                        args: dict[str, Any] = {
-                            "gameId": game_id,
-                            "outcome": outcome,
-                        }
-                        if agent_model:
-                            args["agentModel"] = agent_model
-                        await client.mutation("ingest:completeGame", args)
-                        log.info(
-                            "Completed %s: %s — %s (%s)",
-                            game_id,
-                            outcome["result"],
-                            outcome["winnerCiv"],
-                            outcome["victoryType"],
-                        )
-                        completed_runs.add(run_id)
-            except Exception:
-                log.exception("Error during cloud watch poll")
-
-            # Wait 30s or until shutdown
-            try:
-                await asyncio.wait_for(shutdown.wait(), timeout=30)
-                break
-            except asyncio.TimeoutError:
-                pass
-
-    log.info("Cloud watch loop exiting")
 
 
 # ---------------------------------------------------------------------------
@@ -1537,8 +1481,9 @@ async def main() -> None:
         "--cloud",
         type=str,
         metavar="BUCKET",
-        help="Cloud bucket URL (e.g. az://civbench). "
-        "Batch sync by default; add --watch to poll for changes.",
+        help="Cloud bucket URL (e.g. az://telemetry) for one-shot batch "
+        "upload or --backfill-outcomes. Use local --watch on each machine "
+        "for live streaming instead.",
     )
     args = parser.parse_args()
 
@@ -1574,13 +1519,14 @@ async def main() -> None:
             await batch_upload(upload_dir, client)
         elif args.cloud:
             if args.watch:
-                log.info(
-                    "[%s] Watching cloud %s → %s", env_label, args.cloud, convex_url
+                log.error(
+                    "--watch --cloud is no longer supported. Use --watch "
+                    "(local file watching) on each machine, or --cloud alone "
+                    "for one-shot batch historical backfill."
                 )
-                await watch_loop_cloud(args.cloud, client)
-            else:
-                log.info("[%s] Batch cloud %s → %s", env_label, args.cloud, convex_url)
-                await batch_upload_cloud(args.cloud, client)
+                sys.exit(1)
+            log.info("[%s] Batch cloud %s → %s", env_label, args.cloud, convex_url)
+            await batch_upload_cloud(args.cloud, client)
         else:
             log.info("[%s] Watching %s → %s", env_label, DIARY_DIR, convex_url)
             await watch_loop(DIARY_DIR, client)

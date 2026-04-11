@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useDiaryList } from "@/lib/use-diary";
-import { slugFromFilename, sortGamesLiveFirst } from "@/lib/diary-types";
+import { slugFromFilename, sortGamesLiveFirst, isWorthShowing } from "@/lib/diary-types";
 import { getCivColors } from "@/lib/civ-colors";
 import { CivSymbol } from "./civ-icon";
 import { LeaderPortrait } from "@/components/leader-portrait";
@@ -16,7 +16,12 @@ export function RecentGames() {
   const games = useDiaryList();
   const [ready, setReady] = useState(false);
 
-  const sorted = useMemo(() => sortGamesLiveFirst(games), [games]);
+  // Filter to worth-showing games (admissible completed OR mature live)
+  // so the 6-slot sidebar doesn't display boot-failure noise or scumming.
+  const sorted = useMemo(
+    () => sortGamesLiveFirst(games.filter(isWorthShowing)),
+    [games],
+  );
 
   useEffect(() => {
     if (games.length > 0) {

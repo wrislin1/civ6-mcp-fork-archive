@@ -287,6 +287,72 @@ class Machine:
             rc, out = self.ssh("rm -rf ~/.civ6-mcp/* && echo CLEARED", timeout=10)
         return out
 
+    # ── Sync watcher (persistent) ───────────────────────────────
+    #
+    # Runs `convex_sync.py --watch --prod` in a background session (tmux on
+    # Linux, schtasks on Windows). Streams diary/log updates to Convex
+    # incrementally as the game plays, so the web frontend shows live state.
+    # Not tied to a specific game — streams whatever the MCP server writes
+    # into ~/.civ6-mcp/. Kept running across game boundaries.
+
+    def is_sync_watcher_running(self) -> bool:
+        if self.os == "windows":
+            # /FO LIST prints "Status: Running" on its own line when the
+            # task is executing; "Status: Ready" when idle-scheduled.
+            rc, out = self.ssh(
+                'schtasks /Query /TN "CivBench-Sync" /FO LIST 2>nul',
+                timeout=10,
+            )
+            return rc == 0 and "Running" in out
+        else:
+            rc, out = self.ssh(
+                "tmux has-session -t civbench-sync 2>/dev/null && echo YES || echo NO",
+                timeout=10,
+            )
+            return "YES" in out
+
+    def start_sync_watcher(self) -> bool:
+        """Start the persistent convex_sync.py --watch process. Idempotent."""
+        if self.os == "windows":
+            bat_content = (
+                f"@echo off\r\n"
+                f"cd /d {self.repo}\r\n"
+                f".venv\\Scripts\\python.exe scripts\\convex_sync.py "
+                f"--watch --prod >> %USERPROFILE%\\civbench_sync.log 2>&1\r\n"
+            )
+            encoded = base64.b64encode(bat_content.encode("utf-8")).decode("ascii")
+            self.ssh(
+                f'powershell -Command "[System.Text.Encoding]::UTF8.GetString('
+                f"[System.Convert]::FromBase64String('{encoded}'))"
+                f" | Set-Content -Path '{self.repo}\\run_sync.bat' -NoNewline\""
+            )
+            # Idempotent: delete any existing task then create fresh
+            self.ssh('schtasks /Delete /TN "CivBench-Sync" /F 2>nul', timeout=10)
+            self.ssh(
+                'schtasks /Create /TN "CivBench-Sync" /TR '
+                f'"{self.repo}\\run_sync.bat" /SC ONCE /ST 00:00 /RL HIGHEST /IT /F',
+                timeout=15,
+            )
+            rc, out = self.ssh('schtasks /Run /TN "CivBench-Sync"', timeout=10)
+            return "SUCCESS" in out or rc == 0
+        else:
+            # Kill any existing watcher first (idempotent)
+            self.ssh("tmux kill-session -t civbench-sync 2>/dev/null", timeout=5)
+            rc, out = self.ssh(
+                f"tmux new-session -d -s civbench-sync "
+                f'"cd {self.repo} && uv run python scripts/convex_sync.py '
+                f"--watch --prod 2>&1 | tee -a ~/civbench_sync.log\"",
+                timeout=15,
+            )
+            return rc == 0
+
+    def stop_sync_watcher(self) -> None:
+        if self.os == "windows":
+            self.ssh('schtasks /End /TN "CivBench-Sync" 2>nul', timeout=10)
+            self.ssh('schtasks /Delete /TN "CivBench-Sync" /F 2>nul', timeout=10)
+        else:
+            self.ssh("tmux kill-session -t civbench-sync 2>/dev/null", timeout=5)
+
     def launch_runner(self, model: str, scenario: str, runs: int = 1) -> bool:
         if self.os == "windows":
             bat_content = (

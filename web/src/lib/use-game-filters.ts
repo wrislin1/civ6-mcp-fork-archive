@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { DiaryFile } from "./diary-types";
+import { isWorthShowing } from "./diary-types";
 import { deriveStatus, deriveProvider, deriveVictoryLabel } from "./game-utils";
 import { SCENARIOS, DIFFICULTY_META } from "./scenarios";
 
@@ -127,7 +128,8 @@ export function useGameFilters(
   // Filter
   const filtered = useMemo(() => {
     return games.filter((game) => {
-      if (admissibleOnly && !game.admissible) return false;
+      // "Admissible" toggle = "worth showing" (completed admissible OR mature live)
+      if (admissibleOnly && !isWorthShowing(game)) return false;
       if (filters.status.size > 0 && !filters.status.has(deriveStatus(game)))
         return false;
       if (filters.civs.size > 0 && !filters.civs.has(game.label)) return false;

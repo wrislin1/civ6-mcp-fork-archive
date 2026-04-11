@@ -86,6 +86,14 @@ def cmd_preflight(
         if not feat_ok:
             all_ok = False
 
+        # Sync watcher — informational only (not blocking). Launch will
+        # start the watcher if it's missing.
+        watcher_running = m.is_sync_watcher_running()
+        print(
+            f"    {'✓' if watcher_running else '○'} Sync watcher: "
+            f"{'running' if watcher_running else 'stopped (will start at launch)'}"
+        )
+
         # Package sync
         if m.os == "windows":
             rc, sync_out = m.ssh(
@@ -276,6 +284,39 @@ def cmd_status(machines: dict[str, Machine]) -> None:
     print()
 
 
+# Job states that represent "this job needs a watcher on its machine".
+# Includes `completing` (final diary writes still draining) and
+# `needs_attention` (can be retried without relaunch — watcher must be up).
+ACTIVE_JOB_STATES = {
+    "pending",
+    "launching",
+    "booting",
+    "running",
+    "completing",
+    "needs_attention",
+}
+
+
+def _ensure_watchers(targets: dict[str, Machine]) -> None:
+    """Start sync watchers on every target machine that needs one.
+
+    Called by both launch and resume paths so a machine that lost its
+    watcher (e.g. kill-all then resume, or REHOBOAM reboot) gets it back.
+    Non-blocking: logs a warning on failure but doesn't abort.
+    """
+    log.info("Ensuring sync watchers are running...")
+    for name, m in targets.items():
+        if m.is_sync_watcher_running():
+            log.info("  %s: watcher already running", name)
+        else:
+            ok = m.start_sync_watcher()
+            log.info(
+                "  %s: %s",
+                name,
+                "watcher started" if ok else "WATCHER FAILED TO START (continuing)",
+            )
+
+
 def cmd_kill_all(machines: dict[str, Machine]) -> None:
     for name, m in machines.items():
         print(f"  Killing {name}... ", end="", flush=True)
@@ -284,6 +325,7 @@ def cmd_kill_all(machines: dict[str, Machine]) -> None:
             continue
         m.kill_runner()
         m.kill_game()
+        m.stop_sync_watcher()
         print("done")
 
     # Mark all active jobs as failed across all state files
@@ -455,10 +497,11 @@ def main() -> None:
         # Discipline gate 2: feature markers must be present on every target.
         # This catches the "deployed to right commit but missing uncommitted
         # fix" failure mode.
+        target_names = {job.machine for job in config.jobs}
+        targets = {n: machines[n] for n in target_names if n in machines}
+
         if not args.skip_feature_check:
             log.info("Verifying feature markers on all target machines...")
-            target_names = {job.machine for job in config.jobs}
-            targets = {n: machines[n] for n in target_names if n in machines}
             for name, m in targets.items():
                 ok, msg = m.verify_features(FEATURE_MARKERS)
                 if ok:
@@ -471,6 +514,10 @@ def main() -> None:
                         name,
                     )
                     sys.exit(1)
+
+        # Ensure sync watchers are running on all target machines so live
+        # game state streams to Convex in real time.
+        _ensure_watchers(targets)
 
         run_batch(config)
 
@@ -501,6 +548,18 @@ def main() -> None:
         print(
             f"Resuming: {active} active, {pending} pending, {done} done, {failed} failed"
         )
+
+        # Ensure watchers on all machines that still have active jobs.
+        # `completing` is included so final diary writes still drain to
+        # Convex; `needs_attention` is included so retried jobs have a live
+        # watcher waiting.
+        resume_targets = {
+            j.machine for j in state.jobs.values()
+            if j.state in ACTIVE_JOB_STATES
+        }
+        targets = {n: machines[n] for n in resume_targets if n in machines}
+        _ensure_watchers(targets)
+
         run_batch(config, state=state)
 
     elif args.command == "retry":

@@ -399,6 +399,16 @@ export interface DiaryFile {
 
 // === Shared helpers ===
 
+/**
+ * Minimum turns for a live (in-progress) game to appear in the public view.
+ * Filters out early boot failures, T<30 crashes, eval-infrastructure errors.
+ *
+ * Not the same as the admissibility gate (turnCount >= 50 AND game completed).
+ * This is a *display* gate: "is this worth showing on the homepage?", not
+ * "is this a benchmark result?".
+ */
+export const MIN_LIVE_TURNS = 30;
+
 /** diary_india_123.jsonl → india_123 */
 export function slugFromFilename(filename: string): string {
   return filename.replace(/^diary_/, "").replace(/\.jsonl$/, "");
@@ -411,6 +421,24 @@ export function sortGamesLiveFirst(games: DiaryFile[]): DiaryFile[] {
     if (b.status === "live" && a.status !== "live") return 1;
     return b.count - a.count;
   });
+}
+
+/**
+ * Is this game worth showing in the public view?
+ *
+ * Returns true if the game is either:
+ *   - a completed, admissible benchmark result, OR
+ *   - a live game that has reached MIN_LIVE_TURNS (meaning infrastructure
+ *     works and the agent is actually playing, not stuck at boot).
+ *
+ * Returns false for early-abort games, inadmissible completions (scumming,
+ * wrong save, bad code version), and live games still in their boot window.
+ */
+export function isWorthShowing(game: DiaryFile): boolean {
+  if (game.status === "live") {
+    return game.count >= MIN_LIVE_TURNS;
+  }
+  return game.admissible === true;
 }
 
 /** Group raw player + city rows into per-turn snapshots */
