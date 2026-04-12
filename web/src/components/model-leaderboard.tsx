@@ -6,7 +6,8 @@ import { useElo, type EloFilter } from "@/lib/use-elo";
 import { getModelMeta, formatModelName } from "@/lib/model-registry";
 import { CivIcon } from "@/components/civ-icon";
 import { CIV6_COLORS } from "@/lib/civ-colors";
-import type { EloEntry } from "@/lib/elo";
+import type { EloEntry, DimensionScores } from "@/lib/elo";
+import { DimensionRadar, DIMENSIONS as SCORE_DIMS } from "@/components/dimension-radar";
 import {
   Bot,
   Trophy,
@@ -205,7 +206,7 @@ export function LeaderboardPreview() {
 // ─── Full Leaderboard (dedicated page) ──────────────────────────────────────
 
 export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
-  const { ratings, gameCount, loading } = useElo(filter);
+  const { ratings, gameCount, loading, modelScores } = useElo(filter);
 
   if (loading) {
     return (
@@ -303,12 +304,15 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
                       <RankBadge rank={i + 1} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2.5">
+                      <Link
+                        href={`/games?model=${encodeURIComponent(entry.name)}`}
+                        className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+                      >
                         <ModelAvatar entry={entry} />
-                        <span className="font-display text-sm font-bold tracking-wide uppercase text-marble-800">
+                        <span className="font-display text-sm font-bold tracking-wide uppercase text-marble-800 hover:underline">
                           {formatModelName(entry.name)}
                         </span>
-                      </div>
+                      </Link>
                     </td>
                     <td className="hidden px-3 py-2.5 sm:table-cell">
                       <div className="flex items-center gap-1.5">
@@ -363,6 +367,17 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
           <CivIcon icon={Swords} color={CIV6_COLORS.military} size="sm" />
           Model Profiles
         </h2>
+        <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wider text-marble-500">
+          {SCORE_DIMS.map((d) => {
+            const Icon = d.icon;
+            return (
+              <span key={d.key} className="inline-flex items-center gap-0.5" title={d.label}>
+                <Icon className="h-3 w-3" aria-hidden="true" />
+                <span>{d.label}</span>
+              </span>
+            );
+          })}
+        </div>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {models.map((entry) => {
             const meta = getModelMeta(entry.name);
@@ -370,10 +385,12 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
               entry.games > 0
                 ? Math.round((entry.wins / entry.games) * 100)
                 : 0;
+            const scores = modelScores?.[entry.name] ?? null;
             return (
-              <div
+              <Link
                 key={entry.id}
-                className="flex items-stretch gap-0 rounded-sm border border-marble-300/50 bg-marble-50"
+                href={`/games?model=${encodeURIComponent(entry.name)}`}
+                className="flex items-stretch gap-0 rounded-sm border border-marble-300/50 bg-marble-50 transition-colors hover:bg-marble-100/80 group"
               >
                 <div
                   className="w-1.5 shrink-0 rounded-l-sm"
@@ -383,7 +400,7 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
                   <div className="flex items-center gap-2.5">
                     <ModelAvatar entry={entry} />
                     <div>
-                      <div className="font-display text-sm font-bold uppercase tracking-wide text-marble-800">
+                      <div className="font-display text-sm font-bold uppercase tracking-wide text-marble-800 group-hover:underline">
                         {meta.name}
                       </div>
                       <div className="text-xs text-marble-500">
@@ -391,7 +408,20 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
+                  {scores ? (
+                    <div className="-mx-3 mt-1 flex justify-center">
+                      <DimensionRadar
+                        scores={scores}
+                        color={meta.color}
+                        size={220}
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex items-center justify-center h-[160px] text-xs text-marble-400">
+                      Scores pending
+                    </div>
+                  )}
+                  <div className="mt-1 grid grid-cols-3 gap-2">
                     <div className="text-center">
                       <div className="font-mono text-lg font-bold tabular-nums">
                         <EloBadge elo={entry.elo} />
@@ -424,7 +454,7 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
                     </div>
                   </div>
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>

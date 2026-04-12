@@ -28,11 +28,24 @@ export interface EloEntry {
   losses: number;
 }
 
+export interface DimensionScores {
+  overall: number;
+  economic: number;
+  military: number;
+  scientific: number;
+  diplomatic: number;
+  spatial: number;
+  toolFluency: number;
+  coherence: number;
+}
+
 export interface EloData {
   ratings: EloEntry[];
   gameCount: number;
   loading: boolean;
   error: string | null;
+  /** Mean dimension scores per model (keyed by model name). */
+  modelScores?: Record<string, DimensionScores>;
 }
 
 // ─── ELO computation ────────────────────────────────────────────────────────

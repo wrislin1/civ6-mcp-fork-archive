@@ -64,6 +64,19 @@ export default defineSchema({
         playerAlive: v.boolean(),
       }),
     ),
+    // 8-dimension scoring (computed by sync pipeline from diary+log)
+    dimensionScores: v.optional(
+      v.object({
+        overall: v.float64(),
+        economic: v.float64(),
+        military: v.float64(),
+        scientific: v.float64(),
+        diplomatic: v.float64(),
+        spatial: v.float64(),
+        toolFluency: v.float64(),
+        coherence: v.float64(),
+      }),
+    ),
   })
     .index("by_gameId", ["gameId"])
     .index("by_status", ["status", "lastUpdated"]),

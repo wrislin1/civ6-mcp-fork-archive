@@ -478,6 +478,34 @@ async def _complete_game(
     else:
         log.info("Completed %s (no outcome found)", game_id)
 
+    # Compute 8-dimension scores and patch onto game doc
+    try:
+        from analyze import cloud_diary, cloud_log, score_game
+
+        run_id = game_id.rsplit("_", 1)[-1] if "_" in game_id else game_id
+        diary = cloud_diary(run_id)
+        log_data = cloud_log(run_id)
+        if diary:
+            scores = score_game(diary, log_data)
+            dim = {
+                "overall": float(scores["Overall Score"]["score"]),
+                "economic": float(scores["Economic Management"]["score"]),
+                "military": float(scores["Military Competence"]["score"]),
+                "scientific": float(scores["Scientific Progress"]["score"]),
+                "diplomatic": float(scores["Diplomatic Skill"]["score"]),
+                "spatial": float(scores["Spatial Reasoning"]["score"]),
+                "toolFluency": float(scores["Tool-Use Fluency"]["score"]),
+                "coherence": float(scores["Long-Horizon Coherence"]["score"]),
+            }
+            await client.mutation(
+                "ingest:patchGameFields",
+                {"gameId": game_id, "patch": {"dimensionScores": dim}},
+            )
+            avg = sum(dim.values()) / 8
+            log.info("Scored %s: avg=%.0f", game_id, avg)
+    except Exception:
+        log.debug("Dimension scoring failed for %s", game_id, exc_info=True)
+
 
 def _cloud_run_outcome(
     fs: Any, prefix: str, run_id: str, civ: str = "", leader: str = ""

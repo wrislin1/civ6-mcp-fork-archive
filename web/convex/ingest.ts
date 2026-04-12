@@ -973,6 +973,23 @@ export const mergeGame = mutation({
   },
 });
 
+/** Admin: patch arbitrary fields on a game doc (for fixing bad state). */
+export const patchGameFields = mutation({
+  args: {
+    gameId: v.string(),
+    patch: v.any(),
+  },
+  handler: async (ctx, { gameId, patch }) => {
+    const game = await ctx.db
+      .query("games")
+      .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (!game) throw new Error(`Game not found: ${gameId}`);
+    await ctx.db.patch(game._id, patch);
+    return { gameId, patched: Object.keys(patch) };
+  },
+});
+
 export const backfillAgentModel = mutation({
   args: { model: v.string() },
   handler: async (ctx, { model }) => {

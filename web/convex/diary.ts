@@ -37,6 +37,7 @@ export const listGames = query({
       gitDescribe: g.gitDescribe ?? null,
       runId: g.runId ?? null,
       admissible: g.admissible ?? null,
+      dimensionScores: g.dimensionScores ?? null,
     }));
   },
 });
@@ -85,6 +86,7 @@ export const getEloData = query({
           is_agent: p.is_agent,
           agent_model: p.agent_model,
         })),
+        dimensionScores: g.dimensionScores ?? null,
       }));
   },
 });
