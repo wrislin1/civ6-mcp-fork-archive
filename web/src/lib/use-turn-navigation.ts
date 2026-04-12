@@ -5,25 +5,30 @@ type NavAction =
   | { type: "next"; max: number }
   | { type: "first" }
   | { type: "last"; max: number }
-  | { type: "seek"; index: number };
+  | { type: "seek"; index: number }
+  | { type: "sync_max"; max: number };
 
 function navReducer(
-  state: { userIndex: number; following: boolean },
+  state: { userIndex: number; following: boolean; maxIdx: number },
   action: NavAction,
 ) {
+  // When following, the effective position is maxIdx, not userIndex.
+  const effective = state.following ? state.maxIdx : state.userIndex;
   switch (action.type) {
     case "prev":
-      return { userIndex: Math.max(0, state.userIndex - 1), following: false };
+      return { ...state, userIndex: Math.max(0, effective - 1), following: false };
     case "next": {
-      const next = Math.min(action.max, state.userIndex + 1);
-      return { userIndex: next, following: next >= action.max };
+      const next = Math.min(action.max, effective + 1);
+      return { ...state, userIndex: next, following: next >= action.max };
     }
     case "first":
-      return { userIndex: 0, following: false };
+      return { ...state, userIndex: 0, following: false };
     case "last":
-      return { userIndex: action.max, following: true };
+      return { ...state, userIndex: action.max, following: true };
     case "seek":
-      return { userIndex: action.index, following: false };
+      return { ...state, userIndex: action.index, following: false };
+    case "sync_max":
+      return { ...state, maxIdx: action.max };
   }
 }
 
@@ -31,7 +36,13 @@ export function useTurnNavigation(maxIdx: number) {
   const [nav, dispatch] = useReducer(navReducer, {
     userIndex: 0,
     following: true,
+    maxIdx: 0,
   });
+
+  // Keep reducer's maxIdx in sync so "prev" from following state works
+  useEffect(() => {
+    dispatch({ type: "sync_max", max: maxIdx });
+  }, [maxIdx]);
 
   const index = nav.following ? maxIdx : Math.min(nav.userIndex, maxIdx);
 
