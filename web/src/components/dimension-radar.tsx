@@ -20,6 +20,7 @@ import {
   Brain,
   type LucideIcon,
 } from "lucide-react";
+import { CIV6_COLORS } from "@/lib/civ-colors";
 
 export interface DimensionScores {
   overall: number;
@@ -36,15 +37,16 @@ export const DIMENSIONS: {
   key: keyof DimensionScores;
   label: string;
   icon: LucideIcon;
+  color: string;
 }[] = [
-  { key: "overall", label: "Overall", icon: Trophy },
-  { key: "economic", label: "Economic", icon: Coins },
-  { key: "military", label: "Military", icon: Swords },
-  { key: "scientific", label: "Science", icon: FlaskConical },
-  { key: "diplomatic", label: "Diplomacy", icon: Handshake },
-  { key: "spatial", label: "Spatial", icon: Map },
-  { key: "toolFluency", label: "Tool Use", icon: Wrench },
-  { key: "coherence", label: "Coherence", icon: Brain },
+  { key: "overall", label: "Overall", icon: Trophy, color: CIV6_COLORS.goldMetal },
+  { key: "economic", label: "Economic", icon: Coins, color: CIV6_COLORS.gold },
+  { key: "military", label: "Military", icon: Swords, color: CIV6_COLORS.military },
+  { key: "scientific", label: "Science", icon: FlaskConical, color: CIV6_COLORS.science },
+  { key: "diplomatic", label: "Diplomacy", icon: Handshake, color: CIV6_COLORS.favor },
+  { key: "spatial", label: "Spatial", icon: Map, color: CIV6_COLORS.spatial },
+  { key: "toolFluency", label: "Tool Use", icon: Wrench, color: CIV6_COLORS.production },
+  { key: "coherence", label: "Coherence", icon: Brain, color: CIV6_COLORS.culture },
 ];
 
 // Custom tick renderer: icon at each axis endpoint
@@ -60,14 +62,14 @@ function IconTick({
   const dim = DIMENSIONS.find((d) => d.label === payload.value);
   if (!dim) return null;
   const Icon = dim.icon;
-  const iconSize = 12;
+  const iconSize = 13;
   return (
     <g transform={`translate(${x - iconSize / 2},${y - iconSize / 2})`}>
       <title>{dim.label}</title>
       <Icon
         width={iconSize}
         height={iconSize}
-        stroke="var(--color-marble-500, #8a8374)"
+        stroke={dim.color}
         strokeWidth={1.5}
         aria-label={dim.label}
         role="img"

@@ -367,11 +367,16 @@ export function FullLeaderboard({ filter }: { filter?: EloFilter } = {}) {
           <CivIcon icon={Swords} color={CIV6_COLORS.military} size="sm" />
           Model Profiles
         </h2>
-        <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wider text-marble-500">
+        <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-wider">
           {SCORE_DIMS.map((d) => {
             const Icon = d.icon;
             return (
-              <span key={d.key} className="inline-flex items-center gap-0.5" title={d.label}>
+              <span
+                key={d.key}
+                className="inline-flex items-center gap-0.5"
+                title={d.label}
+                style={{ color: d.color }}
+              >
                 <Icon className="h-3 w-3" aria-hidden="true" />
                 <span>{d.label}</span>
               </span>
