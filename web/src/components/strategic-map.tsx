@@ -138,7 +138,7 @@ function MapRenderer({ gameId, mapData, spatialMap, spatialTurns }: {
 
   const [currentTurn, setCurrentTurn] = useState(mapData.maxTurn);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(0);
+  const [speed, setSpeed] = useState(3);
   const animRef = useRef(0);
   const lastFrameRef = useRef(0);
   const hexSize = 6; // fixed base hex size — zoom handles magnification
