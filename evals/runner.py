@@ -39,6 +39,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -230,6 +231,20 @@ def _build_diary_summary(diary_glob: str = "diary_*.jsonl") -> str | None:
     return "\n".join(parts)
 
 
+def _find_latest_autosave() -> str | None:
+    """Find the most recent autosave for auto-resume after crash."""
+    try:
+        project_src = str(EVALS_DIR.parent / "src")
+        if project_src not in sys.path:
+            sys.path.insert(0, project_src)
+        from civ_mcp.autosave import get_latest_autosave
+
+        return get_latest_autosave()
+    except Exception as e:
+        print(f"  WARNING: Could not find autosave: {e}")
+        return None
+
+
 def _discover_run_id() -> str | None:
     """Find the run_id from the most recent diary file.
 
@@ -343,7 +358,7 @@ def run_scenario(
         "--attempt-timeout",
         "600",  # 10 min max per API call — prevents indefinite hangs
         "--max-retries",
-        "6",
+        "20",  # high count to survive transient network outages (exp backoff)
     ]
     # Azure doesn't support the OpenAI Responses API
     deployment = clean_model
@@ -509,6 +524,27 @@ def main():
                     resume_save=args.resume_save,
                     extra_args=extra if extra else None,
                 )
+
+                # Auto-resume on crash: find latest autosave and retry once.
+                # Safe from infinite loops — this block runs at most once per
+                # iteration because the resumed run_scenario is not recursive.
+                if rc != 0:
+                    latest = _find_latest_autosave()
+                    if latest:
+                        print(
+                            f"  CRASH (exit {rc}) — auto-resuming "
+                            f"from {latest}"
+                        )
+                        ensure_game_ready()
+                        rc = run_scenario(
+                            model=model,
+                            scenario=scenario,
+                            track=args.track,
+                            message_limit=args.message_limit,
+                            resume_save=latest,
+                            extra_args=extra if extra else None,
+                        )
+
                 results.append((model, scenario, rc, run_num))
                 if rc != 0:
                     print(f"  WARNING: {scenario} exited with code {rc}")
