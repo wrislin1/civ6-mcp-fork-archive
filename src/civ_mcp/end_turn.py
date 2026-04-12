@@ -1441,12 +1441,12 @@ async def execute_end_turn(gs: GameState) -> str:
             )
 
     # Take post-turn snapshot and diff
+    snap_after = None
     try:
         snap_after = await gs._take_snapshot()
         gs._last_snapshot = snap_after
     except Exception:
-        log.debug("Post-turn snapshot failed", exc_info=True)
-        return f"Turn {turn_before} -> {turn_after}"
+        log.warning("Post-turn snapshot failed — events will be limited", exc_info=True)
 
     # MCP per-turn autosave — fire-and-forget after successful turn advance.
     # On Linux (Aspyr port), Network.SaveGame silently fails for custom names.
@@ -1461,7 +1461,7 @@ async def execute_end_turn(gs: GameState) -> str:
             log.debug("MCP autosave failed for T%s", turn_after, exc_info=True)
 
     events: list[lq.TurnEvent] = []
-    if snap_before:
+    if snap_before and snap_after:
         events = gs._diff_snapshots(snap_before, snap_after)
 
     # Query active notifications
@@ -1541,7 +1541,7 @@ async def execute_end_turn(gs: GameState) -> str:
         victory_events = await _check_victory_proximity(gs)
         events.extend(victory_events)
     except Exception:
-        log.debug("Victory proximity check failed", exc_info=True)
+        log.warning("Victory proximity check failed", exc_info=True)
 
     # Every 10 turns: full victory progress snapshot
     if turn_after is not None and turn_after % 10 == 0:
