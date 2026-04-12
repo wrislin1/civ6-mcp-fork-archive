@@ -54,6 +54,10 @@ launcher-linux = [
     "Pillow>=10.0",
 ]
 launcher = ["civ6-mcp[launcher-macos]"]  # backward compat alias
+analysis = [
+    "matplotlib>=3.10.8",
+    "pandas>=2.3.3",
+]
 
 [project.urls]
 Homepage = "https://github.com/lmwilki/civ6-mcp"

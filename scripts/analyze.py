@@ -63,7 +63,7 @@ def convex_query(path: str, args: dict | None = None) -> Any:
     return data["value"]
 
 
-def _list_games() -> list[dict]:
+def _list_games() -> list[dict]:  # Public API: imported by civbench_data.py
     """Fetch all games from Convex."""
     return convex_query("diary:listGames")
 
@@ -89,20 +89,29 @@ def _games_by_model(model: str, games: list[dict]) -> list[dict]:
 _fs_cache: Any = None
 
 
-def _get_fs() -> Any:
-    """Lazy-init Azure fsspec filesystem from evals/.env credentials."""
+def _get_fs() -> Any:  # Public API: imported by civbench_data.py
+    """Lazy-init Azure fsspec filesystem.
+
+    Auth order: SAS token → connection string → account key → DefaultAzureCredential.
+    """
     global _fs_cache
     if _fs_cache is not None:
         return _fs_cache
     import fsspec
 
     env = _load_env()
-    # Try connection string first, then account_name + key, then DefaultAzureCredential
+    account = env.get("AZURE_STORAGE_ACCOUNT_NAME", "civbenchstorage")
+
+    # SAS token (read-only collaborator access)
+    sas = os.environ.get("AZURE_SAS_TOKEN") or env.get("AZURE_SAS_TOKEN", "")
+    if sas:
+        _fs_cache = fsspec.filesystem("az", account_name=account, sas_token=sas)
+        return _fs_cache
+
     conn_str = env.get("AZURE_STORAGE_CONNECTION_STRING", "")
     if conn_str:
         _fs_cache = fsspec.filesystem("az", connection_string=conn_str)
     else:
-        account = env.get("AZURE_STORAGE_ACCOUNT_NAME", "")
         key = env.get("AZURE_STORAGE_ACCOUNT_KEY", "")
         if account and key:
             _fs_cache = fsspec.filesystem("az", account_name=account, account_key=key)
@@ -113,16 +122,14 @@ def _get_fs() -> Any:
                 "az", account_name=account, credential=DefaultAzureCredential()
             )
         else:
-            print(
-                "Error: Need AZURE_STORAGE_ACCOUNT_NAME (+ KEY) or "
-                "AZURE_STORAGE_CONNECTION_STRING in evals/.env",
-                file=sys.stderr,
+            raise RuntimeError(
+                "No Azure credentials found. Set AZURE_SAS_TOKEN in .env "
+                "or AZURE_STORAGE_ACCOUNT_KEY in evals/.env"
             )
-            sys.exit(1)
     return _fs_cache
 
 
-def _cloud_jsonl(run_id: str, filename: str) -> list[dict]:
+def _cloud_jsonl(run_id: str, filename: str) -> list[dict]:  # Public API: imported by civbench_data.py
     """Fetch and cache a JSONL file from Azure blob storage."""
     CACHE_DIR.mkdir(exist_ok=True)
     cache_path = CACHE_DIR / f"{filename.replace('.jsonl', '')}_{run_id}.jsonl"
@@ -1229,7 +1236,7 @@ def _diary_by_turn(diary: list[dict]) -> dict[int, list[dict]]:
     return by_turn
 
 
-def _agent_rows(diary: list[dict]) -> list[dict]:
+def _agent_rows(diary: list[dict]) -> list[dict]:  # Public API: imported by civbench_data.py
     """Extract agent-only rows, one per turn (last entry wins)."""
     by_turn: dict[int, dict] = {}
     for row in diary:
@@ -1650,7 +1657,7 @@ def score_coherence(diary: list[dict], log: list[dict]) -> dict:
                 nearby = [
                     e
                     for e in tool_calls
-                    if e.get("tool") in tools and abs(e.get("turn", 0) - turn) <= 5
+                    if e.get("tool") in tools and abs((e.get("turn") or 0) - turn) <= 5
                 ]
                 if nearby:
                     follow_throughs += 1

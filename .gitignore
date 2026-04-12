@@ -27,6 +27,8 @@ web/.env.local
 web/.env.dev
 web/.env.prod
 evals/.env
+civbench_sas_token.txt
+notebooks/.env
 
 # Paper (LaTeX source, figures, build artifacts — kept locally)
 docs/paper/
