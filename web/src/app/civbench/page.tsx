@@ -45,6 +45,12 @@ function DifficultyBadge({ difficulty }: { difficulty: string }) {
   );
 }
 
+const SCENARIO_STATUS: Record<string, { label: string; color: string }> = {
+  ground_control: { label: "Active", color: "#6B9F78" },
+  snowflake: { label: "In Progress", color: "#D4853B" },
+  cry_havoc: { label: "Planned", color: "#7A7269" },
+};
+
 function ScenarioCard({
   scenario,
   gameCount,
@@ -55,6 +61,7 @@ function ScenarioCard({
   const diffMeta = DIFFICULTY_META[scenario.difficulty];
   const accentColor = diffMeta?.color ?? "#7A7269";
   const civColors = getCivColors(scenario.civilization);
+  const status = SCENARIO_STATUS[scenario.id];
 
   return (
     <div className="flex items-stretch gap-0 rounded-sm border border-marble-300/50 bg-marble-50">
@@ -63,7 +70,7 @@ function ScenarioCard({
         style={{ backgroundColor: accentColor }}
       />
       <div className="flex-1 px-4 py-3.5 space-y-3">
-        {/* Header: letter + name + difficulty */}
+        {/* Header: letter + name + status + difficulty */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-mono text-sm tabular-nums text-marble-400">
@@ -72,6 +79,17 @@ function ScenarioCard({
             <span className="font-display text-sm font-bold uppercase tracking-[0.08em] text-marble-800">
               {scenario.name}
             </span>
+            {status && (
+              <span
+                className="rounded-sm px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                style={{
+                  color: status.color,
+                  backgroundColor: `${status.color}18`,
+                }}
+              >
+                {status.label}
+              </span>
+            )}
           </div>
           <DifficultyBadge difficulty={scenario.difficulty} />
         </div>
@@ -183,108 +201,14 @@ export default function CivBenchPage() {
             CivBench
           </h1>
           <p className="mt-3 text-base leading-relaxed text-marble-600 max-w-2xl">
-            A benchmark for evaluating LLM agents in Civilization VI. Five
-            scenarios test specific blind spots in agent perception &mdash;
-            from tempo awareness to military threat detection &mdash; at
-            escalating difficulty levels. ELO ratings reflect competitive
-            performance across completed games.
+            A benchmark for evaluating LLM agents in Civilization VI. Three
+            scenarios at escalating difficulty test specific blind spots
+            in agent perception. Models are scored across eight dimensions
+            and ranked by ELO from completed games.
           </p>
 
-          {/* How it works */}
+          {/* Leaderboard (primary content) */}
           <div className="mt-8 border-t border-marble-300/50 pt-8">
-            <h2 className="font-display text-sm font-bold uppercase tracking-[0.08em] text-marble-500">
-              How It Works
-            </h2>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
-                <div className="flex items-center gap-2">
-                  <CivIcon
-                    icon={Swords}
-                    color={CIV6_COLORS.military}
-                    size="sm"
-                  />
-                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
-                    Play
-                  </h3>
-                </div>
-                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
-                  An LLM agent plays a full game of Civ VI via the MCP server,
-                  controlling a civilization from the Ancient Era onward.
-                </p>
-              </div>
-              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
-                <div className="flex items-center gap-2">
-                  <CivIcon
-                    icon={ScrollText}
-                    color={CIV6_COLORS.goldMetal}
-                    size="sm"
-                  />
-                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
-                    Record
-                  </h3>
-                </div>
-                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
-                  Every turn is logged &mdash; game state, agent reflections,
-                  tool calls, and outcomes are stored as browsable diaries.
-                </p>
-              </div>
-              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
-                <div className="flex items-center gap-2">
-                  <CivIcon
-                    icon={BarChart3}
-                    color={CIV6_COLORS.science}
-                    size="sm"
-                  />
-                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
-                    Rate
-                  </h3>
-                </div>
-                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
-                  Game results feed an ELO system. Models gain or lose rating
-                  based on victories and defeats against the AI opponent.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Scenarios */}
-          <div className="mt-10 border-t border-marble-300/50 pt-8">
-            <h2 className="font-display text-sm font-bold uppercase tracking-[0.08em] text-marble-500">
-              Scenarios
-            </h2>
-            <p className="mt-2 text-base leading-relaxed text-marble-600 max-w-2xl">
-              Five benchmark scenarios ordered by difficulty, each isolating
-              a specific blind spot in agent perception. Every model plays
-              the exact same map per scenario for controlled comparison.
-            </p>
-            <div className="mt-5 space-y-3">
-              {SCENARIO_LIST.map((scenario) => (
-                <ScenarioCard
-                  key={scenario.id}
-                  scenario={scenario}
-                  gameCount={scenarioGameCounts[scenario.id] ?? 0}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Quick links */}
-          <div className="mt-6 flex gap-3">
-            <Link
-              href="/games"
-              className="inline-flex items-center gap-2 rounded-sm border border-marble-400 bg-marble-100 px-4 py-2 text-sm font-medium text-marble-700 transition-colors hover:border-marble-500 hover:bg-marble-200"
-            >
-              <CivIcon
-                icon={ScrollText}
-                color={CIV6_COLORS.goldMetal}
-                size="sm"
-              />
-              Browse Games
-            </Link>
-          </div>
-
-          {/* Leaderboard */}
-          <div className="mt-10 border-t border-marble-300/50 pt-8">
             {/* Filter bar */}
             <div className="mb-4 flex flex-wrap items-center gap-2">
               {/* Scenario chips */}
@@ -332,6 +256,102 @@ export default function CivBenchPage() {
             </div>
 
             <FullLeaderboard filter={eloFilter} />
+          </div>
+
+          {/* How it works */}
+          <div className="mt-10 border-t border-marble-300/50 pt-8">
+            <h2 className="font-display text-sm font-bold uppercase tracking-[0.08em] text-marble-500">
+              How It Works
+            </h2>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
+                <div className="flex items-center gap-2">
+                  <CivIcon
+                    icon={Swords}
+                    color={CIV6_COLORS.military}
+                    size="sm"
+                  />
+                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
+                    Play
+                  </h3>
+                </div>
+                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
+                  An LLM agent plays a full game of Civ VI through an MCP
+                  server, controlling a civilization from the Ancient Era
+                  through to victory or defeat.
+                </p>
+              </div>
+              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
+                <div className="flex items-center gap-2">
+                  <CivIcon
+                    icon={ScrollText}
+                    color={CIV6_COLORS.goldMetal}
+                    size="sm"
+                  />
+                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
+                    Record
+                  </h3>
+                </div>
+                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
+                  Every turn is logged: game state snapshots, agent
+                  reflections, tool calls, and strategic decisions are
+                  stored as browsable diaries.
+                </p>
+              </div>
+              <div className="rounded-sm border border-marble-300/50 bg-marble-50 p-3">
+                <div className="flex items-center gap-2">
+                  <CivIcon
+                    icon={BarChart3}
+                    color={CIV6_COLORS.science}
+                    size="sm"
+                  />
+                  <h3 className="font-display text-xs font-bold uppercase tracking-[0.08em] text-marble-700">
+                    Rate
+                  </h3>
+                </div>
+                <p className="mt-1.5 text-sm leading-relaxed text-marble-600">
+                  Games are scored across eight dimensions and feed an
+                  ELO system. Models gain or lose rating based on
+                  performance against Civ VI&apos;s AI opponents.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Scenarios */}
+          <div className="mt-10 border-t border-marble-300/50 pt-8">
+            <h2 className="font-display text-sm font-bold uppercase tracking-[0.08em] text-marble-500">
+              Scenarios
+            </h2>
+            <p className="mt-2 text-base leading-relaxed text-marble-600 max-w-2xl">
+              Three scenarios ordered by difficulty, each isolating a
+              specific blind spot in agent perception. Every model plays
+              the same map seed per scenario for controlled comparison.
+            </p>
+            <div className="mt-5 space-y-3">
+              {SCENARIO_LIST.map((scenario) => (
+                <ScenarioCard
+                  key={scenario.id}
+                  scenario={scenario}
+                  gameCount={scenarioGameCounts[scenario.id] ?? 0}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Quick links */}
+          <div className="mt-6 flex gap-3">
+            <Link
+              href="/games"
+              className="inline-flex items-center gap-2 rounded-sm border border-marble-400 bg-marble-100 px-4 py-2 text-sm font-medium text-marble-700 transition-colors hover:border-marble-500 hover:bg-marble-200"
+            >
+              <CivIcon
+                icon={ScrollText}
+                color={CIV6_COLORS.goldMetal}
+                size="sm"
+              />
+              Browse Games
+            </Link>
           </div>
         </div>
       </main>
