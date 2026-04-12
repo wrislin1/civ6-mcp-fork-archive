@@ -825,6 +825,43 @@ async def execute_end_turn(gs: GameState) -> str:
                                 continue
                     except Exception:
                         log.debug("Corruption check failed", exc_info=True)
+
+                    # Empty-queue detection: RequestOperation can silently
+                    # no-op, leaving cities with size==0 queues that block
+                    # turn advancement. Name them in the blocker so the
+                    # agent doesn't have to round-trip get_cities.
+                    try:
+                        empty_lines = await gs.conn.execute_write(
+                            f"local me = Game.GetLocalPlayer(); "
+                            f"local empty = {{}}; "
+                            f"for i, c in Players[me]:GetCities():Members() do "
+                            f"  local bq = c:GetBuildQueue(); "
+                            f"  if bq:GetSize() == 0 then "
+                            f'    table.insert(empty, Locale.Lookup(c:GetName()) .. " (id:" .. c:GetID() .. ")") '
+                            f"  end "
+                            f"end; "
+                            f"if #empty > 0 then "
+                            f'  print("EMPTY|" .. table.concat(empty, ", ")) '
+                            f'else print("CLEAN") end; '
+                            f'print("{lq.SENTINEL}")'
+                        )
+                        empty_cities = next(
+                            (
+                                el.split("|", 1)[1]
+                                for el in empty_lines
+                                if el.startswith("EMPTY|")
+                            ),
+                            None,
+                        )
+                        if empty_cities:
+                            blocking_msg = (
+                                f"Production — empty queue in {empty_cities}. "
+                                f"Set production with set_city_production then "
+                                f"retry end_turn."
+                            )
+                    except Exception:
+                        log.debug("Empty-queue check failed", exc_info=True)
+
                     hard_blockers.append((blocking_type, blocking_msg))
                     continue
 

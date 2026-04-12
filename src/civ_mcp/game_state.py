@@ -656,6 +656,29 @@ class GameState:
                 log.debug("Production readback failed", exc_info=True)
                 return f"Error: CANNOT_START|{item_name} (readback failed)"
 
+        # OK-path verification. RequestOperation is fire-and-forget; even
+        # when CanStartOperation returned true it can silently no-op if the
+        # queue is in a degenerate state. Round-trip read to confirm.
+        if result.startswith("PRODUCING|"):
+            try:
+                verify_lines = await self.conn.execute_read(
+                    lq.build_verify_production(city_id, item_name)
+                )
+                if any("CONFIRMED" in vl for vl in verify_lines):
+                    return result
+                not_set = next(
+                    (vl for vl in verify_lines if vl.startswith("NOT_SET|")),
+                    "NOT_SET|unknown",
+                )
+                return (
+                    f"Error: SILENT_FAILURE|{item_name} appeared to set but "
+                    f"the game engine did not persist it ({not_set}). Retry "
+                    f"the same call, or use purchase_item to force-commit "
+                    f"with gold/faith."
+                )
+            except Exception:
+                log.debug("OK-path production verify failed", exc_info=True)
+
         return result
 
     async def purchase_item(

@@ -436,7 +436,6 @@ def build_produce_item(
 local item = GameInfo.{table_name}["{item_name}"]
 if item == nil then {_bail(f"ERR:ITEM_NOT_FOUND|{item_name}")} end
 local bq = pCity:GetBuildQueue()
-local isCorrupted = bq:GetSize() > 0 and bq:GetCurrentProductionTypeHash() == 0
 if not bq:CanProduce(item.Hash, true) then
     -- Diagnose why production is blocked
     local reason = ""
@@ -494,12 +493,11 @@ local canStart = CityManager.CanStartOperation(pCity, CityOperationTypes.BUILD, 
 local tParams = {{}}
 tParams[CityOperationTypes.{param_key}] = item.Hash
 {xy_params}
-if isCorrupted then
-    tParams[CityOperationTypes.PARAM_INSERT_MODE] = CityOperationTypes.VALUE_EXCLUSIVE
-else
-    tParams[CityOperationTypes.PARAM_INSERT_MODE] = CityOperationTypes.VALUE_REPLACE_AT
-    tParams[CityOperationTypes.PARAM_QUEUE_DESTINATION_LOCATION] = 0
-end
+-- Always EXCLUSIVE: set_city_production's contract is "replace the current
+-- build", not "queue alongside existing items". EXCLUSIVE clears the queue
+-- and writes one item, avoiding silent no-ops that hit REPLACE_AT when the
+-- queue is in a degenerate state.
+tParams[CityOperationTypes.PARAM_INSERT_MODE] = CityOperationTypes.VALUE_EXCLUSIVE
 CityManager.RequestOperation(pCity, CityOperationTypes.BUILD, tParams)
 if canStart then
     local turnsLeft = bq:GetTurnsLeft(item.Hash)
