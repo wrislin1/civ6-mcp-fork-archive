@@ -72,7 +72,7 @@ export function RecentGames() {
           <Link
             key={game.filename}
             href={`/games/${slugFromFilename(game.filename)}`}
-            className="group flex items-stretch gap-0 rounded-sm border border-marble-300/50 bg-marble-50 transition-colors hover:border-marble-400 hover:bg-marble-100"
+            className="group flex items-stretch gap-0 rounded-sm border border-marble-300/50 bg-marble-50 transition-all duration-200 hover:border-marble-400 hover:bg-marble-100 hover:-translate-y-px hover:shadow-sm"
           >
             {/* Color accent bar */}
             <div

@@ -155,7 +155,11 @@ export function OutcomeBanner({ outcome }: { outcome: GameOutcome }) {
       role="status"
       aria-label={isVictory ? `Victory: ${vt.label}` : `Defeat: ${vt.label} victory by ${outcome.winnerCiv}`}
       className="mx-auto w-full max-w-2xl animate-[banner-enter_0.4s_ease-out] rounded-sm border px-4 py-3 motion-reduce:animate-none"
-      style={{ backgroundColor: bgColor, borderColor }}
+      style={{
+        backgroundColor: bgColor,
+        borderColor,
+        ...(isVictory ? { animation: "banner-enter 0.4s ease-out, victory-glow 3s ease-in-out 0.5s infinite" } : {}),
+      }}
     >
       <div className="flex items-center gap-3">
         <CivIcon

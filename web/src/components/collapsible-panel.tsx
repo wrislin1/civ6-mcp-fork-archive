@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 
 interface CollapsiblePanelProps {
   icon: React.ReactNode;
@@ -20,6 +20,7 @@ export function CollapsiblePanel({
 }: CollapsiblePanelProps) {
   const [expanded, setExpanded] = useState(defaultOpen);
   const contentId = useId();
+  const innerRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="mx-auto mb-4 w-full max-w-2xl rounded-sm border border-marble-300/50 bg-marble-50">
@@ -34,17 +35,23 @@ export function CollapsiblePanel({
           {title}
         </span>
         {summary}
-        {expanded ? (
-          <ChevronUp className="h-3 w-3 text-marble-400" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-marble-400" />
-        )}
+        <ChevronDown
+          className={`h-3 w-3 text-marble-400 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+        />
       </button>
-      {expanded && (
-        <div id={contentId} role="region" aria-label={title} className="border-t border-marble-300/30 px-3 py-2">
-          {children}
+      <div
+        id={contentId}
+        role="region"
+        aria-label={title}
+        className="grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          <div ref={innerRef} className="border-t border-marble-300/30 px-3 py-2">
+            {children}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

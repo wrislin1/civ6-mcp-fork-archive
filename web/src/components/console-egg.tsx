@@ -8,6 +8,13 @@ const QUOTES = [
   ["I know not with what weapons World War III will be fought, but World War IV will be fought with sticks and stones.", "Albert Einstein"],
   ["The only thing new in the world is the history you don't know.", "Harry S. Truman"],
   ["In the midst of chaos, there is also opportunity.", "Sun Tzu"],
+  ["The map is not the territory.", "Alfred Korzybski"],
+  ["All models are wrong, but some are useful.", "George E. P. Box"],
+  ["The best time to plant a tree was twenty years ago. The second best time is now.", "Chinese Proverb"],
+  ["Victorious warriors win first and then go to war, while defeated warriors go to war first and then seek to win.", "Sun Tzu"],
+  ["It is a capital mistake to theorize before one has data.", "Arthur Conan Doyle"],
+  ["The real problem is not whether machines think but whether men do.", "B. F. Skinner"],
+  ["Strategy without tactics is the slowest route to victory. Tactics without strategy is the noise before defeat.", "Sun Tzu"],
 ];
 
 export function ConsoleEgg() {

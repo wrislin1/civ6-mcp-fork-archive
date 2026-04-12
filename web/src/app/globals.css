@@ -289,6 +289,24 @@ input[type="range"].turn-slider::-moz-range-thumb:hover {
   }
 }
 
+/* Victory glow pulse */
+@keyframes victory-glow {
+  0%, 100% { box-shadow: 0 0 16px rgba(61, 139, 110, 0.08); }
+  50% { box-shadow: 0 0 24px rgba(61, 139, 110, 0.2); }
+}
+
+/* Skeleton shimmer sweep */
+@keyframes skeleton-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+/* Fade-in utility */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Marble noise texture overlay — applied to body */
 body::before {
   content: "";
