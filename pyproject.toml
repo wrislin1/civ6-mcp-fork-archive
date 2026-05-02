@@ -58,6 +58,14 @@ analysis = [
     "matplotlib>=3.10.8",
     "pandas>=2.3.3",
 ]
+publish = [
+    "fsspec>=2024.6",
+    "adlfs>=2024.7",
+    "pyarrow>=18.0",
+    "huggingface-hub>=1.13",
+    "mlcroissant>=1.1",
+    "httpx>=0.28",
+]
 
 [project.urls]
 Homepage = "https://github.com/lmwilki/civ6-mcp"
