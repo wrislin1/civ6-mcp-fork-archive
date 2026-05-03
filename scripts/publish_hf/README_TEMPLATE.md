@@ -1,6 +1,6 @@
 ---
 license: cc-by-4.0
-pretty_name: civ6-mcp Benchmark
+pretty_name: CivBench
 size_categories:
   - 1K<n<10K
 task_categories:
@@ -31,12 +31,12 @@ configs:
         path: raw/runs/*/diary.jsonl
 ---
 
-# civ6-mcp Benchmark
+# CivBench
 
-A benchmark of LLM agents playing full games of Civilization VI through the
-[civ6-mcp](https://github.com/lmwilki/civ6-mcp) MCP server. Each run captures
-the full per-turn game state, every tool call the agent issued, and the
-agent's own structured reflections.
+A benchmark of LLM agents playing full games of Civilization VI through an
+MCP (Model Context Protocol) server. Each run captures the full per-turn
+game state, every tool call the agent issued, and the agent's own
+structured reflections.
 
 ## Configs
 
@@ -66,9 +66,8 @@ launch). Filter to `admissible == True` for the canonical leaderboard cut.
 ## Citation
 
 ```bibtex
-@misc{civ6mcp,
-  title={civ6-mcp: A Civilization VI benchmark for LLM agents},
-  author={Wilkinson, Liam},
+@misc{civbench2026,
+  title={CivBench: A Civilization VI benchmark for LLM agents},
   year={2026},
   url={https://huggingface.co/datasets/<repo>}
 }

@@ -54,6 +54,19 @@ def _read_manifest(run_dir: Path) -> dict | None:
         return None
 
 
+# Fields that could deanonymize the submission (git SHAs link to the repo,
+# agent_client* identifies the MCP server package name).
+_REDACT_FIELDS = {
+    "mcp_git_sha", "mcp_git_describe", "mcp_version",
+    "agent_client", "agent_client_ver",
+}
+
+
+def _redact_row(row: dict) -> dict:
+    """Remove fields that could deanonymize the submission."""
+    return {k: v for k, v in row.items() if k not in _REDACT_FIELDS}
+
+
 def _stringify_complex(rows: list[dict]) -> list[dict]:
     """Coerce nested dict/list values to JSON strings for stable parquet schema.
 
@@ -98,7 +111,7 @@ def _build_per_row_tables(raw_runs_dir: Path, out_dir: Path) -> dict[str, int]:
             for row in _iter_jsonl(path):
                 row.setdefault("gameId", game_id)
                 row.setdefault("runId", run_id)
-                counts[table_name].append(row)
+                counts[table_name].append(_redact_row(row))
 
     for table_name, rows in counts.items():
         _write_parquet(rows, out_dir / f"{table_name}.parquet")
@@ -133,8 +146,7 @@ def _build_games_table(staging: Path, out_dir: Path, raw_runs_dir: Path) -> int:
                     "civ": m.get("civ"),
                     "seed": str(m.get("seed")),
                     "startTs": m.get("start_ts"),
-                    "mcpVersion": m.get("mcp_version"),
-                    "mcpGitSha": m.get("git_sha"),
+                    # mcpVersion and mcpGitSha redacted for anonymous submission
                     "agentModel": meta.get("model_id"),
                     "scenarioId": meta.get("scenario_id"),
                     "difficulty": meta.get("difficulty"),

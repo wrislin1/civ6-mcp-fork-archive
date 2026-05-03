@@ -36,7 +36,7 @@ def run(staging: Path) -> int:
         for path in sorted(root.rglob("*")):
             if not path.is_file():
                 continue
-            rel = str(path.relative_to(staging))
+            rel = path.relative_to(staging).as_posix()
             hashes[rel] = {"sha256": _sha256(path), "size": path.stat().st_size}
             log.info("hashed %s", rel)
 

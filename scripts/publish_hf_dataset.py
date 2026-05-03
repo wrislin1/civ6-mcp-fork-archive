@@ -144,7 +144,7 @@ def main() -> int:
     sub.add_parser("hash", help="Stage 3: SHA-256 everything").set_defaults(func=cmd_hash)
 
     p_cr = sub.add_parser("croissant", help="Stage 4: write croissant.json")
-    p_cr.add_argument("--repo", required=True, help="HF repo id, e.g. lmwilki/civ6-mcp-bench")
+    p_cr.add_argument("--repo", required=True, help="HF repo id, e.g. civbench/civbench-v1")
     p_cr.add_argument("--version", default="1.0.0")
     p_cr.set_defaults(func=cmd_croissant)
 
