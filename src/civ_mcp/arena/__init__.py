@@ -1,1 +1,1 @@
-from civ_mcp.arena.coordinator import run_arena  # noqa: F401
+"""Civ Arena: orchestrate LLM-driven Civ 6 opponents via single-player puppeteering."""
