@@ -51,14 +51,20 @@ def build_restore_local_lua(pid: int) -> str:
     return (f'pcall(function() PlayerManager.SetLocalPlayerAndObserver({pid}) end) '
             f'print("LOCAL|" .. tostring(Game.GetLocalPlayer())) print("---END---")')
 
+def _to_int(v, default=-1):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
 def parse_poll(lines: list[str]) -> PuppetState:
     d = {ln.split("|", 1)[0]: ln.split("|", 1)[1] for ln in lines if "|" in ln}
     last = d.get("LAST")
     return PuppetState(
-        local=int(d.get("LOCAL", "-1")),
-        turn=int(d.get("TURN", "-1")),
+        local=_to_int(d.get("LOCAL")),
+        turn=_to_int(d.get("TURN")),
         active=(d.get("ACTIVE") == "true"),
-        last=(int(last) if (last not in (None, "nil")) else None),
+        last=(_to_int(last, None) if (last not in (None, "nil")) else None),
     )
 
 # All switch/unit ops are GameCore (execute_read); see Global Constraints.

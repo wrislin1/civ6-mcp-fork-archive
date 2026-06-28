@@ -27,7 +27,12 @@ async def run_arena(conn, gs, config, policy=None) -> dict:
             if st.active and st.local in puppet_ids:
                 result = await policy(gs, st.local, st.turn)
                 log.append({"player": st.local, "turn": st.turn, **result})
-                # End this puppet's turn: clear its units, hand control back to the human.
+                # End this puppet's turn and hand control back toward the human.
+                # DESIGN NOTE — the turn-end method is validated by the live dry-run gate (Task 9).
+                # Primary (verified in the feasibility spike): finish_units(K) + restore_local(0).
+                # If the live gate shows the engine does NOT advance / hand back cleanly, add an
+                # InGame `UI.RequestAction(ActionTypes.ACTION_ENDTURN)` HERE — while local == K,
+                # before restore_local. NEVER add it in the finally block (local is already 0 there).
                 await hook.finish_units(conn, st.local)
                 await hook.restore_local(conn, 0)
                 played += 1
@@ -37,10 +42,14 @@ async def run_arena(conn, gs, config, policy=None) -> dict:
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}
     finally:
-        await hook.disable(conn)
-        await hook.restore_local(conn, 0)
-        # DESIGN NOTE — turn-end method is the thing the dry-run gate (Task 9) validates. Primary:
-        # `finish_units(K)` + `restore_local(0)` (matches the verified hold-release). If the live
-        # dry-run shows the engine does NOT cleanly advance/hand back (e.g., it waits for an explicit
-        # end-turn), add an InGame `UI.RequestAction(ActionTypes.ACTION_ENDTURN)` *before*
-        # `restore_local`, executed while `local==K`. Do not add it speculatively — let the gate decide.
+        # Human safety invariant: ALWAYS hand control back. Restore the human FIRST, and
+        # guard each step independently so a failure in one still runs the other — must hold
+        # on success, exception, and KeyboardInterrupt.
+        try:
+            await hook.restore_local(conn, 0)
+        except Exception:
+            pass
+        try:
+            await hook.disable(conn)
+        except Exception:
+            pass
