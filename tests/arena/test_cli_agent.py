@@ -13,6 +13,13 @@ def test_claude_argv_contains_mcp_and_safety():
     # restrict to civ6 tools and forbid ending the turn (host ends it)
     assert "--allowedTools" in argv and "mcp__civ6" in " ".join(argv)
     assert "--disallowedTools" in argv and "mcp__civ6__end_turn" in " ".join(argv)
+    # deny destructive game-lifecycle tools — these must never be callable by the CLI agent
+    assert "mcp__civ6__kill_game" in " ".join(argv)
+    assert "mcp__civ6__load_game_save" in " ".join(argv)
+    assert "mcp__civ6__restart_and_load" in " ".join(argv)
+    assert "mcp__civ6__load_save" in " ".join(argv)
+    assert "mcp__civ6__load_save_from_menu" in " ".join(argv)
+    assert "mcp__civ6__launch_game" in " ".join(argv)
     # the prompt names the seat
     assert any("player 2" in a for a in argv)
 

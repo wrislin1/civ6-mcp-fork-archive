@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import sys
 from civ_mcp.arena import hook
 
 class ScriptedPolicy:
@@ -56,13 +57,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
         try:
             if not conn.is_connected:
                 await conn.connect()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[arena] WARNING: reconnect for restore failed in cleanup: {e!r}", file=sys.stderr)
         try:
             await hook.restore_local(conn, 0)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[arena] WARNING: restore_local(0) failed in cleanup: {e!r}", file=sys.stderr)
         try:
             await hook.disable(conn)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[arena] WARNING: hook.disable failed in cleanup: {e!r}", file=sys.stderr)

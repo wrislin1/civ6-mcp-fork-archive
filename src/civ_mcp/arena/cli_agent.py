@@ -1,6 +1,18 @@
 from __future__ import annotations
 import asyncio, json
 
+# The host ends turns and manages the game lifecycle — the CLI civ must never end the turn
+# or kill/reload the live game. Denied even under bypassPermissions.
+_DENIED_CIV6_TOOLS = [
+    "mcp__civ6__end_turn",
+    "mcp__civ6__kill_game",
+    "mcp__civ6__load_game_save",
+    "mcp__civ6__restart_and_load",
+    "mcp__civ6__load_save",
+    "mcp__civ6__load_save_from_menu",
+    "mcp__civ6__launch_game",
+]
+
 _PROMPT = (
     "You are playing player {pid} (an AI civ) in the running Civilization VI game; it is "
     "turn {turn} and YOU are currently the active player. Use the civ6 tools to observe your "
@@ -22,7 +34,7 @@ class CLIAgentPolicy:
             argv = ["claude", "-p", prompt, "--output-format", "json",
                     "--permission-mode", "bypassPermissions",
                     "--allowedTools", "mcp__civ6",
-                    "--disallowedTools", "mcp__civ6__end_turn",
+                    "--disallowedTools", " ".join(_DENIED_CIV6_TOOLS),
                     "--max-turns", str(self.max_turns)]
             if self.model:
                 argv += ["--model", self.model]
@@ -61,6 +73,7 @@ class CLIAgentPolicy:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
             return {"summary": f"cli timeout after {self.timeout_s}s", "actions": [], "usage": {}}
         stdout = out.decode("utf-8", "replace")
         summary, pt, ct, usd = self._parse_claude(stdout)
