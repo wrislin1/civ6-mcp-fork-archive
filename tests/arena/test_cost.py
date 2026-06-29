@@ -13,3 +13,11 @@ def test_record_and_summary(tmp_path):
     s = log.summary()
     assert s["by_player"][1]["prompt_tokens"] == 100
     assert s["total_usd"] == 0.0
+
+def test_usd_override(tmp_path):
+    log = CostLog(str(tmp_path / "c.jsonl"))
+    log.record(player_id=2, model="claude", provider="cli-claude",
+               prompt_tokens=1000, completion_tokens=200, turn=3, usd=0.0123)
+    s = log.summary()
+    assert s["by_player"][2]["usd"] == 0.0123
+    assert s["total_usd"] == 0.0123

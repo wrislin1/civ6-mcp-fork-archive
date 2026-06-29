@@ -14,11 +14,11 @@ class CostLog:
         pin, pout = PRICES.get(provider, (0.0, 0.0))
         return round(pt / 1000 * pin + ct / 1000 * pout, 6)
 
-    def record(self, player_id, model, provider, prompt_tokens, completion_tokens, turn):
+    def record(self, player_id, model, provider, prompt_tokens, completion_tokens, turn, usd=None):
         rec = {
             "turn": turn, "player_id": player_id, "provider": provider, "model": model,
             "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-            "usd": self._usd(provider, model, prompt_tokens, completion_tokens),
+            "usd": self._usd(provider, model, prompt_tokens, completion_tokens) if usd is None else round(float(usd), 6),
         }
         self._records.append(rec)
         with open(self.path, "a") as f:
