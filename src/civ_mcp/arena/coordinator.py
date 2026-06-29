@@ -13,9 +13,11 @@ class ScriptedPolicy:
             return {"summary": f"scripted: skip failed {e!r}", "actions": []}
         return {"summary": "scripted: observed + skipped unit 0", "actions": [{"tool": "skip_unit"}]}
 
-async def run_arena(conn, gs, config, policy=None) -> dict:
-    if policy is None:
-        raise ValueError("run_arena needs a policy (ScriptedPolicy or LLMPolicy)")
+async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
+    if policy_for is None:
+        if policy is None:
+            raise ValueError("run_arena needs policy or policy_for")
+        policy_for = lambda _pid: policy
     puppet_ids = set(config.puppet_ids or [p.player_id for p in config.players])
     played, log = 0, []
     try:
@@ -25,8 +27,14 @@ async def run_arena(conn, gs, config, policy=None) -> dict:
         while remaining > 0 and deadline_polls > 0:
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
-                result = await policy(gs, st.local, st.turn)
+                pol = policy_for(st.local)
+                exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
+                if exclusive and conn.is_connected:
+                    await conn.disconnect()       # free the single tuner slot for the CLI
+                result = await pol(gs, st.local, st.turn)
                 log.append({"player": st.local, "turn": st.turn, **result})
+                if exclusive and not conn.is_connected:
+                    await conn.connect()          # reclaim before we end the turn
                 # End this puppet's turn and hand control back toward the human.
                 # DESIGN NOTE — the turn-end method is validated by the live dry-run gate (Task 9).
                 # Primary (verified in the feasibility spike): finish_units(K) + restore_local(0).
@@ -42,9 +50,14 @@ async def run_arena(conn, gs, config, policy=None) -> dict:
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}
     finally:
-        # Human safety invariant: ALWAYS hand control back. Restore the human FIRST, and
-        # guard each step independently so a failure in one still runs the other — must hold
-        # on success, exception, and KeyboardInterrupt.
+        # Human safety invariant: ALWAYS hand control back. Reclaim a released connection first,
+        # then restore the human, then disable — guard each step independently so a failure in
+        # one still runs the others. Must hold on success, exception, and KeyboardInterrupt.
+        try:
+            if not conn.is_connected:
+                await conn.connect()
+        except Exception:
+            pass
         try:
             await hook.restore_local(conn, 0)
         except Exception:

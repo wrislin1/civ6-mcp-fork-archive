@@ -6,10 +6,15 @@ class FakeConn:
     """Serves canned GameCore reads by matching key substrings in the Lua."""
     def __init__(self):
         self.restored = False
+        self._connected = True            # NEW
         self._polls = iter([
             ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],   # human turn
             ["LOCAL|1", "TURN|2", "ACTIVE|true", "LAST|1"],      # puppet held
         ])
+    @property                              # NEW
+    def is_connected(self): return self._connected
+    async def connect(self): self._connected = True      # NEW
+    async def disconnect(self): self._connected = False  # NEW
     async def execute_read(self, lua, timeout=5.0):
         if "GetCurrentGameTurn" in lua and "GetLocalPlayer" in lua and "ACTIVE" in lua:
             try: return next(self._polls)
