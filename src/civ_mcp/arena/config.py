@@ -1,18 +1,28 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+_CLI_PROVIDERS = {"cli-claude"}
+_VALID_PROVIDERS = {"local"} | _CLI_PROVIDERS
+
 @dataclass(frozen=True)
 class PlayerSpec:
     player_id: int
-    provider: str  # "local" | "anthropic" | "openai"
+    provider: str  # "local" | "cli-claude"
     model: str
 
+    def driver_kind(self) -> str:
+        return "cli" if self.provider in _CLI_PROVIDERS else "in_process"
+
 def parse_player_spec(s: str) -> PlayerSpec:
-    # "1:local:qwen3-coder-30b"
+    # "1:local:qwen3-coder:30b" or "2:cli-claude:"
     parts = s.split(":", 2)
     if len(parts) != 3:
         raise ValueError(f"bad --player spec {s!r}; want '<id>:<provider>:<model>'")
     pid, provider, model = parts
+    if provider not in _VALID_PROVIDERS:
+        raise ValueError(
+            f"unknown provider {provider!r} in --player spec {s!r}; "
+            f"want one of {sorted(_VALID_PROVIDERS)}")
     return PlayerSpec(int(pid), provider, model)
 
 @dataclass
