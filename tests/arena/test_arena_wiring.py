@@ -26,6 +26,13 @@ def test_build_policies_routes_by_provider():
     assert backend is not None                       # an in-process backend was constructed
 
 
+def test_build_args_accepts_idle_poll_limit():
+    from civ_mcp.arena.arena import build_args
+
+    args = build_args(["--player", "1:cli-codex:gpt-5.5", "--idle-poll-limit", "12"])
+    assert args.idle_poll_limit == 12
+
+
 def test_cli_preflight_raises_when_claude_not_on_path(monkeypatch):
     """_run raises SystemExit before driving any turns if cli spec present but claude missing."""
     monkeypatch.setattr(shutil, "which", lambda name: None)

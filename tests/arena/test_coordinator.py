@@ -60,6 +60,24 @@ async def test_coordinator_runs_one_puppet_turn_and_restores():
     assert gs.ran == 1
 
 
+@pytest.mark.asyncio
+async def test_coordinator_respects_idle_poll_limit(monkeypatch):
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    conn, gs = FakeConn(), FakeGS()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+    ])
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1], idle_poll_limit=2)
+    result = await run_arena(conn, gs, cfg, policy=ScriptedPolicy())
+    assert result["puppet_turns_played"] == 0
+    poll_reads = [c for c in conn.read_calls if "GetCurrentGameTurn" in c]
+    assert len(poll_reads) == 2
+
+
 class FakeConnFlaky(FakeConn):
     """FakeConn where connect() raises on the first `fail_times` calls then succeeds."""
     def __init__(self, fail_times=1):

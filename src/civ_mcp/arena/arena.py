@@ -36,6 +36,8 @@ def build_args(argv=None):
     ap.add_argument("--api-key-env", default="LITELLM_OPENAI_API_KEY")
     ap.add_argument("--cost-path", default="arena_cost.jsonl")
     ap.add_argument("--max-agent-steps", type=int, default=6)
+    ap.add_argument("--idle-poll-limit", type=int, default=600,
+                    help="number of 1s polls to wait for puppet turns before exiting")
     ap.add_argument("--dry-run", action="store_true", help="scripted policy, no LLM")
     return ap.parse_args(argv)
 
@@ -44,6 +46,7 @@ async def _run(args):
     cfg = ArenaConfig(players=specs, max_puppet_turns=args.max_puppet_turns,
                       gateway_url=args.gateway_url, api_key_env=args.api_key_env,
                       dry_run=args.dry_run, max_agent_steps=args.max_agent_steps,
+                      idle_poll_limit=getattr(args, "idle_poll_limit", 600),
                       cost_path=args.cost_path, puppet_ids=[s.player_id for s in specs])
     cost = CostLog(cfg.cost_path)
     policies, in_proc_backend = build_policies(specs, cost, cfg)

@@ -1,9 +1,19 @@
 from __future__ import annotations
 import json
+import os
 from collections import defaultdict
 
 # USD per 1k tokens (prompt, completion). Local = free. Extend in the next plan.
 PRICES = {"local": (0.0, 0.0)}
+
+
+def _env_price(provider: str) -> tuple[float, float] | None:
+    key = provider.upper().replace("-", "_")
+    prompt = os.environ.get(f"CIV_ARENA_{key}_PROMPT_USD_PER_1K")
+    completion = os.environ.get(f"CIV_ARENA_{key}_COMPLETION_USD_PER_1K")
+    if prompt is None and completion is None:
+        return None
+    return (float(prompt or 0.0), float(completion or 0.0))
 
 class CostLog:
     def __init__(self, path: str):
@@ -11,7 +21,7 @@ class CostLog:
         self._records: list[dict] = []
 
     def _usd(self, provider, model, pt, ct) -> float:
-        pin, pout = PRICES.get(provider, (0.0, 0.0))
+        pin, pout = _env_price(provider) or PRICES.get(provider, (0.0, 0.0))
         return round(pt / 1000 * pin + ct / 1000 * pout, 6)
 
     def record(self, player_id, model, provider, prompt_tokens, completion_tokens, turn, usd=None):

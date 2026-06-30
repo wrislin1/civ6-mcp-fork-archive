@@ -38,5 +38,6 @@ class ArenaConfig:
     api_key_env: str = "LITELLM_OPENAI_API_KEY"
     dry_run: bool = False
     max_agent_steps: int = 6
+    idle_poll_limit: int = 600
     cost_path: str = "arena_cost.jsonl"
     puppet_ids: list[int] = field(default_factory=list)

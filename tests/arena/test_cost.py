@@ -21,3 +21,13 @@ def test_usd_override(tmp_path):
     s = log.summary()
     assert s["by_player"][2]["usd"] == 0.0123
     assert s["total_usd"] == 0.0123
+
+def test_cli_codex_pricing_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIV_ARENA_CLI_CODEX_PROMPT_USD_PER_1K", "0.01")
+    monkeypatch.setenv("CIV_ARENA_CLI_CODEX_COMPLETION_USD_PER_1K", "0.02")
+    log = CostLog(str(tmp_path / "codex.jsonl"))
+    log.record(player_id=2, model="gpt-5.5", provider="cli-codex",
+               prompt_tokens=2000, completion_tokens=500, turn=4)
+    s = log.summary()
+    assert s["by_player"][2]["usd"] == 0.03
+    assert s["total_usd"] == 0.03

@@ -29,3 +29,6 @@ def test_rejects_unknown_provider():
 
 def test_arena_config_gateway_url_default():
     assert ArenaConfig(players=[]).gateway_url == "http://192.168.20.196:11430/v1"
+
+def test_arena_config_idle_poll_limit_default():
+    assert ArenaConfig(players=[]).idle_poll_limit == 600

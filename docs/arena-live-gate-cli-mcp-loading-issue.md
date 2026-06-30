@@ -40,6 +40,19 @@ Live smoke on `riz@192.168.20.141`:
 - Actual `CLIAgentPolicy("cli-codex")` with an overview-only prompt returned
   `"Turn 4 for player 0."` and recorded usage for provider `cli-codex`.
 
+Clean gates:
+
+- One Codex puppet turn:
+  `uv run civ-arena --player 1:cli-codex:gpt-5.5 --max-puppet-turns 1 --idle-poll-limit 120 --cost-path arena_cost.codex.jsonl`
+- One hybrid local+Codex cycle:
+  `uv run civ-arena --player 1:local:qwen3-coder:30b --player 2:cli-codex:gpt-5.5 --max-puppet-turns 2 --idle-poll-limit 120 --cost-path arena_cost.hybrid.jsonl`
+
+Cost logging:
+
+- Codex JSON reports tokens but not USD.
+- Set `CIV_ARENA_CLI_CODEX_PROMPT_USD_PER_1K` and
+  `CIV_ARENA_CLI_CODEX_COMPLETION_USD_PER_1K` when you want dollar estimates.
+
 ## Symptom
 
 When the arena drives a civ via a headless `claude -p` subprocess (`src/civ_mcp/arena/cli_agent.py`),

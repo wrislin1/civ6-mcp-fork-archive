@@ -41,7 +41,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
     try:
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
-        deadline_polls = 600  # ~poll budget; human may take a while to end their turn
+        deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
         while remaining > 0 and deadline_polls > 0:
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
