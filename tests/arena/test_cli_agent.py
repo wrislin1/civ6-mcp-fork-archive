@@ -92,3 +92,10 @@ def test_parse_claude_usage():
                        "usage": {"input_tokens": 1000, "output_tokens": 200}})
     summary, pt, ct, usd = pol._parse_claude(blob)
     assert summary == "settled & moved" and pt == 1000 and ct == 200 and usd == 0.0123
+
+def test_parse_claude_null_fields():
+    """Test that present-but-null JSON fields are coerced to safe defaults."""
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x")
+    blob = json.dumps({"type": "result", "result": None, "usage": {"input_tokens": None, "output_tokens": None}, "total_cost_usd": None})
+    summary, pt, ct, usd = pol._parse_claude(blob)
+    assert summary == "" and pt == 0 and ct == 0 and usd == 0.0

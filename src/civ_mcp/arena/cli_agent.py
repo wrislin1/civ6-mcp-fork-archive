@@ -63,9 +63,9 @@ class CLIAgentPolicy:
             except ValueError:
                 return ("(unparseable CLI output)", 0, 0, 0.0)
         u = obj.get("usage", {}) or {}
-        return (str(obj.get("result", ""))[:500],
-                int(u.get("input_tokens", 0)), int(u.get("output_tokens", 0)),
-                float(obj.get("total_cost_usd", 0.0)))
+        return (str(obj.get("result") or "")[:500],
+                int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
+                float(obj.get("total_cost_usd") or 0.0))
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         argv = self._build_argv(player_id, turn)
