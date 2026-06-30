@@ -6,11 +6,16 @@ from civ_mcp.arena import hook
 
 async def _reconnect_with_retry(conn, attempts=5, delay=0.5):
     last = None
-    for _ in range(attempts):
+    for i in range(attempts):
         try:
+            # Close any half-open writer from a prior failed attempt before reconnecting,
+            # so repeated tries do not leak a socket/fd (connect() reassigns the writer).
+            await conn.disconnect()
             await conn.connect(); return True
         except Exception as e:
-            last = e; await asyncio.sleep(delay)
+            last = e
+            if i < attempts - 1:          # no point sleeping after the final failed attempt
+                await asyncio.sleep(delay)
     print(f"[arena] WARNING: reclaim connect failed after {attempts} attempts: {last!r}", file=sys.stderr)
     return False
 
@@ -64,24 +69,23 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
         return {"puppet_turns_played": played, "log": log}
     finally:
         # Human safety invariant: ALWAYS hand control back. Reclaim a released connection first,
-        # then restore the human, then disable — guard each step independently so a failure in
-        # one still runs the others. Must hold on success, exception, and KeyboardInterrupt.
-        # The reclaim is wrapped in BaseException (not just Exception) so asyncio.CancelledError
-        # during connect() is captured, restore_local/disable still run, then it's re-raised.
-        reclaim_exc = None
+        # then restore the human, then disable — run all three best-effort so a failure in one
+        # never skips the others. Each step is guarded against BaseException (not just Exception)
+        # so an asyncio.CancelledError mid-handback (e.g. Ctrl-C during connect/restore) cannot
+        # skip a later step; the FIRST such exception is captured and re-raised after the whole
+        # handback completes, so cancellation is propagated, never swallowed.
+        first_exc = None
+        steps = []
         if not conn.is_connected:
+            steps.append(("reclaim-retry", lambda: _reconnect_with_retry(conn)))
+        steps.append(("restore_local(0)", lambda: hook.restore_local(conn, 0)))
+        steps.append(("hook.disable", lambda: hook.disable(conn)))
+        for label, step in steps:
             try:
-                await _reconnect_with_retry(conn)
+                await step()
             except BaseException as e:
-                reclaim_exc = e
-                print(f"[arena] WARNING: reclaim-retry interrupted: {e!r}", file=sys.stderr)
-        try:
-            await hook.restore_local(conn, 0)
-        except Exception as e:
-            print(f"[arena] WARNING: restore_local(0) failed in cleanup: {e!r}", file=sys.stderr)
-        try:
-            await hook.disable(conn)
-        except Exception as e:
-            print(f"[arena] WARNING: hook.disable failed in cleanup: {e!r}", file=sys.stderr)
-        if reclaim_exc is not None:
-            raise reclaim_exc
+                if first_exc is None:
+                    first_exc = e
+                print(f"[arena] WARNING: {label} failed in cleanup: {e!r}", file=sys.stderr)
+        if first_exc is not None:
+            raise first_exc
