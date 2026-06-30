@@ -9,7 +9,7 @@ class PuppetState:
     last: int | None
 
 def build_inject_lua(puppet_ids: list[int]) -> str:
-    entries = " ".join(f"[{i}]=true" for i in puppet_ids)
+    entries = ", ".join(f"[{i}]=true" for i in puppet_ids)
     return f"""
 __pt_enabled = true
 __pt_puppets = {{ {entries} }}

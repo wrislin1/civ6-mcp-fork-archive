@@ -4,6 +4,7 @@ def test_inject_lua_contains_ids_and_switch():
     lua = build_inject_lua([1, 2])
     assert "SetLocalPlayerAndObserver" in lua
     assert "__pt_puppets" in lua and "[1]=true" in lua and "[2]=true" in lua
+    assert "__pt_puppets = { [1]=true, [2]=true }" in lua
 
 def test_parse_poll():
     lines = ["LOCAL|1", "TURN|2", "ACTIVE|true", "LAST|1"]
