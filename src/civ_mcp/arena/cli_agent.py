@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json
+import asyncio, json, os, signal
 
 # Two-layer lockdown for CLI civ security:
 # 1. --tools "" disables all host built-in tools (Bash/Write/Edit/Read)
@@ -71,11 +71,15 @@ class CLIAgentPolicy:
         argv = self._build_argv(player_id, turn)
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=self.project_dir,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=True)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
         except asyncio.TimeoutError:
-            proc.kill()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
             await proc.wait()
             return {"summary": f"cli timeout after {self.timeout_s}s", "actions": [], "usage": {}}
         stdout = out.decode("utf-8", "replace")

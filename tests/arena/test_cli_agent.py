@@ -1,4 +1,8 @@
+import asyncio
 import json
+import os
+import signal
+
 from civ_mcp.arena.cli_agent import CLIAgentPolicy
 
 class FakeCost:
@@ -36,6 +40,50 @@ def test_host_tools_disabled_and_civ6_denylist():
     denied_list = argv[denied_idx + 1]
     assert "mcp__civ6__end_turn" in denied_list
     assert "mcp__civ6__kill_game" in denied_list
+
+def test_timeout_kills_process_group(monkeypatch):
+    """Timeout must kill the whole process group to free port 4318 (MCP grandchild)."""
+    kills_fallback = []
+
+    class FakeProc:
+        pid = 12345
+        returncode = -9
+
+        async def communicate(self):
+            await asyncio.sleep(10)  # blocks long enough for wait_for to time out
+
+        async def wait(self):
+            pass  # async no-op — proc already dead
+
+        def kill(self):
+            kills_fallback.append("kill")
+
+    create_calls = []
+
+    async def fake_create(*args, **kwargs):
+        create_calls.append(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    getpgid_calls = []
+    killpg_calls = []
+
+    monkeypatch.setattr(os, "getpgid", lambda pid: (getpgid_calls.append(pid) or 99999))
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=0.01)
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+
+    # The timeout dict must match exactly
+    assert result == {"summary": "cli timeout after 0.01s", "actions": [], "usage": {}}
+    # subprocess must have been started with start_new_session=True
+    assert create_calls and create_calls[0].get("start_new_session") is True
+    # process-group kill must have been attempted, not the fallback proc.kill()
+    assert getpgid_calls == [12345]
+    assert killpg_calls == [(99999, signal.SIGKILL)]
+    assert kills_fallback == []  # fallback must NOT have fired
+
 
 def test_parse_claude_usage():
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x")
