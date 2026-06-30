@@ -250,16 +250,17 @@ def test_per_model_series_present_and_ordered(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    assert "model-a" in report["by_model"]
-    assert "model-b" in report["by_model"]
+    # player_id=1 -> model-a, player_id=2 -> model-b
+    assert 1 in report["by_player"]
+    assert 2 in report["by_player"]
 
     # Series ordered by turn
-    a_series = report["by_model"]["model-a"]["series"]
+    a_series = report["by_player"][1]["series"]
     assert len(a_series) == 2
     assert a_series[0]["turn"] == 1
     assert a_series[1]["turn"] == 2
 
-    b_series = report["by_model"]["model-b"]["series"]
+    b_series = report["by_player"][2]["series"]
     assert len(b_series) == 2
     assert b_series[0]["turn"] == 1
     assert b_series[1]["turn"] == 2
@@ -272,7 +273,7 @@ def test_series_contains_expected_fields(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    row = report["by_model"]["model-a"]["series"][0]
+    row = report["by_player"][1]["series"][0]
     for field in ("turn", "score", "cities", "units", "science", "culture",
                   "prompt_tokens", "completion_tokens", "wall_clock_s", "step_count", "state_delta"):
         assert field in row, f"Missing field: {field}"
@@ -284,89 +285,89 @@ def test_series_contains_expected_fields(run_dir: Path) -> None:
 
 
 def test_invalid_call_rate_model_a(run_dir: Path) -> None:
-    """model-a: 1 invalid call across 3+2=5 steps => rate = 0.2 exactly."""
+    """model-a (player 1): 1 invalid call across 3+2=5 steps => rate = 0.2 exactly."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rates_a = report["by_model"]["model-a"]["rates"]
+    rates_a = report["by_player"][1]["rates"]
     assert rates_a["invalid_call_rate"] == pytest.approx(1 / 5)
 
 
 def test_invalid_call_rate_model_b(run_dir: Path) -> None:
-    """model-b: 1 invalid call across 2+1=3 steps => rate = 1/3."""
+    """model-b (player 2): 1 invalid call across 2+1=3 steps => rate = 1/3."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rates_b = report["by_model"]["model-b"]["rates"]
+    rates_b = report["by_player"][2]["rates"]
     assert rates_b["invalid_call_rate"] == pytest.approx(1 / 3)
 
 
 def test_truncation_incident_rate_model_a(run_dir: Path) -> None:
-    """model-a (in_process): 1 truncated step out of 3+2=5 local steps => 0.2."""
+    """model-a (player 1, in_process): 1 truncated step out of 3+2=5 local steps => 0.2."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rates_a = report["by_model"]["model-a"]["rates"]
+    rates_a = report["by_player"][1]["rates"]
     assert rates_a["truncation_incident_rate"] == pytest.approx(1 / 5)
 
 
 def test_truncation_incident_rate_model_b_zero(run_dir: Path) -> None:
-    """model-b (cli): no truncation tracking => rate 0.0."""
+    """model-b (player 2, cli): no truncation tracking => rate 0.0."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rates_b = report["by_model"]["model-b"]["rates"]
+    rates_b = report["by_player"][2]["rates"]
     assert rates_b["truncation_incident_rate"] == pytest.approx(0.0)
 
 
 def test_rubric_founded_extra_city_model_a(run_dir: Path) -> None:
-    """model-a turn 1 has state_delta.cities=1 => rubric founded_extra_city should be set."""
+    """model-a (player 1) turn 1 has state_delta.cities=1 => rubric founded_extra_city set."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_a = report["by_model"]["model-a"]["rubric"]
+    rubric_a = report["by_player"][1]["rubric"]
     assert rubric_a["founded_extra_city"] is not None
     assert rubric_a["founded_extra_city"]["turn"] == 1
 
 
 def test_rubric_hallucinated_tools_model_a(run_dir: Path) -> None:
-    """model-a turn 1 has unknown_tool invalid call => rubric hallucinated_tools set."""
+    """model-a (player 1) turn 1 has unknown_tool invalid call => rubric hallucinated_tools set."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_a = report["by_model"]["model-a"]["rubric"]
+    rubric_a = report["by_player"][1]["rubric"]
     assert rubric_a["hallucinated_tools"] is not None
     assert rubric_a["hallucinated_tools"]["turn"] == 1
     assert rubric_a["hallucinated_tools"]["tool_name"] == "fake_tool"
 
 
 def test_rubric_hallucinated_tools_model_b(run_dir: Path) -> None:
-    """model-b turn 1 has unknown_tool => rubric hallucinated_tools set."""
+    """model-b (player 2) turn 1 has unknown_tool => rubric hallucinated_tools set."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     tr = load_records(run_dir / "transcript.jsonl")
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_b = report["by_model"]["model-b"]["rubric"]
+    rubric_b = report["by_player"][2]["rubric"]
     assert rubric_b["hallucinated_tools"] is not None
     assert rubric_b["hallucinated_tools"]["tool_name"] == "bad_tool"
 
@@ -502,7 +503,7 @@ def test_token_totals_use_top_level_not_step_sum(tmp_path: Path) -> None:
     co = load_records(d / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    series = report["by_model"]["token-check-model"]["series"]
+    series = report["by_player"][1]["series"]
     assert len(series) == 1
     row = series[0]
     # Must be 100, NOT 200 (which step-sum would give)
@@ -520,25 +521,25 @@ def test_rubric_flags_contain_turn_citation(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    for model, data in report["by_model"].items():
+    for seat, data in report["by_player"].items():
         for flag, val in data["rubric"].items():
             if val is not None:
                 assert "turn" in val, (
-                    f"model={model} rubric flag={flag} is set but missing 'turn': {val}"
+                    f"seat={seat} rubric flag={flag} is set but missing 'turn': {val}"
                 )
 
 
 def test_empty_run_no_crash(tmp_path: Path) -> None:
-    """analyze() with empty inputs returns a report with empty by_model."""
+    """analyze() with empty inputs returns a report with empty by_player."""
     from civ_mcp.arena.analyze import analyze
 
     report = analyze([], [])
-    assert "by_model" in report
-    assert report["by_model"] == {}
+    assert "by_player" in report
+    assert report["by_player"] == {}
 
 
 def test_json_output_is_valid(run_dir: Path) -> None:
-    """The JSON output produced by main() must be valid JSON containing by_model."""
+    """The JSON output produced by main() must be valid JSON containing by_player."""
     from civ_mcp.arena.analyze import main
     import sys
 
@@ -554,8 +555,10 @@ def test_json_output_is_valid(run_dir: Path) -> None:
 
     json_path = run_dir / "report.json"
     data = json.loads(json_path.read_text())
-    assert "by_model" in data
-    assert "model-a" in data["by_model"]
+    assert "by_player" in data
+    # JSON serialises integer keys as strings; player_id=1 → "1"
+    assert "1" in data["by_player"]
+    assert data["by_player"]["1"]["model"] == "model-a"
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +569,7 @@ def test_json_output_is_valid(run_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_rubric_explored_vs_idle_local_vocab(run_dir: Path) -> None:
-    """model-a uses local move_unit step → explored_vs_idle fires at turn 1.
+    """model-a (player 1) uses local move_unit step → explored_vs_idle fires at turn 1.
     Would FAIL under old rubric: old code required tool_name='unit_action'+action='move'."""
     from civ_mcp.arena.analyze import load_records, analyze
 
@@ -574,7 +577,7 @@ def test_rubric_explored_vs_idle_local_vocab(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_a = report["by_model"]["model-a"]["rubric"]
+    rubric_a = report["by_player"][1]["rubric"]
     assert rubric_a["explored_vs_idle"] is not None, (
         "explored_vs_idle must fire for local move_unit step (old rubric would miss this)"
     )
@@ -583,7 +586,7 @@ def test_rubric_explored_vs_idle_local_vocab(run_dir: Path) -> None:
 
 
 def test_rubric_wasted_move_local_vocab(run_dir: Path) -> None:
-    """model-a turn 2 has move_unit with ERROR result → wasted_move fires.
+    """model-a (player 1) turn 2 has move_unit with ERROR result → wasted_move fires.
     Would FAIL under old rubric: old code required tool_name='unit_action'+action='move'."""
     from civ_mcp.arena.analyze import load_records, analyze
 
@@ -591,7 +594,7 @@ def test_rubric_wasted_move_local_vocab(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_a = report["by_model"]["model-a"]["rubric"]
+    rubric_a = report["by_player"][1]["rubric"]
     assert rubric_a["wasted_move"] is not None, (
         "wasted_move must fire for local move_unit+ERROR step (old rubric would miss this)"
     )
@@ -599,7 +602,7 @@ def test_rubric_wasted_move_local_vocab(run_dir: Path) -> None:
 
 
 def test_rubric_truncation_bad_move_local_vocab(run_dir: Path) -> None:
-    """model-a turn 1: truncated move_unit then skip_unit → truncation_bad_move fires.
+    """model-a (player 1) turn 1: truncated move_unit then skip_unit → truncation_bad_move fires.
     Would FAIL under old rubric: old code required tool_name='unit_action'+action='skip'."""
     from civ_mcp.arena.analyze import load_records, analyze
 
@@ -607,7 +610,7 @@ def test_rubric_truncation_bad_move_local_vocab(run_dir: Path) -> None:
     co = load_records(run_dir / "arena_cost.jsonl")
     report = analyze(tr, co)
 
-    rubric_a = report["by_model"]["model-a"]["rubric"]
+    rubric_a = report["by_player"][1]["rubric"]
     assert rubric_a["truncation_bad_move"] is not None, (
         "truncation_bad_move must fire for truncated step + skip_unit (old rubric would miss this)"
     )
@@ -653,7 +656,8 @@ def test_rubric_founded_extra_city_via_local_step_path(tmp_path: Path) -> None:
 
     tr = load_records(d / "transcript.jsonl")
     report = analyze(tr, [])
-    rubric = report["by_model"]["local-found"]["rubric"]
+    # player_id=1 is present in the record, so key is 1
+    rubric = report["by_player"][1]["rubric"]
     assert rubric["founded_extra_city"] is not None, (
         "founded_extra_city must fire for flat found_city tool via step path "
         "(old rubric would miss this)"
@@ -733,7 +737,8 @@ def test_rubric_cli_vocabulary_mcp_prefixed(tmp_path: Path) -> None:
 
     tr = load_records(d / "transcript.jsonl")
     report = analyze(tr, [])
-    rubric = report["by_model"]["cli-model"]["rubric"]
+    # player_id=2 is present in the record, so key is 2
+    rubric = report["by_player"][2]["rubric"]
 
     assert rubric["explored_vs_idle"] is not None, (
         "explored_vs_idle must fire for mcp__civ6__unit_action+action=move"
@@ -791,7 +796,8 @@ def test_rubric_set_research_or_production_error_result_not_counted(tmp_path: Pa
 
     tr = load_records(d / "transcript.jsonl")
     report = analyze(tr, [])
-    rubric = report["by_model"]["set-prod-model"]["rubric"]
+    # player_id=1 is present in the record, so key is 1
+    rubric = report["by_player"][1]["rubric"]
     assert rubric["set_research_or_production"] is None, (
         "Error: CANNOT_START|... must be treated as a failure and NOT set "
         "set_research_or_production (old startswith('ERROR') would miss this)"
@@ -803,7 +809,8 @@ def test_rubric_set_research_or_production_error_result_not_counted(tmp_path: Pa
 # ---------------------------------------------------------------------------
 
 def test_empty_model_falls_back_to_provider(tmp_path: Path) -> None:
-    """Model='' with provider='cli-claude' groups under 'cli-claude', not 'unknown'."""
+    """Model='' with provider='cli-claude': group key is player_id=1; provider label
+    is preserved as 'cli-claude' (not dropped or overwritten with 'unknown')."""
     from civ_mcp.arena.analyze import load_records, analyze
 
     run_id = "cli-claude-no-model"
@@ -838,10 +845,15 @@ def test_empty_model_falls_back_to_provider(tmp_path: Path) -> None:
     tr = load_records(d / "transcript.jsonl")
     report = analyze(tr, [])
 
-    assert "cli-claude" in report["by_model"], (
-        "cli-claude (empty model) must group under provider name, not 'unknown'"
+    # Grouped by player_id=1; provider label must be preserved
+    assert 1 in report["by_player"], (
+        "player_id=1 must be a key in by_player"
     )
-    assert "unknown" not in report["by_model"]
+    group = report["by_player"][1]
+    assert group["provider"] == "cli-claude", (
+        "provider label must be 'cli-claude' (not 'unknown')"
+    )
+    assert group["player_id"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -899,4 +911,42 @@ def test_load_records_skips_non_dict_lines(tmp_path: Path) -> None:
 
     # analyze must not raise AttributeError on the filtered records
     report = analyze(records, [])
-    assert "task-d-model" in report["by_model"]
+    assert 1 in report["by_player"]
+
+
+# ---------------------------------------------------------------------------
+# Task E — group by seat (player_id), not model (Finding 6)
+# ---------------------------------------------------------------------------
+
+def test_same_model_different_seat_produces_two_groups(tmp_path: Path) -> None:
+    """Two records sharing the same model but different player_id must produce
+    two distinct groups (one per seat).  FAILS today — model-only grouping
+    collapses them into one series."""
+    from civ_mcp.arena.analyze import analyze
+
+    base = {
+        "schema_version": 1, "run_id": "seat-test", "ts": "2026-01-01T00:00:00Z",
+        "turn": 1, "provider": "local", "model": "model-x",
+        "driver": "in_process", "steps": [], "invalid_tool_calls": [],
+        "wall_clock_s": 1.0, "final_summary": "r",
+        "prompt_tokens": 10, "completion_tokens": 5, "max_steps_reached": False,
+        "step_count": 0, "usd": 0.0,
+        "state_before": None, "state_after": None, "state_delta": None,
+    }
+    rec1 = {**base, "player_id": 1}
+    rec3 = {**base, "player_id": 3}
+
+    report = analyze([rec1, rec3], [])
+
+    assert "by_player" in report, "result must use 'by_player' key, not 'by_model'"
+    by_player = report["by_player"]
+    assert len(by_player) == 2, (
+        f"Expected 2 groups (one per seat), got {len(by_player)}: {list(by_player.keys())}"
+    )
+    assert 1 in by_player, "seat 1 must be a key"
+    assert 3 in by_player, "seat 3 must be a key"
+    # Labels must be present on each group
+    assert by_player[1]["player_id"] == 1
+    assert by_player[1]["model"] == "model-x"
+    assert by_player[3]["player_id"] == 3
+    assert by_player[3]["model"] == "model-x"

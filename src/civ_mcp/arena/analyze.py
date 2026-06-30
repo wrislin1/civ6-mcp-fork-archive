@@ -245,28 +245,45 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
     dict with shape::
 
         {
-          "by_model": {
-            "<model>": {
+          "by_player": {
+            <player_id or model-fallback>: {
+              "player_id": <int | None>,
+              "model": <str>,
+              "provider": <str | None>,
               "series": [...],
               "rates": {"invalid_call_rate": float, "truncation_incident_rate": float},
               "rubric": {...}
             }
           }
         }
+
+    Grouping key is ``player_id`` when present; falls back to
+    ``model or provider or "unknown"`` for forward-compat with older records
+    that lack ``player_id``.
     """
-    # Group by model, preserve insertion order within groups
-    by_model: dict[str, list[dict]] = defaultdict(list)
+    # Group by seat (player_id), falling back to model identity for older records
+    by_player: dict = defaultdict(list)
+    # Capture identity labels from the first record seen per group
+    group_labels: dict = {}
+
     for rec in transcript_records:
-        model = rec.get("model") or rec.get("provider") or "unknown"
-        by_model[model].append(rec)
+        pid = rec.get("player_id")
+        key = pid if pid is not None else (rec.get("model") or rec.get("provider") or "unknown")
+        by_player[key].append(rec)
+        if key not in group_labels:
+            group_labels[key] = {
+                "player_id": pid,
+                "model": rec.get("model") or "",
+                "provider": rec.get("provider"),
+            }
 
-    # Sort each model's records by turn
-    for model in by_model:
-        by_model[model].sort(key=lambda r: r.get("turn", 0))
+    # Sort each group's records by turn
+    for key in by_player:
+        by_player[key].sort(key=lambda r: r.get("turn", 0))
 
-    result: dict[str, dict] = {}
+    result: dict = {}
 
-    for model, records in by_model.items():
+    for key, records in by_player.items():
         series: list[dict] = []
         total_invalid = 0
         total_steps = 0
@@ -316,7 +333,11 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
             truncated_count / total_local_steps if total_local_steps > 0 else 0.0
         )
 
-        result[model] = {
+        labels = group_labels[key]
+        result[key] = {
+            "player_id": labels["player_id"],
+            "model": labels["model"],
+            "provider": labels["provider"],
             "series": series,
             "rates": {
                 "invalid_call_rate": inv_rate,
@@ -325,7 +346,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
             "rubric": _rubric_for_model(records),
         }
 
-    return {"by_model": result}
+    return {"by_player": result}
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +358,19 @@ def render_markdown(report: dict) -> str:
     lines: list[str] = []
     lines.append("# Arena Analysis Report\n")
 
-    by_model: dict = report.get("by_model", {})
-    if not by_model:
-        lines.append("_No models found in this run._\n")
+    by_player: dict = report.get("by_player", {})
+    if not by_player:
+        lines.append("_No players found in this run._\n")
         return "\n".join(lines)
 
-    for model, data in by_model.items():
-        lines.append(f"## Model: `{model}`\n")
+    for _seat, data in by_player.items():
+        pid = data.get("player_id")
+        model = data.get("model") or data.get("provider") or str(_seat)
+        if pid is not None:
+            heading = f"## Player {pid} — model `{model}`\n"
+        else:
+            heading = f"## Model: `{model}`\n"
+        lines.append(heading)
 
         # Rates
         rates = data.get("rates", {})
