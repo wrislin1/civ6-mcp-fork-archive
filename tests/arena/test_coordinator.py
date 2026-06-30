@@ -158,6 +158,42 @@ async def test_coordinator_dead_socket_attempts_full_handback_then_surfaces(monk
 
 
 @pytest.mark.asyncio
+async def test_coordinator_body_cancellation_not_masked_by_cleanup_error(monkeypatch):
+    """The realistic Ctrl-C path: cancellation originates in the policy BODY (during the long
+    CLI turn), not in a finally step. The finally then runs over a dead socket, so reclaim/
+    restore/disable each raise an ordinary ConnectionError. The propagated exception MUST stay
+    CancelledError — a best-effort cleanup Exception must NOT replace the in-flight cancellation.
+    Goes red under the pre-fix `raise first_exc` (which would surface ConnectionError instead)."""
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    class CancelInBodyPol:
+        needs_exclusive_tuner = True
+        async def __call__(self, gs, player_id, turn):
+            raise asyncio.CancelledError()   # Ctrl-C lands mid-turn
+
+    class DeadSocketConn(FakeConn):
+        """connect() always fails → after the exclusive disconnect the socket stays dead, so
+        every finally step raises an ordinary ConnectionError."""
+        def __init__(self):
+            super().__init__()
+            self.connect_attempts = 0
+        async def connect(self):
+            self.connect_attempts += 1
+            raise OSError("port 4318 still held")
+
+    conn = DeadSocketConn()
+    gs = FakeGS()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "cli-claude", "")], max_puppet_turns=1,
+                      puppet_ids=[1])
+    with pytest.raises(asyncio.CancelledError):
+        await run_arena(conn, gs, cfg, policy=CancelInBodyPol())
+    # cleanup was still attempted best-effort despite the in-flight cancellation
+    assert any("SetLocalPlayerAndObserver(0)" in c for c in conn.read_calls)
+    assert any("DISABLED" in c for c in conn.read_calls)
+
+
+@pytest.mark.asyncio
 async def test_coordinator_cancelled_in_finally_reraises_after_full_handback(monkeypatch):
     """A CancelledError from the FINALLY reclaim must (a) not skip restore/disable and (b) be
     the exception that propagates. The socket is dead so finish_units leaves a ConnectionError

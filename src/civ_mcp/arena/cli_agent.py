@@ -12,13 +12,18 @@ import asyncio, json, os, signal
 #    allowing arbitrary host-file mutation (serena/write_memory/replace_content) or persistent
 #    scheduled agents (Claude Code Remote/create_trigger).  --strict-mcp-config disables
 #    auto-discovery and inherited user-scope servers entirely; only the civ6 server loads.
-# 4. CIV_MCP_DISABLE_LUA=1 in the child env makes the civ6 MCP SERVER remove its run_lua tool
-#    (server.py honours this by remove_tool("run_lua")).  This is the decisive layer: run_lua
-#    is an arbitrary-Lua escape hatch reaching execute_write with no seat/caller gating, so a
-#    client-side denylist alone cannot contain it — run_lua(code="UI.RequestAction(...
-#    ACTION_ENDTURN)") would end the turn / kill / load despite layers 1-3.  Server-enforced
-#    removal is strictly stronger; see evals/civbench.py for the same policy.  The denylist
-#    entry below is belt-and-suspenders for clients that still surface the tool name.
+# 4. CIV_MCP_DISABLE_LUA=1 makes the civ6 MCP SERVER remove its run_lua tool (server.py honours
+#    this by remove_tool("run_lua")).  This is the decisive layer: run_lua is an arbitrary-Lua
+#    escape hatch reaching execute_write with no seat/caller gating, so a client-side denylist
+#    alone cannot contain it — run_lua(code="UI.RequestAction(...ACTION_ENDTURN)") would end the
+#    turn / kill / load despite layers 1-3.  Server-enforced removal is strictly stronger; see
+#    evals/civbench.py for the same policy.  The denylist entry below is belt-and-suspenders for
+#    clients that still surface the tool name.
+#    TWO-HOP FORWARDING (critical): Claude Code does NOT pass arbitrary parent env vars through to
+#    the stdio MCP servers it spawns — it forwards only a minimal Posix subset.  Setting the var on
+#    the `claude` subprocess (below) is necessary but NOT sufficient; the var only reaches the
+#    civ6 grandchild because .mcp.json relays it via an `env` block ("${CIV_MCP_DISABLE_LUA:-}").
+#    Both halves are load-bearing — drop either and layer-4 silently no-ops back to the denylist.
 _DENIED_CIV6_TOOLS = [
     "mcp__civ6__end_turn",
     "mcp__civ6__kill_game",
@@ -98,7 +103,9 @@ class CLIAgentPolicy:
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         argv = self._build_argv(player_id, turn)
-        # Layer-4 lockdown: disable the run_lua escape hatch server-side in the child.
+        # Layer-4 lockdown: disable the run_lua escape hatch server-side. This sets the var on the
+        # `claude` process; .mcp.json's civ6 `env` block relays it on to the grandchild server (see
+        # the TWO-HOP FORWARDING note above — claude does not auto-propagate it).
         env = {**os.environ, "CIV_MCP_DISABLE_LUA": "1"}
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=self.project_dir, env=env,

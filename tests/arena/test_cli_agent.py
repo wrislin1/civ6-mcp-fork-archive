@@ -48,8 +48,9 @@ def test_host_tools_disabled_and_civ6_denylist():
 
 
 def test_run_lua_disabled_in_child_env(monkeypatch):
-    """The civ6 MCP child must be spawned with CIV_MCP_DISABLE_LUA=1 so the server removes
-    run_lua entirely — the only containment strong enough for an arbitrary-Lua escape hatch."""
+    """HOP 1 of layer-4: the `claude` subprocess must be spawned with CIV_MCP_DISABLE_LUA=1.
+    This is necessary but NOT sufficient — claude does not auto-propagate it to the civ6 MCP
+    server; the .mcp.json relay (HOP 2) is pinned by test_mcp_config_relays_lua_disable below."""
     captured = {}
 
     class FakeProc:
@@ -70,6 +71,24 @@ def test_run_lua_disabled_in_child_env(monkeypatch):
     assert captured.get("env", {}).get("CIV_MCP_DISABLE_LUA") == "1"
     # the rest of the host env is preserved (not replaced wholesale)
     assert "PATH" in captured["env"]
+
+def test_mcp_config_relays_lua_disable():
+    """HOP 2 of layer-4: setting CIV_MCP_DISABLE_LUA on the `claude` process is inert unless
+    .mcp.json relays it into the civ6 server's own env block — Claude Code forwards only a
+    minimal Posix env subset to stdio MCP servers, not arbitrary parent vars. Pin the relay so
+    the server-enforced run_lua removal cannot silently regress to a denylist-only no-op."""
+    repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
+    with open(os.path.join(repo_root, ".mcp.json")) as f:
+        cfg = json.load(f)
+    civ6_env = cfg["mcpServers"]["civ6"].get("env", {})
+    assert "CIV_MCP_DISABLE_LUA" in civ6_env, (
+        "civ6 .mcp.json must relay CIV_MCP_DISABLE_LUA into the server env block; "
+        "without it the arena's CIV_MCP_DISABLE_LUA=1 never reaches the grandchild server "
+        "and layer-4 silently falls back to the client denylist alone")
+    # the value must reference the parent env var (e.g. ${CIV_MCP_DISABLE_LUA:-}) so the
+    # arena's "1" actually flows through — a hard-coded constant would not pick it up
+    assert "CIV_MCP_DISABLE_LUA" in civ6_env["CIV_MCP_DISABLE_LUA"]
+
 
 def test_timeout_kills_process_group(monkeypatch):
     """Timeout must kill the whole process group to free port 4318 (MCP grandchild)."""

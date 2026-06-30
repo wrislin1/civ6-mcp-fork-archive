@@ -72,8 +72,17 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
         # then restore the human, then disable — run all three best-effort so a failure in one
         # never skips the others. Each step is guarded against BaseException (not just Exception)
         # so an asyncio.CancelledError mid-handback (e.g. Ctrl-C during connect/restore) cannot
-        # skip a later step; the FIRST such exception is captured and re-raised after the whole
-        # handback completes, so cancellation is propagated, never swallowed.
+        # skip a later step.
+        #
+        # Re-raise policy: only interrupts (BaseException that is NOT a plain Exception —
+        # CancelledError, KeyboardInterrupt, SystemExit) are re-raised; ordinary cleanup failures
+        # (a dead-socket ConnectionError from reclaim, a transient hook.disable blip) are logged
+        # and swallowed, matching the original best-effort contract. This is load-bearing: when
+        # cancellation originates in the TRY BODY (Ctrl-C during the long CLI turn) it is already
+        # in flight as we run cleanup; re-raising an ordinary cleanup Exception here would REPLACE
+        # that in-flight CancelledError and swallow the cancellation. Swallowing best-effort
+        # Exceptions lets the body's CancelledError keep propagating; re-raising a cleanup-origin
+        # interrupt still surfaces it. Either way cancellation is propagated, never swallowed.
         first_exc = None
         steps = []
         if not conn.is_connected:
@@ -87,5 +96,5 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None) -> dict:
                 if first_exc is None:
                     first_exc = e
                 print(f"[arena] WARNING: {label} failed in cleanup: {e!r}", file=sys.stderr)
-        if first_exc is not None:
+        if first_exc is not None and not isinstance(first_exc, Exception):
             raise first_exc
