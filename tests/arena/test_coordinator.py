@@ -385,6 +385,21 @@ async def test_transcript_none_adds_no_snapshot_reads():
 
 
 @pytest.mark.asyncio
+async def test_coordinator_run_id_propagates_to_record():
+    """run_id set on ArenaConfig reaches the written transcript record."""
+    conn = FakeConnWithOverview()
+    gs = FakeGSWithConn(conn)
+    sink = FakeSink()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1], run_id="arena-run-xyz-42")
+
+    await run_arena(conn, gs, cfg, policy=TranscriptPolicy(), transcript=sink)
+
+    assert len(sink.records) == 1
+    assert sink.records[0]["run_id"] == "arena-run-xyz-42"
+
+
+@pytest.mark.asyncio
 async def test_null_sink_two_snapshot_reads_write_noop():
     """NullSink → two snapshot reads happen (before + after), write is a no-op."""
     from civ_mcp.arena.transcript import NullSink

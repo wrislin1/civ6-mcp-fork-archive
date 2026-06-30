@@ -45,10 +45,12 @@ def run_dir(tmp_path: Path) -> Path:
 
     # --- transcript records ---
 
-    # Model A, Turn 1 (in_process):
-    #   - 3 steps: step 0 truncated, step 1 found_city, step 2 set_research non-ERROR
+    # Model A, Turn 1 (in_process, LOCAL flat vocabulary):
+    #   - 3 steps: step 0 move_unit truncated, step 1 skip_unit, step 2 set_research non-ERROR
     #   - 1 invalid_tool_call (unknown_tool)
-    #   - state_delta cities=1  => rubric: founded_extra_city
+    #   - state_delta cities=1  => rubric: founded_extra_city (via state_delta path)
+    #   - step 0 (move_unit, truncated) + step 1 (skip_unit) => truncation_bad_move
+    #   - step 0 (move_unit) => explored_vs_idle
     tr_a1 = {
         "schema_version": 1,
         "run_id": run_id,
@@ -59,13 +61,13 @@ def run_dir(tmp_path: Path) -> Path:
         "model": "model-a",
         "driver": "in_process",
         "steps": [
-            _make_step(0, tool_name="unit_action",
-                       tool_args={"action": "move", "unit_id": 1, "target_x": 5, "target_y": 5},
+            _make_step(0, tool_name="move_unit",
+                       tool_args={"unit_index": 1, "x": 5, "y": 5},
                        truncated=True,
                        prompt_tokens=100, completion_tokens=50),
-            _make_step(1, tool_name="unit_action",
-                       tool_args={"action": "found_city", "unit_id": 2},
-                       tool_result_full="City founded.",
+            _make_step(1, tool_name="skip_unit",
+                       tool_args={"unit_index": 1},
+                       tool_result_full="OK",
                        prompt_tokens=100, completion_tokens=50),
             _make_step(2, tool_name="set_research",
                        tool_args={"tech": "TECH_ANIMAL_HUSBANDRY"},
@@ -94,8 +96,8 @@ def run_dir(tmp_path: Path) -> Path:
                          "civic": "CIVIC_CODE_OF_LAWS"},
     }
 
-    # Model A, Turn 2 (in_process):
-    #   - 2 steps, one with ERROR result (set_city_production → ERROR)
+    # Model A, Turn 2 (in_process, LOCAL flat vocabulary):
+    #   - 2 steps: step 0 move_unit ERROR (wasted_move), step 1 skip_unit
     #   - no truncation, no invalid calls
     tr_a2 = {
         "schema_version": 1,
@@ -107,12 +109,12 @@ def run_dir(tmp_path: Path) -> Path:
         "model": "model-a",
         "driver": "in_process",
         "steps": [
-            _make_step(0, tool_name="set_city_production",
-                       tool_args={"city_id": 1, "item": "BUILDING_GRANARY"},
-                       tool_result_full="ERROR: city not found",
+            _make_step(0, tool_name="move_unit",
+                       tool_args={"unit_index": 2, "x": 3, "y": 3},
+                       tool_result_full="ERROR: tile not reachable",
                        prompt_tokens=120, completion_tokens=60),
-            _make_step(1, tool_name="unit_action",
-                       tool_args={"action": "skip", "unit_id": 3},
+            _make_step(1, tool_name="skip_unit",
+                       tool_args={"unit_index": 3},
                        tool_result_full="OK",
                        prompt_tokens=120, completion_tokens=60),
         ],
@@ -554,3 +556,237 @@ def test_json_output_is_valid(run_dir: Path) -> None:
     data = json.loads(json_path.read_text())
     assert "by_model" in data
     assert "model-a" in data["by_model"]
+
+
+# ---------------------------------------------------------------------------
+# Fix #1c — local vocabulary rubric assertions (would FAIL under pre-fix rubric)
+# These assertions require the _step_verb normalizer in analyze.py to map flat
+# LOCAL tool names (move_unit, skip_unit, etc.) to the correct verbs.
+# Under the OLD rubric (unit_action-only), all four would return None.
+# ---------------------------------------------------------------------------
+
+def test_rubric_explored_vs_idle_local_vocab(run_dir: Path) -> None:
+    """model-a uses local move_unit step → explored_vs_idle fires at turn 1.
+    Would FAIL under old rubric: old code required tool_name='unit_action'+action='move'."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    tr = load_records(run_dir / "transcript.jsonl")
+    co = load_records(run_dir / "arena_cost.jsonl")
+    report = analyze(tr, co)
+
+    rubric_a = report["by_model"]["model-a"]["rubric"]
+    assert rubric_a["explored_vs_idle"] is not None, (
+        "explored_vs_idle must fire for local move_unit step (old rubric would miss this)"
+    )
+    assert rubric_a["explored_vs_idle"]["turn"] == 1
+    assert "explored" in rubric_a["explored_vs_idle"]["note"]
+
+
+def test_rubric_wasted_move_local_vocab(run_dir: Path) -> None:
+    """model-a turn 2 has move_unit with ERROR result → wasted_move fires.
+    Would FAIL under old rubric: old code required tool_name='unit_action'+action='move'."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    tr = load_records(run_dir / "transcript.jsonl")
+    co = load_records(run_dir / "arena_cost.jsonl")
+    report = analyze(tr, co)
+
+    rubric_a = report["by_model"]["model-a"]["rubric"]
+    assert rubric_a["wasted_move"] is not None, (
+        "wasted_move must fire for local move_unit+ERROR step (old rubric would miss this)"
+    )
+    assert rubric_a["wasted_move"]["turn"] == 2
+
+
+def test_rubric_truncation_bad_move_local_vocab(run_dir: Path) -> None:
+    """model-a turn 1: truncated move_unit then skip_unit → truncation_bad_move fires.
+    Would FAIL under old rubric: old code required tool_name='unit_action'+action='skip'."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    tr = load_records(run_dir / "transcript.jsonl")
+    co = load_records(run_dir / "arena_cost.jsonl")
+    report = analyze(tr, co)
+
+    rubric_a = report["by_model"]["model-a"]["rubric"]
+    assert rubric_a["truncation_bad_move"] is not None, (
+        "truncation_bad_move must fire for truncated step + skip_unit (old rubric would miss this)"
+    )
+    assert rubric_a["truncation_bad_move"]["turn"] == 1
+
+
+def test_rubric_founded_extra_city_via_local_step_path(tmp_path: Path) -> None:
+    """found_city flat tool name fires founded_extra_city via step path when state_delta.cities=0.
+    Would FAIL under old rubric: old code required tool_name='unit_action'+action='found_city'."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    run_id = "found-city-step-path"
+    d = tmp_path / "arena_runs" / run_id
+    d.mkdir(parents=True)
+
+    rec = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "ts": "2026-01-01T00:00:00Z",
+        "player_id": 1,
+        "turn": 3,
+        "provider": "local",
+        "model": "local-found",
+        "driver": "in_process",
+        "steps": [
+            _make_step(0, tool_name="found_city", tool_args={"unit_index": 0},
+                       tool_result_full="City founded."),
+        ],
+        "invalid_tool_calls": [],
+        "wall_clock_s": 1.0,
+        "final_summary": "founded",
+        "prompt_tokens": 50,
+        "completion_tokens": 10,
+        "max_steps_reached": False,
+        "step_count": 1,
+        "usd": 0.0,
+        "state_before": None,
+        "state_after": None,
+        "state_delta": {"cities": 0},   # zero delta — forces step-path check
+    }
+    _write_jsonl(d / "transcript.jsonl", [rec])
+    _write_jsonl(d / "arena_cost.jsonl", [])
+
+    tr = load_records(d / "transcript.jsonl")
+    report = analyze(tr, [])
+    rubric = report["by_model"]["local-found"]["rubric"]
+    assert rubric["founded_extra_city"] is not None, (
+        "founded_extra_city must fire for flat found_city tool via step path "
+        "(old rubric would miss this)"
+    )
+    assert rubric["founded_extra_city"]["turn"] == 3
+
+
+def test_rubric_cli_vocabulary_mcp_prefixed(tmp_path: Path) -> None:
+    """CLI-style mcp__civ6__unit_action+tool_args={'action':'move'} fires explored_vs_idle.
+    Proves the _step_verb normalizer handles the MCP-prefixed CLI vocabulary."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    run_id = "cli-vocab-test"
+    d = tmp_path / "arena_runs" / run_id
+    d.mkdir(parents=True)
+
+    cli_step = {
+        "idx": 0,
+        "role": "tool",
+        "tool_name": "mcp__civ6__unit_action",
+        "tool_args": {"action": "move", "unit_id": 1, "target_x": 5, "target_y": 5},
+        "tool_result_full": "OK",
+        "truncated": False,
+        "ts_start": "2026-01-01T00:00:00Z",
+        "ts_end": "2026-01-01T00:00:01Z",
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+    }
+    wasted_step = {
+        "idx": 1,
+        "role": "tool",
+        "tool_name": "mcp__civ6__unit_action",
+        "tool_args": {"action": "move", "unit_id": 2, "target_x": 9, "target_y": 9},
+        "tool_result_full": "ERROR: blocked",
+        "truncated": False,
+        "ts_start": "2026-01-01T00:00:01Z",
+        "ts_end": "2026-01-01T00:00:02Z",
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+    }
+    set_res_step = {
+        "idx": 2,
+        "role": "tool",
+        "tool_name": "mcp__civ6__set_research",
+        "tool_args": {"tech": "TECH_POTTERY"},
+        "tool_result_full": "Research set.",
+        "truncated": False,
+        "ts_start": "2026-01-01T00:00:02Z",
+        "ts_end": "2026-01-01T00:00:03Z",
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+    }
+    rec = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "ts": "2026-01-01T00:00:00Z",
+        "player_id": 2,
+        "turn": 1,
+        "provider": "anthropic",
+        "model": "cli-model",
+        "driver": "cli",
+        "steps": [cli_step, wasted_step, set_res_step],
+        "invalid_tool_calls": [],
+        "wall_clock_s": 5.0,
+        "final_summary": "moved",
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+        "max_steps_reached": False,
+        "step_count": 3,
+        "usd": 0.001,
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+    _write_jsonl(d / "transcript.jsonl", [rec])
+    _write_jsonl(d / "arena_cost.jsonl", [])
+
+    tr = load_records(d / "transcript.jsonl")
+    report = analyze(tr, [])
+    rubric = report["by_model"]["cli-model"]["rubric"]
+
+    assert rubric["explored_vs_idle"] is not None, (
+        "explored_vs_idle must fire for mcp__civ6__unit_action+action=move"
+    )
+    assert rubric["wasted_move"] is not None, (
+        "wasted_move must fire for mcp__civ6__unit_action+action=move+ERROR"
+    )
+    assert rubric["set_research_or_production"] is not None, (
+        "set_research_or_production must fire for mcp__civ6__set_research (non-ERROR)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix #2 — empty model falls back to provider for grouping key
+# ---------------------------------------------------------------------------
+
+def test_empty_model_falls_back_to_provider(tmp_path: Path) -> None:
+    """Model='' with provider='cli-claude' groups under 'cli-claude', not 'unknown'."""
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    run_id = "cli-claude-no-model"
+    d = tmp_path / "arena_runs" / run_id
+    d.mkdir(parents=True)
+
+    rec = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "ts": "2026-01-01T00:00:00Z",
+        "player_id": 1,
+        "turn": 1,
+        "provider": "cli-claude",
+        "model": "",          # empty — typical for cli-claude
+        "driver": "cli",
+        "steps": [],
+        "invalid_tool_calls": [],
+        "wall_clock_s": 2.0,
+        "final_summary": "done",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "max_steps_reached": False,
+        "step_count": 0,
+        "usd": 0.0,
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+    _write_jsonl(d / "transcript.jsonl", [rec])
+    _write_jsonl(d / "arena_cost.jsonl", [])
+
+    tr = load_records(d / "transcript.jsonl")
+    report = analyze(tr, [])
+
+    assert "cli-claude" in report["by_model"], (
+        "cli-claude (empty model) must group under provider name, not 'unknown'"
+    )
+    assert "unknown" not in report["by_model"]

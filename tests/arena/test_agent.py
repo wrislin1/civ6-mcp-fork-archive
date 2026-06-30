@@ -90,7 +90,7 @@ async def test_transcript_payload():
 
     # --- unknown tool classified in invalid_tool_calls ---
     assert any(
-        ic["name"] == "bogus_tool" and ic["reason"] == "unknown_tool"
+        ic["tool_name"] == "bogus_tool" and ic["reason"] == "unknown_tool"
         for ic in t["invalid_tool_calls"]
     )
 
@@ -215,7 +215,7 @@ async def test_transcript_bad_arguments():
 
     # bad_arguments entry must appear in invalid_tool_calls
     assert any(
-        ic["name"] == "fortify_unit" and ic["reason"] == "bad_arguments"
+        ic["tool_name"] == "fortify_unit" and ic["reason"] == "bad_arguments"
         for ic in t["invalid_tool_calls"]
     ), f"Expected bad_arguments entry, got: {t['invalid_tool_calls']}"
 

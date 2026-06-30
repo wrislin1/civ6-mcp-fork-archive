@@ -91,13 +91,13 @@ class LLMPolicy:
             for tc in reply.tool_calls:
                 # classify (observation only — dispatch below stays untouched)
                 if tc["name"] not in _KNOWN_TOOLS:
-                    invalid_tool_calls.append({"name": tc["name"], "arguments": tc["arguments"],
+                    invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                "reason": "unknown_tool"})
                 else:
                     try:
                         json.loads(tc["arguments"] or "{}")
                     except (json.JSONDecodeError, ValueError):
-                        invalid_tool_calls.append({"name": tc["name"], "arguments": tc["arguments"],
+                        invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                    "reason": "bad_arguments"})
                 try:
                     result = await _dispatch(gs, tc["name"], tc["arguments"])
@@ -107,11 +107,19 @@ class LLMPolicy:
                 _s = str(result)
                 _l = len(_s)
                 ts_end = time.time()
+                try:
+                    _tool_args = json.loads(tc["arguments"] or "{}")
+                    if not isinstance(_tool_args, dict):
+                        _tool_args = {}
+                except (json.JSONDecodeError, ValueError):
+                    _tool_args = {}
                 steps.append({
+                    "idx": len(steps),
+                    "role": "tool",
                     "ts_start": ts_start,
                     "ts_end": ts_end,
                     "tool_name": tc["name"],
-                    "arguments": tc["arguments"],
+                    "tool_args": _tool_args,
                     "tool_result_full": _s,
                     "result_total_chars": _l,
                     "result_chars_fed_to_model": min(_l, 1500),

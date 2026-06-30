@@ -63,6 +63,40 @@ def _is_local_driver(rec: dict) -> bool:
 # Rubric helpers (turns 1-20, purely heuristic)
 # ---------------------------------------------------------------------------
 
+def _step_verb(step: dict) -> tuple[str, str]:
+    """Return (tool_base, verb) normalizing both local-flat and CLI MCP-prefixed vocabularies.
+
+    tool_base: step tool_name with any leading "mcp__civ6__" prefix stripped; "" if None.
+    verb:
+      - unit_action form (CLI): value of tool_args["action"]
+      - move_unit (local): "move"
+      - skip_unit (local): "skip"
+      - fortify_unit (local): "fortify"
+      - found_city (local): "found_city"
+      - everything else: ""
+    """
+    raw_name: str = step.get("tool_name") or ""
+    tool_base: str = raw_name.removeprefix("mcp__civ6__")
+    tool_args = step.get("tool_args")
+    if not isinstance(tool_args, dict):
+        tool_args = {}
+
+    if tool_base == "unit_action":
+        verb: str = tool_args.get("action", "")
+    elif tool_base == "move_unit":
+        verb = "move"
+    elif tool_base == "skip_unit":
+        verb = "skip"
+    elif tool_base == "fortify_unit":
+        verb = "fortify"
+    elif tool_base == "found_city":
+        verb = "found_city"
+    else:
+        verb = ""
+
+    return tool_base, verb
+
+
 def _rubric_for_model(records: list[dict]) -> dict:
     """Compute early-game rubric flags for one model's records."""
     rubric: dict[str, dict | None] = {
@@ -92,10 +126,8 @@ def _rubric_for_model(records: list[dict]) -> dict:
                 }
             else:
                 for step in steps:
-                    tool = step.get("tool_name") or ""
-                    args = step.get("tool_args") or {}
-                    action = args.get("action", "") if isinstance(args, dict) else ""
-                    if tool == "unit_action" and action == "found_city":
+                    _, verb = _step_verb(step)
+                    if verb == "found_city":
                         rubric["founded_extra_city"] = {
                             "turn": turn,
                             "note": "found_city action issued",
@@ -107,12 +139,10 @@ def _rubric_for_model(records: list[dict]) -> dict:
             has_explore = False
             skip_fortify = 0
             for step in steps:
-                tool = step.get("tool_name") or ""
-                args = step.get("tool_args") or {}
-                action = args.get("action", "") if isinstance(args, dict) else ""
-                if tool == "unit_action" and action in ("automate", "move"):
+                _, verb = _step_verb(step)
+                if verb in ("automate", "move"):
                     has_explore = True
-                if tool == "unit_action" and action in ("skip", "fortify"):
+                if verb in ("skip", "fortify"):
                     skip_fortify += 1
             if has_explore:
                 rubric["explored_vs_idle"] = {
@@ -128,24 +158,22 @@ def _rubric_for_model(records: list[dict]) -> dict:
         # ---- set_research_or_production ----
         if rubric["set_research_or_production"] is None:
             for step in steps:
-                tool = step.get("tool_name") or ""
+                tool_base = (step.get("tool_name") or "").removeprefix("mcp__civ6__")
                 result = _safe_str(step.get("tool_result_full", ""))
-                if tool in ("set_research", "set_city_production"):
+                if tool_base in ("set_research", "set_city_production"):
                     if not result.startswith("ERROR"):
                         rubric["set_research_or_production"] = {
                             "turn": turn,
-                            "tool": tool,
+                            "tool": tool_base,
                         }
                         break
 
         # ---- wasted_move ----
         if rubric["wasted_move"] is None:
             for step in steps:
-                tool = step.get("tool_name") or ""
-                args = step.get("tool_args") or {}
-                action = args.get("action", "") if isinstance(args, dict) else ""
+                _, verb = _step_verb(step)
                 result = _safe_str(step.get("tool_result_full", ""))
-                if tool == "unit_action" and action == "move" and result.startswith("ERROR"):
+                if verb == "move" and result.startswith("ERROR"):
                     rubric["wasted_move"] = {
                         "turn": turn,
                         "note": "move returned ERROR",
@@ -172,10 +200,8 @@ def _rubric_for_model(records: list[dict]) -> dict:
                 if step.get("truncated", False):
                     saw_truncation = True
                 if saw_truncation:
-                    tool = step.get("tool_name") or ""
-                    args = step.get("tool_args") or {}
-                    action = args.get("action", "") if isinstance(args, dict) else ""
-                    if tool == "unit_action" and action in ("skip", "fortify"):
+                    _, verb = _step_verb(step)
+                    if verb in ("skip", "fortify"):
                         rubric["truncation_bad_move"] = {
                             "turn": turn,
                             "note": "skip/fortify after truncation",
@@ -217,7 +243,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
     # Group by model, preserve insertion order within groups
     by_model: dict[str, list[dict]] = defaultdict(list)
     for rec in transcript_records:
-        model = rec.get("model") or "unknown"
+        model = rec.get("model") or rec.get("provider") or "unknown"
         by_model[model].append(rec)
 
     # Sort each model's records by turn
