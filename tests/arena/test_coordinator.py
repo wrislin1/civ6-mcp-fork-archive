@@ -400,6 +400,27 @@ async def test_coordinator_run_id_propagates_to_record():
 
 
 @pytest.mark.asyncio
+async def test_log_entry_excludes_transcript_key():
+    """run_arena log entries must NOT carry the 'transcript' key (stdout bloat).
+    The sink record must still contain the steps (data not lost)."""
+    conn = FakeConnWithOverview()
+    gs = FakeGSWithConn(conn)
+    sink = FakeSink()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=TranscriptPolicy(), transcript=sink)
+
+    assert result["puppet_turns_played"] == 1
+    # Every log entry must be transcript-free
+    for entry in result["log"]:
+        assert "transcript" not in entry, "log entry must not carry the full transcript"
+    # Sink must still have the full record with steps present
+    assert len(sink.records) == 1
+    assert sink.records[0]["step_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_null_sink_two_snapshot_reads_write_noop():
     """NullSink → two snapshot reads happen (before + after), write is a no-op."""
     from civ_mcp.arena.transcript import NullSink

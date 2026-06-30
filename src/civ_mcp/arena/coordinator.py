@@ -73,7 +73,8 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
                 result = await pol(gs, st.local, st.turn)
-                log.append({"player": st.local, "turn": st.turn, **result})
+                _log_entry = {k: v for k, v in result.items() if k != "transcript"}
+                log.append({"player": st.local, "turn": st.turn, **_log_entry})
                 if exclusive and not conn.is_connected:
                     await _reconnect_with_retry(conn)   # reclaim before we end the turn
                 state_after = await _overview_snapshot(gs) if transcript is not None else None
