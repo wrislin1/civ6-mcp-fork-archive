@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, json, os, signal
 
-# Three-layer lockdown for CLI civ security:
+# Four-layer lockdown for CLI civ security:
 # 1. --tools "" disables all host built-in tools (Bash/Write/Edit/Read)
 # 2. _DENIED_CIV6_TOOLS blocks destructive MCP civ6 tools — the host ends turns and manages
 #    the game lifecycle, so the CLI civ must never end_turn, kill/reload, or load saves.
@@ -12,6 +12,13 @@ import asyncio, json, os, signal
 #    allowing arbitrary host-file mutation (serena/write_memory/replace_content) or persistent
 #    scheduled agents (Claude Code Remote/create_trigger).  --strict-mcp-config disables
 #    auto-discovery and inherited user-scope servers entirely; only the civ6 server loads.
+# 4. CIV_MCP_DISABLE_LUA=1 in the child env makes the civ6 MCP SERVER remove its run_lua tool
+#    (server.py honours this by remove_tool("run_lua")).  This is the decisive layer: run_lua
+#    is an arbitrary-Lua escape hatch reaching execute_write with no seat/caller gating, so a
+#    client-side denylist alone cannot contain it — run_lua(code="UI.RequestAction(...
+#    ACTION_ENDTURN)") would end the turn / kill / load despite layers 1-3.  Server-enforced
+#    removal is strictly stronger; see evals/civbench.py for the same policy.  The denylist
+#    entry below is belt-and-suspenders for clients that still surface the tool name.
 _DENIED_CIV6_TOOLS = [
     "mcp__civ6__end_turn",
     "mcp__civ6__kill_game",
@@ -20,6 +27,7 @@ _DENIED_CIV6_TOOLS = [
     "mcp__civ6__load_save",
     "mcp__civ6__load_save_from_menu",
     "mcp__civ6__launch_game",
+    "mcp__civ6__run_lua",
 ]
 
 _PROMPT = (
@@ -40,12 +48,16 @@ class CLIAgentPolicy:
     def _build_argv(self, player_id: int, turn: int) -> list[str]:
         prompt = _PROMPT.format(pid=player_id, turn=turn)
         if self.provider == "cli-claude":
+            # Anchor .mcp.json to project_dir (absolute) so layer-3 scoping cannot silently
+            # become a no-op if the subprocess CWD is not the repo root — with
+            # --strict-mcp-config a missing config loads ZERO servers (civ6 included).
+            mcp_config = os.path.join(self.project_dir, ".mcp.json")
             argv = ["claude", "-p", prompt, "--output-format", "json",
                     "--permission-mode", "bypassPermissions",
                     "--tools", "",
                     "--allowedTools", "mcp__civ6",
                     "--disallowedTools", " ".join(_DENIED_CIV6_TOOLS),
-                    "--mcp-config", ".mcp.json", "--strict-mcp-config",
+                    "--mcp-config", mcp_config, "--strict-mcp-config",
                     "--max-turns", str(self.max_turns)]
             if self.model:
                 argv += ["--model", self.model]
@@ -75,21 +87,45 @@ class CLIAgentPolicy:
                 int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
                 float(obj.get("total_cost_usd") or 0.0))
 
+    @staticmethod
+    def _kill_group(proc) -> None:
+        """SIGKILL the whole process group so the civ6-MCP grandchild (holding tuner port
+        4318) dies too, not just `claude`.  Falls back to killing the direct child."""
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         argv = self._build_argv(player_id, turn)
+        # Layer-4 lockdown: disable the run_lua escape hatch server-side in the child.
+        env = {**os.environ, "CIV_MCP_DISABLE_LUA": "1"}
         proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=self.project_dir,
+            *argv, cwd=self.project_dir, env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             start_new_session=True)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
         except asyncio.TimeoutError:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
+            self._kill_group(proc)
             await proc.wait()
+            # Record the timed-out turn (zero usable work) so it is not silently missing
+            # from the cost log.
+            self.cost.record(player_id=player_id, model=(self.model or self.provider),
+                             provider=self.provider, prompt_tokens=0, completion_tokens=0,
+                             turn=turn, usd=0.0)
             return {"summary": f"cli timeout after {self.timeout_s}s", "actions": [], "usage": {}}
+        except BaseException:
+            # Real cancellation (Ctrl-C raises CancelledError, a BaseException the TimeoutError
+            # branch misses) — start_new_session detached the group from the parent's SIGINT,
+            # so without this the civ6-MCP child is orphaned and keeps port 4318, blocking the
+            # coordinator's reclaim and stranding the human.  Kill the group, then re-raise.
+            self._kill_group(proc)
+            try:
+                await proc.wait()
+            except BaseException:
+                pass
+            raise
         stdout = out.decode("utf-8", "replace")
         summary, pt, ct, usd = self._parse_claude(stdout)
         self.cost.record(player_id=player_id, model=(self.model or self.provider),
