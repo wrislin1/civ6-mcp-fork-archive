@@ -1,6 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+# Canonical in-process LLM gateway endpoint; single source of truth for both the
+# ArenaConfig default and the --gateway-url CLI default.
+DEFAULT_GATEWAY_URL = "http://192.168.20.196:11430/v1"
+
 _CLI_PROVIDERS = {"cli-claude"}
 _VALID_PROVIDERS = {"local"} | _CLI_PROVIDERS
 
@@ -29,7 +33,7 @@ def parse_player_spec(s: str) -> PlayerSpec:
 class ArenaConfig:
     players: list[PlayerSpec]
     max_puppet_turns: int = 1
-    gateway_url: str = "http://192.168.20.196:11430/v1"  # overridden by CLI
+    gateway_url: str = DEFAULT_GATEWAY_URL  # overridden by CLI
     api_key_env: str = "LITELLM_OPENAI_API_KEY"
     dry_run: bool = False
     max_agent_steps: int = 6

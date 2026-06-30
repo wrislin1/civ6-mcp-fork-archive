@@ -1,5 +1,6 @@
 # tests/arena/test_arena_wiring.py
 import asyncio
+import os.path
 import shutil
 import pytest
 
@@ -34,4 +35,23 @@ def test_cli_preflight_raises_when_claude_not_on_path(monkeypatch):
         dry_run = False
 
     with pytest.raises(SystemExit, match="claude"):
+        asyncio.run(_run(Args()))
+
+
+def test_cli_preflight_raises_when_mcp_config_missing(monkeypatch):
+    """_run fails loudly if a cli spec is present but .mcp.json is not in CWD — otherwise
+    --strict-mcp-config would silently load zero MCP servers (civ6 included)."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+
+    class Args:
+        player = ["1:cli-claude:"]
+        max_puppet_turns = 1
+        gateway_url = "http://localhost:11430/v1"
+        api_key_env = "LITELLM_OPENAI_API_KEY"
+        cost_path = "/tmp/test_arena_preflight.jsonl"
+        max_agent_steps = 6
+        dry_run = False
+
+    with pytest.raises(SystemExit, match=".mcp.json"):
         asyncio.run(_run(Args()))

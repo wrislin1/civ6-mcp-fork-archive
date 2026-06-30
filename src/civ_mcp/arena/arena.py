@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, asyncio, json, os, shutil
 from civ_mcp.connection import GameConnection
 from civ_mcp.game_state import GameState
-from civ_mcp.arena.config import ArenaConfig, parse_player_spec
+from civ_mcp.arena.config import ArenaConfig, parse_player_spec, DEFAULT_GATEWAY_URL
 from civ_mcp.arena.cost import CostLog
 from civ_mcp.arena.coordinator import run_arena, ScriptedPolicy
 
@@ -27,7 +27,7 @@ def build_args(argv=None):
     ap = argparse.ArgumentParser(prog="civ-arena")
     ap.add_argument("--player", action="append", default=[], help="'<id>:<provider>:<model>'")
     ap.add_argument("--max-puppet-turns", type=int, default=1)
-    ap.add_argument("--gateway-url", default="http://192.168.20.196:11430/v1")
+    ap.add_argument("--gateway-url", default=DEFAULT_GATEWAY_URL)
     ap.add_argument("--api-key-env", default="LITELLM_OPENAI_API_KEY")
     ap.add_argument("--cost-path", default="arena_cost.jsonl")
     ap.add_argument("--max-agent-steps", type=int, default=6)
@@ -48,8 +48,16 @@ async def _run(args):
     else:
         if in_proc_backend is not None and not await in_proc_backend.reachable():
             raise SystemExit(f"in-process backend not reachable at {cfg.gateway_url}")
-        if any(s.driver_kind() == "cli" for s in specs) and shutil.which("claude") is None:
-            raise SystemExit("cli provider requested but 'claude' not found on PATH")
+        if any(s.driver_kind() == "cli" for s in specs):
+            if shutil.which("claude") is None:
+                raise SystemExit("cli provider requested but 'claude' not found on PATH")
+            # The CLI civ scopes its MCP servers via a relative `.mcp.json` resolved against
+            # CWD (== project_dir). With --strict-mcp-config a missing config loads ZERO
+            # servers (civ6 included) — a silent no-op. Fail loudly here instead.
+            if not os.path.isfile(os.path.join(os.getcwd(), ".mcp.json")):
+                raise SystemExit(
+                    f"cli provider requested but .mcp.json not found in CWD ({os.getcwd()}); "
+                    "run the arena from the repo root")
         policy_for = lambda pid: policies[pid]
     conn = GameConnection(); await conn.connect()
     gs = GameState(conn)
