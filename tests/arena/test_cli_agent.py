@@ -23,6 +23,20 @@ def test_claude_argv_contains_mcp_and_safety():
     # the prompt names the seat
     assert any("player 2" in a for a in argv)
 
+def test_host_tools_disabled_and_civ6_denylist():
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir=".", max_turns=5)
+    argv = pol._build_argv(player_id=2, turn=5)
+    # verify --tools "" disables host built-in tools (Bash/Write/Edit/Read)
+    assert "--tools" in argv
+    tools_idx = argv.index("--tools")
+    assert argv[tools_idx + 1] == ""
+    # verify --disallowedTools still present with the denylist
+    assert "--disallowedTools" in argv
+    denied_idx = argv.index("--disallowedTools")
+    denied_list = argv[denied_idx + 1]
+    assert "mcp__civ6__end_turn" in denied_list
+    assert "mcp__civ6__kill_game" in denied_list
+
 def test_parse_claude_usage():
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x")
     blob = json.dumps({"type": "result", "subtype": "success", "result": "settled & moved",

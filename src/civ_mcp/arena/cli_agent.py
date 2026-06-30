@@ -1,8 +1,10 @@
 from __future__ import annotations
 import asyncio, json
 
-# The host ends turns and manages the game lifecycle — the CLI civ must never end the turn
-# or kill/reload the live game. Denied even under bypassPermissions.
+# Two-layer lockdown for CLI civ security:
+# 1. --tools "" disables all host built-in tools (Bash/Write/Edit/Read)
+# 2. _DENIED_CIV6_TOOLS blocks destructive MCP civ6 tools — the host ends turns and manages
+#    the game lifecycle, so the CLI civ must never end_turn, kill/reload, or load saves.
 _DENIED_CIV6_TOOLS = [
     "mcp__civ6__end_turn",
     "mcp__civ6__kill_game",
@@ -33,6 +35,7 @@ class CLIAgentPolicy:
         if self.provider == "cli-claude":
             argv = ["claude", "-p", prompt, "--output-format", "json",
                     "--permission-mode", "bypassPermissions",
+                    "--tools", "",
                     "--allowedTools", "mcp__civ6",
                     "--disallowedTools", " ".join(_DENIED_CIV6_TOOLS),
                     "--max-turns", str(self.max_turns)]
