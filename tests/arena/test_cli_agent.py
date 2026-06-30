@@ -12,8 +12,10 @@ class FakeCost:
     def record(self, **kw): self.records.append(kw)
 
 # ---------------------------------------------------------------------------
-# Synthetic fixtures for stream-json parsers
-# These are provisional — Task 9 will replace them with real captured stdout.
+# Fixtures for stream-json parsers.
+# Modeled on REAL captured stdout (live Task 9 shake-out): claude --output-format
+# stream-json (tool_use/tool_result blocks) and codex exec --json (item.completed
+# with mcp_tool_call / agent_message items). Values trimmed for size.
 # ---------------------------------------------------------------------------
 
 _CLAUDE_STREAM_FIXTURE = "\n".join([
@@ -32,21 +34,43 @@ _CLAUDE_STREAM_FIXTURE = "\n".join([
                 "total_cost_usd": 0.005}),
 ])
 
+# Real codex schema: item.completed carries mcp_tool_call (tool/arguments/result) and
+# agent_message (text); result is structured {"content":[{"type":"text","text":...}]}.
 _CODEX_STREAM_FIXTURE = "\n".join([
     json.dumps({"type": "thread.started", "thread_id": "t1"}),
+    json.dumps({"type": "turn.started"}),
     json.dumps({"type": "item.completed", "item": {
-        "type": "function_call", "role": "assistant",
-        "name": "get_game_overview", "arguments": {"turn": 3}, "output": None
-    }}),
+        "id": "item_0", "type": "agent_message",
+        "text": "I'll inspect player 2's start and make early setup moves."}}),
     json.dumps({"type": "item.completed", "item": {
-        "type": "function_call_output", "role": "tool",
-        "name": "get_game_overview", "output": "Turn 3 overview data"
-    }}),
+        "id": "item_1", "type": "mcp_tool_call", "server": "civ6",
+        "tool": "get_units", "arguments": {}, "status": "completed", "error": None,
+        "result": {"content": [{"type": "text",
+                   "text": "1 units:\n  Warrior (UNIT_WARRIOR) at (26,23) — moves 2/2"}],
+                   "structured_content": {"result": "1 units: Warrior ..."}}}}),
     json.dumps({"type": "item.completed", "item": {
-        "type": "agent_message", "role": "assistant", "text": "Moved scout north"
-    }}),
+        "id": "item_2", "type": "mcp_tool_call", "server": "civ6",
+        "tool": "unit_action",
+        "arguments": {"action": "move", "unit_id": 131073, "target_x": 26, "target_y": 22},
+        "status": "completed", "error": None,
+        "result": {"content": [{"type": "text", "text": "MOVING_TO|26,22|from:26,23"}]}}}),
+    json.dumps({"type": "item.completed", "item": {
+        "id": "item_3", "type": "agent_message", "text": "Moved scout north"}}),
     json.dumps({"type": "turn.completed",
                 "usage": {"input_tokens": 300, "output_tokens": 50}}),
+])
+
+# A codex tool call that the civ6 MCP rejected (bad args) — same "Error executing tool"
+# framing the server uses; modeled on the real claude error shape since codex shares the MCP.
+_CODEX_ERROR_FIXTURE = "\n".join([
+    json.dumps({"type": "item.completed", "item": {
+        "id": "item_0", "type": "mcp_tool_call", "server": "civ6",
+        "tool": "get_map_area", "arguments": {}, "status": "completed", "error": None,
+        "result": {"content": [{"type": "text",
+                   "text": "Error executing tool get_map_area: 2 validation errors for "
+                           "get_map_areaArguments\ncenter_x\n  Field required"}]}}}),
+    json.dumps({"type": "turn.completed",
+                "usage": {"input_tokens": 100, "output_tokens": 10}}),
 ])
 
 
@@ -407,12 +431,32 @@ def test_stream_steps_claude_defensive_on_missing_fields():
 # ---------------------------------------------------------------------------
 
 def test_stream_steps_codex_recovers_tool_step():
-    """_stream_steps_codex must recover ≥1 step with tool_name from fixture."""
+    """_stream_steps_codex must extract mcp_tool_call items with name, args, and the
+    structured result text (the real-schema fix — old parser left every step tool=None)."""
     steps = CLIAgentPolicy._stream_steps_codex(_CODEX_STREAM_FIXTURE)
     assert isinstance(steps, list)
-    assert len(steps) >= 1
     tool_steps = [s for s in steps if s.get("tool_name")]
-    assert len(tool_steps) >= 1, f"No tool step in: {steps}"
+    assert len(tool_steps) == 2, f"Expected 2 mcp_tool_call steps, got: {steps}"
+    by_name = {s["tool_name"]: s for s in tool_steps}
+    assert "get_units" in by_name and "unit_action" in by_name
+    # args extracted from item['arguments']
+    assert by_name["unit_action"]["tool_args"]["action"] == "move"
+    # result text extracted from the structured result.content[].text
+    assert "MOVING_TO|26,22" in by_name["unit_action"]["tool_result_full"]
+    assert "Warrior" in by_name["get_units"]["tool_result_full"]
+    # agent_message items become text steps (no tool_name)
+    assert any(s.get("text") == "Moved scout north" and not s.get("tool_name") for s in steps)
+
+
+def test_stream_steps_codex_error_result_detected_as_invalid():
+    """A codex mcp_tool_call rejected by the MCP surfaces 'Error executing tool ...' and is
+    caught by _detect_invalid_tool_calls (Finding 3 generalizes to codex)."""
+    steps = CLIAgentPolicy._stream_steps_codex(_CODEX_ERROR_FIXTURE)
+    tool_steps = [s for s in steps if s.get("tool_name")]
+    assert len(tool_steps) == 1 and tool_steps[0]["tool_name"] == "get_map_area"
+    assert tool_steps[0]["tool_result_full"].startswith("Error executing tool")
+    inv = CLIAgentPolicy._detect_invalid_tool_calls(steps)
+    assert len(inv) == 1 and inv[0]["reason"] == "bad_arguments"
 
 
 def test_stream_steps_codex_step_schema():

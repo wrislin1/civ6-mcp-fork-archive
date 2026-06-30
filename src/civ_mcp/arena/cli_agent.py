@@ -262,12 +262,41 @@ class CLIAgentPolicy:
         return steps
 
     @staticmethod
+    def _codex_result_text(result) -> str:
+        """Extract the textual tool result from a codex mcp_tool_call.result.
+
+        Real shape (codex-cli 0.142.x): ``{"content": [{"type":"text","text": ...}],
+        "structured_content": {"result": ...}}``. Falls back to structured_content.result,
+        then a JSON dump, so a schema tweak degrades gracefully instead of dropping data.
+        """
+        if result is None:
+            return ""
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            parts = [str(c.get("text", "")) for c in (result.get("content") or [])
+                     if isinstance(c, dict) and c.get("type") == "text"]
+            if parts:
+                return "\n".join(parts)
+            sc = result.get("structured_content")
+            if isinstance(sc, dict) and "result" in sc:
+                return str(sc["result"])
+            return json.dumps(result)
+        return str(result)
+
+    @staticmethod
     def _stream_steps_codex(stdout: str) -> list:
-        """Parse codex --json NDJSON into step dicts by capturing item.completed events.
+        """Parse codex `exec --json` NDJSON into step dicts.
 
-        Defensive: skips unparseable lines and never raises.
-
-        NOTE: Fixtures are synthetic/provisional — Task 9 pins against real captured stdout.
+        Pinned against REAL captured codex-cli 0.142.x stdout (live Task 9 shake-out).
+        item.completed item shapes that matter:
+          - {"type":"mcp_tool_call","tool":<name>,"server":"civ6","arguments":{...},
+             "result":{"content":[{"type":"text","text":...}],...},"status":...,"error":...}
+          - {"type":"agent_message","text":...}
+        The legacy guess (item.name / item.output) never matched, so every codex step was
+        tool=None — that is the bug this fix closes. Other item types (reasoning,
+        command_execution, …) carry no civ6 decision signal and are skipped.
+        Defensive: skips unparseable/unknown lines, never raises.
         """
         steps: list[dict] = []
         idx = 0
@@ -280,24 +309,43 @@ class CLIAgentPolicy:
                     obj = json.loads(line)
                 except Exception:
                     continue
-                if not isinstance(obj, dict):
-                    continue
-                if obj.get("type") != "item.completed":
+                if not isinstance(obj, dict) or obj.get("type") != "item.completed":
                     continue
                 item = obj.get("item") or {}
                 if not isinstance(item, dict):
                     continue
-                raw_output = item.get("output")
-                steps.append({
-                    "idx": idx,
-                    "role": str(item.get("role") or "assistant"),
-                    "text": str(item.get("text") or ""),
-                    "tool_name": item.get("name"),
-                    "tool_args": item.get("arguments"),
-                    "tool_result_full": str(raw_output) if raw_output is not None else None,
-                    "ts": 0.0,
-                })
-                idx += 1
+                ity = item.get("type")
+                if ity == "mcp_tool_call":
+                    text = CLIAgentPolicy._codex_result_text(item.get("result"))
+                    err = item.get("error")
+                    status = item.get("status")
+                    # Surface failures with the same "Error executing tool" framing the MCP
+                    # server uses, so _detect_invalid_tool_calls catches codex errors too.
+                    if (status not in (None, "completed", "success") or err) and \
+                            not text.startswith("Error executing tool"):
+                        text = f"Error executing tool {item.get('tool')}: {err or status}"
+                    args = item.get("arguments")
+                    steps.append({
+                        "idx": idx,
+                        "role": "tool",
+                        "text": "",
+                        "tool_name": item.get("tool"),
+                        "tool_args": args if isinstance(args, dict) else {},
+                        "tool_result_full": text,
+                        "ts": 0.0,
+                    })
+                    idx += 1
+                elif ity == "agent_message":
+                    steps.append({
+                        "idx": idx,
+                        "role": "assistant",
+                        "text": str(item.get("text") or ""),
+                        "tool_name": None,
+                        "tool_args": None,
+                        "tool_result_full": None,
+                        "ts": 0.0,
+                    })
+                    idx += 1
         except Exception:
             pass
         return steps
