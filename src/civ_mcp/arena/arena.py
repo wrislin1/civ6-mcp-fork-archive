@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse, asyncio, json, os, shutil
 from civ_mcp.connection import GameConnection
 from civ_mcp.game_state import GameState
-from civ_mcp.arena.config import ArenaConfig, parse_player_spec, DEFAULT_GATEWAY_URL
+from civ_mcp.arena.config import (
+    ArenaConfig,
+    CLI_PROVIDER_COMMANDS,
+    parse_player_spec,
+    DEFAULT_GATEWAY_URL,
+)
 from civ_mcp.arena.cost import CostLog
 from civ_mcp.arena.coordinator import run_arena, ScriptedPolicy
 
@@ -49,12 +54,16 @@ async def _run(args):
         if in_proc_backend is not None and not await in_proc_backend.reachable():
             raise SystemExit(f"in-process backend not reachable at {cfg.gateway_url}")
         if any(s.driver_kind() == "cli" for s in specs):
-            if shutil.which("claude") is None:
-                raise SystemExit("cli provider requested but 'claude' not found on PATH")
-            # The CLI civ scopes its MCP servers via a relative `.mcp.json` resolved against
-            # CWD (== project_dir). With --strict-mcp-config a missing config loads ZERO
-            # servers (civ6 included) — a silent no-op. Fail loudly here instead.
-            if not os.path.isfile(os.path.join(os.getcwd(), ".mcp.json")):
+            for cmd in sorted({CLI_PROVIDER_COMMANDS[s.provider] for s in specs if s.driver_kind() == "cli"}):
+                if shutil.which(cmd) is None:
+                    raise SystemExit(f"cli provider requested but '{cmd}' not found on PATH")
+            # cli-claude relies on Claude's project .mcp.json auto-discovery from CWD
+            # (== project_dir). A missing config loads no civ6 server - a silent no-op.
+            # cli-codex uses inline MCP config and does not need this file.
+            if (
+                any(s.provider == "cli-claude" for s in specs)
+                and not os.path.isfile(os.path.join(os.getcwd(), ".mcp.json"))
+            ):
                 raise SystemExit(
                     f"cli provider requested but .mcp.json not found in CWD ({os.getcwd()}); "
                     "run the arena from the repo root")

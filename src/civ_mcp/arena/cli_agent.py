@@ -2,28 +2,49 @@ from __future__ import annotations
 import asyncio, json, os, signal
 
 # Four-layer lockdown for CLI civ security:
-# 1. --tools "" disables all host built-in tools (Bash/Write/Edit/Read)
-# 2. _DENIED_CIV6_TOOLS blocks destructive MCP civ6 tools — the host ends turns and manages
+# 1. --setting-sources project,local keeps project .mcp.json auto-discovery (the only headless
+#    `claude -p` path observed to expose civ6 stdio tools) while excluding user-scope MCP
+#    servers such as serena/Gmail/Drive/Calendar/Code Remote.
+# 2. _DENIED_HOST_TOOLS blocks built-in host tools (Bash/Read/Write/Edit/etc.). Do not use
+#    --tools ""; live testing showed it suppresses the civ6 stdio MCP tools too.
+# 3. _DENIED_CIV6_TOOLS blocks destructive MCP civ6 tools — the host ends turns and manages
 #    the game lifecycle, so the CLI civ must never end_turn, kill/reload, or load saves.
-# 3. --mcp-config .mcp.json --strict-mcp-config scopes the subprocess to ONLY the civ6 MCP
-#    server defined in the project's .mcp.json.  Without this, the CLI civ inherits all
-#    user-scope MCP servers (serena, Gmail, Google Drive, Google Calendar, Claude Code Remote,
-#    Empower, …) and under bypassPermissions every one of those tools is auto-approved —
-#    allowing arbitrary host-file mutation (serena/write_memory/replace_content) or persistent
-#    scheduled agents (Claude Code Remote/create_trigger).  --strict-mcp-config disables
-#    auto-discovery and inherited user-scope servers entirely; only the civ6 server loads.
-# 4. CIV_MCP_DISABLE_LUA=1 makes the civ6 MCP SERVER remove its run_lua tool (server.py honours
-#    this by remove_tool("run_lua")).  This is the decisive layer: run_lua is an arbitrary-Lua
-#    escape hatch reaching execute_write with no seat/caller gating, so a client-side denylist
-#    alone cannot contain it — run_lua(code="UI.RequestAction(...ACTION_ENDTURN)") would end the
-#    turn / kill / load despite layers 1-3.  Server-enforced removal is strictly stronger; see
-#    evals/civbench.py for the same policy.  The denylist entry below is belt-and-suspenders for
-#    clients that still surface the tool name.
+# 4. CIV_MCP_ARENA_PUPPET=1 makes the civ6 MCP SERVER remove lifecycle tools and run_lua.
+#    This is the decisive layer: run_lua is an arbitrary-Lua escape hatch reaching execute_write
+#    with no seat/caller gating, and Codex has no per-invocation MCP denylist. Server-enforced
+#    removal is strictly stronger; the Claude denylist is belt-and-suspenders for clients that
+#    still surface the tool names.
 #    TWO-HOP FORWARDING (critical): Claude Code does NOT pass arbitrary parent env vars through to
 #    the stdio MCP servers it spawns — it forwards only a minimal Posix subset.  Setting the var on
 #    the `claude` subprocess (below) is necessary but NOT sufficient; the var only reaches the
-#    civ6 grandchild because .mcp.json relays it via an `env` block ("${CIV_MCP_DISABLE_LUA:-}").
-#    Both halves are load-bearing — drop either and layer-4 silently no-ops back to the denylist.
+#    civ6 grandchild because .mcp.json relays it via an `env` block. Codex gets the same server
+#    env through inline `mcp_servers.civ6.env` config.
+_SERVER_ENV = {
+    "CIV_MCP_DISABLE_LUA": "1",
+    "CIV_MCP_NO_WEB": "1",
+    "CIV_MCP_ARENA_PUPPET": "1",
+}
+
+_DENIED_HOST_TOOLS = [
+    "Bash",
+    "BashOutput",
+    "KillBash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookRead",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "TodoWrite",
+    "Glob",
+    "Grep",
+    "LS",
+    "ExitPlanMode",
+]
+
 _DENIED_CIV6_TOOLS = [
     "mcp__civ6__end_turn",
     "mcp__civ6__kill_game",
@@ -34,6 +55,16 @@ _DENIED_CIV6_TOOLS = [
     "mcp__civ6__launch_game",
     "mcp__civ6__run_lua",
 ]
+
+_DENIED_TOOLS = _DENIED_HOST_TOOLS + _DENIED_CIV6_TOOLS
+
+_CODEX_MCP_ENV_CONFIG = (
+    'mcp_servers.civ6.env={'
+    'CIV_MCP_DISABLE_LUA="1",'
+    'CIV_MCP_NO_WEB="1",'
+    'CIV_MCP_ARENA_PUPPET="1"'
+    '}'
+)
 
 _PROMPT = (
     "You are playing player {pid} (an AI civ) in the running Civilization VI game; it is "
@@ -53,19 +84,35 @@ class CLIAgentPolicy:
     def _build_argv(self, player_id: int, turn: int) -> list[str]:
         prompt = _PROMPT.format(pid=player_id, turn=turn)
         if self.provider == "cli-claude":
-            # Anchor .mcp.json to project_dir (absolute) so layer-3 scoping cannot silently
-            # become a no-op if the subprocess CWD is not the repo root — with
-            # --strict-mcp-config a missing config loads ZERO servers (civ6 included).
-            mcp_config = os.path.join(self.project_dir, ".mcp.json")
+            # Let Claude auto-discover the project .mcp.json. Live headless tests showed that
+            # explicit --mcp-config does not expose the civ6 stdio server's tools to `claude -p`,
+            # while project auto-discovery does. Scope settings to project/local so user-scope
+            # MCP servers are not inherited into the bypassPermissions subprocess.
             argv = ["claude", "-p", prompt, "--output-format", "json",
                     "--permission-mode", "bypassPermissions",
-                    "--tools", "",
                     "--allowedTools", "mcp__civ6",
-                    "--disallowedTools", " ".join(_DENIED_CIV6_TOOLS),
-                    "--mcp-config", mcp_config, "--strict-mcp-config",
+                    "--disallowedTools", " ".join(_DENIED_TOOLS),
+                    "--setting-sources", "project,local",
                     "--max-turns", str(self.max_turns)]
             if self.model:
                 argv += ["--model", self.model]
+            return argv
+        if self.provider == "cli-codex":
+            argv = [
+                "codex", "exec",
+                "--json",
+                "--ignore-user-config",
+                "--skip-git-repo-check",
+                "-C", self.project_dir,
+                "-s", "danger-full-access",
+                "-c", 'approval_policy="never"',
+                "-c", 'mcp_servers.civ6.command="uv"',
+                "-c", 'mcp_servers.civ6.args=["run","--directory",".","civ-mcp"]',
+                "-c", _CODEX_MCP_ENV_CONFIG,
+            ]
+            if self.model:
+                argv += ["-m", self.model]
+            argv.append(prompt)
             return argv
         raise ValueError(f"unknown CLI provider {self.provider!r}")
 
@@ -93,6 +140,29 @@ class CLIAgentPolicy:
                 float(obj.get("total_cost_usd") or 0.0))
 
     @staticmethod
+    def _parse_codex(stdout: str):
+        summary = ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("type") == "item.completed":
+                item = obj.get("item", {}) or {}
+                if item.get("type") == "agent_message":
+                    summary = str(item.get("text") or "")[:500]
+            elif obj.get("type") == "turn.completed":
+                usage = obj.get("usage", {}) or {}
+                prompt_tokens = int(usage.get("input_tokens") or 0)
+                completion_tokens = int(usage.get("output_tokens") or 0)
+        return (summary, prompt_tokens, completion_tokens, 0.0)
+
+    @staticmethod
     def _kill_group(proc) -> None:
         """SIGKILL the whole process group so the civ6-MCP grandchild (holding tuner port
         4318) dies too, not just `claude`.  Falls back to killing the direct child."""
@@ -103,13 +173,10 @@ class CLIAgentPolicy:
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         argv = self._build_argv(player_id, turn)
-        # Layer-4 lockdown: disable the run_lua escape hatch server-side. This sets the var on the
-        # `claude` process; .mcp.json's civ6 `env` block relays it on to the grandchild server (see
-        # the TWO-HOP FORWARDING note above — claude does not auto-propagate it).
-        # CIV_MCP_NO_WEB: skip the civ6 server's uvicorn web dashboard. Its capture_signals() hijacks
-        # SIGINT/SIGTERM inside the stdio MCP server and crashes the lifespan under `claude -p`,
-        # leaving the CLI civ with ZERO civ6 tools. Both vars are relayed via .mcp.json's env block.
-        env = {**os.environ, "CIV_MCP_DISABLE_LUA": "1", "CIV_MCP_NO_WEB": "1"}
+        # Layer-4 lockdown: disable run_lua/lifecycle tools server-side. Claude relays this
+        # through .mcp.json; Codex receives the same values through inline mcp_servers.civ6.env.
+        # The parent env is still set so direct project auto-discovery paths inherit it when they can.
+        env = {**os.environ, **_SERVER_ENV}
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=self.project_dir, env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -137,7 +204,10 @@ class CLIAgentPolicy:
                 pass
             raise
         stdout = out.decode("utf-8", "replace")
-        summary, pt, ct, usd = self._parse_claude(stdout)
+        if self.provider == "cli-codex":
+            summary, pt, ct, usd = self._parse_codex(stdout)
+        else:
+            summary, pt, ct, usd = self._parse_claude(stdout)
         self.cost.record(player_id=player_id, model=(self.model or self.provider),
                          provider=self.provider, prompt_tokens=pt, completion_tokens=ct,
                          turn=turn, usd=usd)

@@ -375,6 +375,33 @@ mcp = FastMCP(
     lifespan=lifespan,
 )
 
+_ARENA_PUPPET_TOOLS = (
+    "end_turn",
+    "kill_game",
+    "load_game_save",
+    "restart_and_load",
+    "load_save",
+    "load_save_from_menu",
+    "launch_game",
+    "run_lua",
+)
+
+
+def _tools_removed_for_env(env: dict[str, str]) -> tuple[str, ...]:
+    removed: list[str] = []
+    if env.get("CIV_MCP_DISABLE_LUA"):
+        removed.append("run_lua")
+    if env.get("CIV_MCP_ARENA_PUPPET"):
+        removed.extend(_ARENA_PUPPET_TOOLS)
+    return tuple(dict.fromkeys(removed))
+
+
+def _apply_env_tool_gates() -> None:
+    manager = mcp._tool_manager
+    for tool_name in _tools_removed_for_env(os.environ):
+        if tool_name in manager._tools:
+            manager.remove_tool(tool_name)
+
 
 def _get_game(ctx: Context) -> GameState:
     return ctx.request_context.lifespan_context.game
@@ -2924,12 +2951,16 @@ def main():
     # Without this, SIGTERM kills the process immediately, leaving the game
     # with an abrupt TCP RST which can cause it to crash.
     # SIGTERM is not available on Windows, so skip the remap there.
-    if hasattr(signal, "SIGTERM"):
+    # Skipped in headless mode (CIV_MCP_NO_WEB, e.g. the arena's `claude -p` CLI-civ spawn):
+    # the host tears the stdio server down with SIGTERM, and under `claude -p` this remap turns
+    # it into an UNCAUGHT KeyboardInterrupt that crashes the server (observed mid-session),
+    # destabilising the MCP connection so the agent ends up with no civ6 tools. The ephemeral
+    # CLI-civ server is process-group-killed by the arena, which reclaims the tuner itself.
+    if hasattr(signal, "SIGTERM") and not os.environ.get("CIV_MCP_NO_WEB"):
         signal.signal(
             signal.SIGTERM, lambda sig, frame: os.kill(os.getpid(), signal.SIGINT)
         )
 
-    if os.environ.get("CIV_MCP_DISABLE_LUA"):
-        mcp._tool_manager.remove_tool("run_lua")
+    _apply_env_tool_gates()
 
     mcp.run(transport="stdio")

@@ -5,20 +5,21 @@ from dataclasses import dataclass, field
 # ArenaConfig default and the --gateway-url CLI default.
 DEFAULT_GATEWAY_URL = "http://192.168.20.196:11430/v1"
 
-_CLI_PROVIDERS = {"cli-claude"}
+CLI_PROVIDER_COMMANDS = {"cli-claude": "claude", "cli-codex": "codex"}
+_CLI_PROVIDERS = set(CLI_PROVIDER_COMMANDS)
 _VALID_PROVIDERS = {"local"} | _CLI_PROVIDERS
 
 @dataclass(frozen=True)
 class PlayerSpec:
     player_id: int
-    provider: str  # "local" | "cli-claude"
+    provider: str  # "local" | "cli-claude" | "cli-codex"
     model: str
 
     def driver_kind(self) -> str:
         return "cli" if self.provider in _CLI_PROVIDERS else "in_process"
 
 def parse_player_spec(s: str) -> PlayerSpec:
-    # "1:local:qwen3-coder:30b" or "2:cli-claude:"
+    # "1:local:qwen3-coder:30b", "2:cli-claude:", or "2:cli-codex:gpt-5.5"
     parts = s.split(":", 2)
     if len(parts) != 3:
         raise ValueError(f"bad --player spec {s!r}; want '<id>:<provider>:<model>'")

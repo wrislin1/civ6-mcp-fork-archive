@@ -1,8 +1,44 @@
 # Arena live-gate finding: headless CLI civ loads no civ6 MCP tools
 
-**Status:** OPEN — blocks the `arena-vertical-slice` CLI-civ driver from functioning.
+**Status:** CODEX PATH VERIFIED — Claude path remains blocked by account/session limits during
+testing; Codex CLI path works on the gaming PC.
 **Found:** live gate on the gaming PC (`riz@192.168.20.141`, WSL2), branch `arena-vertical-slice` @ `19cfb81`.
 **Severity:** High — the CLI-civ driver is non-functional for actual play (it has no tools to call).
+
+## 2026-06-30 update
+
+Follow-up live testing refined the original hypothesis:
+
+- `CIV_MCP_NO_WEB=1` fixes the first server-side crash: the uvicorn dashboard's signal handling
+  interfered with the stdio MCP server under `claude -p`.
+- Skipping the server's SIGTERM→SIGINT remap in `CIV_MCP_NO_WEB` mode fixes the teardown crash.
+- Project `.mcp.json` auto-discovery **does** expose civ6 tools under headless `claude -p`; a test
+  prompt successfully called `get_game_overview` and reported Turn 4 as Korea/Seondeok.
+- `--tools ""` by itself suppresses the civ6 stdio MCP tools in this Claude CLI build.
+- Explicit `--mcp-config ...` remained non-working for the civ6 stdio server, even without
+  `--strict-mcp-config`.
+
+The implemented driver fix therefore uses the working project auto-discovery path, adds
+`--setting-sources project,local` to exclude user-scope MCP servers, removes `--tools ""`, removes
+explicit `--mcp-config`, and denies host built-ins plus destructive civ6 tools through
+`--disallowedTools`. Server-side `CIV_MCP_DISABLE_LUA=1` still removes `run_lua`.
+
+## 2026-06-30 Codex path
+
+Codex works under headless `codex exec` when the arena ignores user config and supplies the civ6 MCP
+server inline:
+
+- `codex exec --ignore-user-config ... -c 'mcp_servers.civ6.command="uv"' ...`
+- `mcp_servers.civ6.env` sets `CIV_MCP_DISABLE_LUA=1`, `CIV_MCP_NO_WEB=1`, and
+  `CIV_MCP_ARENA_PUPPET=1`.
+- `CIV_MCP_ARENA_PUPPET=1` removes `end_turn`, game lifecycle tools, and `run_lua` server-side,
+  which is required because Codex does not have a Claude-style per-invocation MCP denylist.
+
+Live smoke on `riz@192.168.20.141`:
+
+- Direct `codex exec` with inline civ6 MCP config called `get_game_overview` and reported Turn 4.
+- Actual `CLIAgentPolicy("cli-codex")` with an overview-only prompt returned
+  `"Turn 4 for player 0."` and recorded usage for provider `cli-codex`.
 
 ## Symptom
 
@@ -38,7 +74,7 @@ relative-vs-absolute config path, and **not** `--strict-mcp-config` alone. The c
 - FireTuner is reachable at `127.0.0.1:4318` (WSL2 mirrored networking; `ss` can't enumerate the
   Windows-side listener but a TCP connect succeeds).
 
-## Root-cause hypothesis
+## Original root-cause hypothesis (partially superseded)
 
 The civ6 MCP **lifespan is heavy** (`src/civ_mcp/server.py`, lifespan ~L300-360): before it yields
 its tools it connects to the FireTuner, starts background spectator services
@@ -50,6 +86,10 @@ has limited stdio-server support). Either way the CLI civ gets no tools.
 
 > Note: the user's normal civ6 play is via **interactive** `claude`, where civ6 loads fine — which
 > points the problem at the headless `-p` path / startup time, not the server's correctness.
+
+Later testing showed this was only the first layer. Disabling the web API fixed the server crash,
+but civ6 tools still disappeared whenever the driver used `--tools ""` or explicit `--mcp-config`.
+Project auto-discovery without those flags did expose civ6 tools.
 
 ## Consequence for the security gate
 
@@ -63,13 +103,17 @@ and applying `main()`'s gate removes `run_lua` while keeping the other 75 tools.
 - **Human-safety handback**: restored to `LOCAL|0` after both the dry-run and the CLI-civ run — the
   invariant the branch exists to guarantee.
 - Dry-run end-to-end: hook inject → seize P1's turn → scripted action → restore → tuner reclaim.
-- Layer-1 sandbox: `--tools ""` removes Bash (agent cannot run shell `id`).
+- Layer-1 sandbox: `--tools ""` removes Bash (agent cannot run shell `id`), but later testing showed
+  it also removes the civ6 stdio tools and therefore cannot be used by the CLI-civ driver.
 - Layer-3 need confirmed: without `--strict-mcp-config`, user-scope servers
   (serena/boomtube/Gmail/Drive/Calendar/Code-Remote) all load.
 - Server-side `run_lua` removal under `CIV_MCP_DISABLE_LUA=1` (deterministic).
 - Cost logging works; unit suite 32/32 on `.141`.
 
-## Candidate fixes (in preference order)
+## Superseded candidate fixes
+
+These were the initial candidates before the `--tools ""` and explicit `--mcp-config` behavior was
+isolated. The implemented fix is described in the 2026-06-30 update above.
 
 1. **Lightweight stdio mode for the civ6 server.** Gate the web API + camera/popup/watchdog services
    behind an env (e.g. `CIV_MCP_LIGHT=1`), set by `cli_agent` for the arena spawn, so the lifespan

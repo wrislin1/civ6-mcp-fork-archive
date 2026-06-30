@@ -18,6 +18,11 @@ def test_cli_claude_empty_model():
     assert s == PlayerSpec(2, "cli-claude", "")
     assert s.driver_kind() == "cli"
 
+def test_cli_codex_model_optional():
+    s = parse_player_spec("2:cli-codex:gpt-5.5")
+    assert s == PlayerSpec(2, "cli-codex", "gpt-5.5")
+    assert s.driver_kind() == "cli"
+
 def test_rejects_unknown_provider():
     with pytest.raises(ValueError):
         parse_player_spec("1:typo:model")

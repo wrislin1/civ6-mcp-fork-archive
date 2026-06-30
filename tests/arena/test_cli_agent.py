@@ -29,17 +29,39 @@ def test_claude_argv_contains_mcp_and_safety():
     # the prompt names the seat
     assert any("player 2" in a for a in argv)
 
-def test_host_tools_disabled_and_civ6_denylist():
+def test_codex_argv_contains_inline_civ6_mcp_and_safety():
+    pol = CLIAgentPolicy("cli-codex", FakeCost(), project_dir="/x", model="gpt-5.5", max_turns=20)
+    argv = pol._build_argv(player_id=2, turn=3)
+    assert argv[:2] == ["codex", "exec"]
+    assert "--json" in argv
+    assert "--ignore-user-config" in argv
+    assert "--skip-git-repo-check" in argv
+    assert "-C" in argv and argv[argv.index("-C") + 1] == "/x"
+    assert "-m" in argv and argv[argv.index("-m") + 1] == "gpt-5.5"
+    assert "-s" in argv and argv[argv.index("-s") + 1] == "danger-full-access"
+    joined = " ".join(argv)
+    assert 'mcp_servers.civ6.command="uv"' in joined
+    assert 'mcp_servers.civ6.args=["run","--directory",".","civ-mcp"]' in joined
+    assert 'CIV_MCP_ARENA_PUPPET="1"' in joined
+    assert 'CIV_MCP_DISABLE_LUA="1"' in joined
+    assert 'CIV_MCP_NO_WEB="1"' in joined
+    # Codex has no per-invocation MCP denylist; arena puppet mode removes lifecycle tools server-side.
+    assert "--disallowedTools" not in argv
+
+def test_host_tools_and_destructive_civ6_tools_denied_without_tools_flag():
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir=".", max_turns=5)
     argv = pol._build_argv(player_id=2, turn=5)
-    # verify --tools "" disables host built-in tools (Bash/Write/Edit/Read)
-    assert "--tools" in argv
-    tools_idx = argv.index("--tools")
-    assert argv[tools_idx + 1] == ""
-    # verify --disallowedTools still present with the denylist
+    # `--tools ""` disables the civ6 stdio MCP tools under headless `claude -p`.
+    # Keep MCP tools available and deny host built-ins through the explicit denylist instead.
+    assert "--tools" not in argv
     assert "--disallowedTools" in argv
     denied_idx = argv.index("--disallowedTools")
     denied_list = argv[denied_idx + 1]
+    assert "Bash" in denied_list
+    assert "Read" in denied_list
+    assert "Write" in denied_list
+    assert "Edit" in denied_list
+    assert "MultiEdit" in denied_list
     assert "mcp__civ6__end_turn" in denied_list
     assert "mcp__civ6__kill_game" in denied_list
     # run_lua is the arbitrary-Lua escape hatch — it MUST be on the denylist too
@@ -69,6 +91,7 @@ def test_run_lua_disabled_in_child_env(monkeypatch):
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
     asyncio.run(pol(None, player_id=2, turn=3))
     assert captured.get("env", {}).get("CIV_MCP_DISABLE_LUA") == "1"
+    assert captured["env"].get("CIV_MCP_ARENA_PUPPET") == "1"
     # CIV_MCP_NO_WEB disables the civ6 uvicorn dashboard, whose capture_signals() otherwise
     # crashes the stdio MCP server under `claude -p` and leaves the CLI civ with no tools
     assert captured["env"].get("CIV_MCP_NO_WEB") == "1"
@@ -95,6 +118,10 @@ def test_mcp_config_relays_lua_disable():
     # capture_signals() crashes the stdio server under `claude -p`)
     assert "CIV_MCP_NO_WEB" in civ6_env
     assert "CIV_MCP_NO_WEB" in civ6_env["CIV_MCP_NO_WEB"]
+    # Claude's stdio MCP env relay must also carry arena puppet mode so lifecycle tools
+    # are removed server-side, matching the Codex inline MCP config path.
+    assert "CIV_MCP_ARENA_PUPPET" in civ6_env
+    assert "CIV_MCP_ARENA_PUPPET" in civ6_env["CIV_MCP_ARENA_PUPPET"]
 
 
 def test_timeout_kills_process_group(monkeypatch):
@@ -179,22 +206,21 @@ def test_cancel_kills_process_group(monkeypatch):
     assert fallback == []
 
 
-def test_strict_mcp_config_scopes_to_civ6_only():
-    """--mcp-config .mcp.json + --strict-mcp-config must be present (layer 3 lockdown).
+def test_project_auto_discovery_scoped_to_project_settings():
+    """Use project auto-discovery, but exclude user-scope settings.
 
-    This ensures the CLI civ subprocess only sees the civ6 MCP server and cannot
-    reach user-scope servers (serena, Gmail, Google Drive, Claude Code Remote, etc.)
-    which would otherwise be auto-approved under bypassPermissions.
+    Live headless testing on the gaming PC showed that passing `--mcp-config` for the
+    civ6 stdio server does not expose its tools to `claude -p`, while project
+    auto-discovery does. `--setting-sources project,local` preserves that working
+    path and keeps user-scope MCP servers out of the bypassPermissions subprocess.
     """
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir=".", max_turns=5)
     argv = pol._build_argv(player_id=2, turn=5)
-    # layer 3: --mcp-config limits which servers are loaded; the path is anchored to
-    # project_dir so it cannot silently resolve to a non-existent file off the repo root
-    assert "--mcp-config" in argv
-    mcp_config_idx = argv.index("--mcp-config")
-    assert argv[mcp_config_idx + 1] == os.path.join(pol.project_dir, ".mcp.json")
-    # --strict-mcp-config disables auto-discovery / inherited user-scope servers
-    assert "--strict-mcp-config" in argv
+    assert "--mcp-config" not in argv
+    assert "--strict-mcp-config" not in argv
+    assert "--setting-sources" in argv
+    setting_sources_idx = argv.index("--setting-sources")
+    assert argv[setting_sources_idx + 1] == "project,local"
 
 
 def test_parse_claude_usage():
@@ -211,3 +237,17 @@ def test_parse_claude_null_fields():
     blob = json.dumps({"type": "result", "result": None, "usage": {"input_tokens": None, "output_tokens": None}, "total_cost_usd": None})
     summary, pt, ct, usd = pol._parse_claude(blob)
     assert summary == "" and pt == 0 and ct == 0 and usd == 0.0
+
+
+def test_parse_codex_json_events():
+    pol = CLIAgentPolicy("cli-codex", FakeCost(), project_dir="/x")
+    blob = "\n".join([
+        json.dumps({"type": "thread.started", "thread_id": "t"}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Turn 4"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 123, "output_tokens": 45}}),
+    ])
+    summary, pt, ct, usd = pol._parse_codex(blob)
+    assert summary == "Turn 4"
+    assert pt == 123
+    assert ct == 45
+    assert usd == 0.0
