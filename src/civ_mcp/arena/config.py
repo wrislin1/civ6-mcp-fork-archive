@@ -43,4 +43,3 @@ class ArenaConfig:
     puppet_ids: list[int] = field(default_factory=list)
     run_id: str = ""
     transcript_dir: str = "arena_runs"
-    transcript_enabled: bool = True

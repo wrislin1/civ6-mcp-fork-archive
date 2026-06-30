@@ -38,6 +38,3 @@ def test_arena_config_run_id_default():
 
 def test_arena_config_transcript_dir_default():
     assert ArenaConfig(players=[]).transcript_dir == "arena_runs"
-
-def test_arena_config_transcript_enabled_default():
-    assert ArenaConfig(players=[]).transcript_enabled is True

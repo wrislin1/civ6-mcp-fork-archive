@@ -9,7 +9,7 @@ from civ_mcp.arena.backends import Reply
 # ---------------------------------------------------------------------------
 
 def test_model_feed_char_cap_constant():
-    """MODULE_FEED_CHAR_CAP must equal 1500 and be exported from agent module."""
+    """MODEL_FEED_CHAR_CAP must equal 1500 and be exported from agent module."""
     assert agent.MODEL_FEED_CHAR_CAP == 1500
 
 class FakeGS:

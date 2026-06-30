@@ -168,7 +168,7 @@ def _rubric_for_model(records: list[dict]) -> dict:
         # ---- set_research_or_production ----
         if rubric["set_research_or_production"] is None:
             for step in steps:
-                tool_base = (step.get("tool_name") or "").removeprefix("mcp__civ6__")
+                tool_base = (step.get("tool_name") or "").removeprefix(MCP_CIV6_PREFIX)
                 result = _safe_str(step.get("tool_result_full", ""))
                 if tool_base in ("set_research", "set_city_production"):
                     if not _is_error_result(result):
@@ -186,7 +186,7 @@ def _rubric_for_model(records: list[dict]) -> dict:
                 if verb == "move" and _is_error_result(result):
                     rubric["wasted_move"] = {
                         "turn": turn,
-                        "note": "move returned ERROR",
+                        "note": "move returned error/blocked",
                     }
                     break
 
