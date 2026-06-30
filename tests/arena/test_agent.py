@@ -120,3 +120,106 @@ async def test_transcript_max_steps_reached():
     assert "transcript" in out
     assert out["transcript"]["max_steps_reached"] is True
     assert len(out["transcript"]["steps"]) == 2  # one step per loop iteration
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: truncation invariant — tool result > 1500 chars
+# ---------------------------------------------------------------------------
+
+class FakeGSLong:
+    """GS whose get_game_overview returns a 2000-char string."""
+    async def get_game_overview(self): return "X" * 2000
+    async def get_units(self): return []
+    async def get_cities(self): return []
+
+
+class FakeBackendTruncation:
+    """First reply: get_overview call.  Second reply: text (no tool calls)."""
+    def __init__(self):
+        self.n = 0
+        self.last_messages = None
+
+    async def chat(self, messages, tools):
+        self.n += 1
+        self.last_messages = messages
+        if self.n == 1:
+            return Reply(
+                text=None,
+                tool_calls=[{"id": "tr1", "name": "get_overview", "arguments": "{}"}],
+                prompt_tokens=20,
+                completion_tokens=3,
+            )
+        return Reply(text="done", tool_calls=[], prompt_tokens=10, completion_tokens=2)
+
+
+@pytest.mark.asyncio
+async def test_transcript_truncation_invariant():
+    """tool_result_full is untruncated; model receives only [:1500]."""
+    gs = FakeGSLong()
+    be = FakeBackendTruncation()
+    cost = FakeCost()
+    pol = LLMPolicy(be, cost, max_steps=4)
+    out = await pol(gs, player_id=1, turn=5)
+
+    t = out["transcript"]
+    assert len(t["steps"]) == 1
+    step = t["steps"][0]
+
+    # Core invariant: full capture is untruncated
+    assert step["tool_result_full"] == "X" * 2000
+    assert step["result_total_chars"] == 2000
+    assert step["result_chars_fed_to_model"] == 1500
+    assert step["truncated"] is True
+
+    # The tool message actually fed to the model is exactly 1500 chars
+    tool_msgs = [m for m in be.last_messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["content"] == "X" * 1500
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: bad_arguments classification
+# ---------------------------------------------------------------------------
+
+class FakeBackendBadArgs:
+    """First reply: fortify_unit with malformed JSON arguments.  Second: text."""
+    def __init__(self):
+        self.n = 0
+
+    async def chat(self, messages, tools):
+        self.n += 1
+        if self.n == 1:
+            return Reply(
+                text=None,
+                tool_calls=[
+                    {"id": "ba1", "name": "fortify_unit",
+                     "arguments": '{"unit_index": not valid json'}
+                ],
+                prompt_tokens=10,
+                completion_tokens=2,
+            )
+        return Reply(text="done", tool_calls=[], prompt_tokens=5, completion_tokens=1)
+
+
+@pytest.mark.asyncio
+async def test_transcript_bad_arguments():
+    """Known tool name with malformed JSON args → classified as bad_arguments; run does not crash."""
+    gs = FakeGS()
+    be = FakeBackendBadArgs()
+    cost = FakeCost()
+    pol = LLMPolicy(be, cost, max_steps=4)
+    # Must not raise
+    out = await pol(gs, player_id=1, turn=7)
+
+    t = out["transcript"]
+
+    # bad_arguments entry must appear in invalid_tool_calls
+    assert any(
+        ic["name"] == "fortify_unit" and ic["reason"] == "bad_arguments"
+        for ic in t["invalid_tool_calls"]
+    ), f"Expected bad_arguments entry, got: {t['invalid_tool_calls']}"
+
+    # The run still completed (dispatch caught the exception, returned ERROR string)
+    assert len(t["steps"]) == 1
+    assert t["steps"][0]["tool_result_full"].startswith("ERROR:")
+    assert t["max_steps_reached"] is False
