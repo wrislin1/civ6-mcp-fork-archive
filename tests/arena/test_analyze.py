@@ -842,3 +842,61 @@ def test_empty_model_falls_back_to_provider(tmp_path: Path) -> None:
         "cli-claude (empty model) must group under provider name, not 'unknown'"
     )
     assert "unknown" not in report["by_model"]
+
+
+# ---------------------------------------------------------------------------
+# Task D — load_records must skip non-dict JSONL lines (Finding 5)
+# ---------------------------------------------------------------------------
+
+def test_load_records_skips_non_dict_lines(tmp_path: Path) -> None:
+    """load_records must drop bare scalars and JSON lists; only dicts are returned.
+
+    Under the unfixed code, load_records appends ANY parsed JSON value, so
+    analyze() later crashes with AttributeError when rec.get() is called on
+    a non-dict. This test is RED until isinstance(obj, dict) guard is added.
+    """
+    from civ_mcp.arena.analyze import load_records, analyze
+
+    jsonl_path = tmp_path / "mixed.jsonl"
+    valid_rec = {
+        "schema_version": 1,
+        "run_id": "task-d-test",
+        "ts": "2026-01-01T00:00:00Z",
+        "player_id": 1,
+        "turn": 1,
+        "provider": "local",
+        "model": "task-d-model",
+        "driver": "in_process",
+        "steps": [],
+        "invalid_tool_calls": [],
+        "wall_clock_s": 1.0,
+        "final_summary": "done",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "max_steps_reached": False,
+        "step_count": 0,
+        "usd": 0.0,
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+    # Write a JSONL with: bare integer, JSON list, valid dict, bare string
+    lines = [
+        "123",
+        "[1, 2]",
+        json.dumps(valid_rec),
+        '"just a string"',
+    ]
+    jsonl_path.write_text("\n".join(lines) + "\n")
+
+    records = load_records(jsonl_path)
+
+    # Only the dict should survive
+    assert len(records) == 1, (
+        f"Expected 1 dict record, got {len(records)}: {records!r}"
+    )
+    assert records[0]["model"] == "task-d-model"
+
+    # analyze must not raise AttributeError on the filtered records
+    report = analyze(records, [])
+    assert "task-d-model" in report["by_model"]

@@ -36,7 +36,9 @@ def load_records(path: "Path | str") -> list[dict]:
             raw = raw.strip()
             if raw:
                 try:
-                    records.append(json.loads(raw))
+                    obj = json.loads(raw)
+                    if isinstance(obj, dict):
+                        records.append(obj)
                 except json.JSONDecodeError:
                     pass
     return records
