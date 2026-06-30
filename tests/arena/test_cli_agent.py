@@ -574,3 +574,125 @@ def test_call_parser_exception_yields_empty_steps(monkeypatch):
     assert result["usage"]["prompt_tokens"] == 10
     # Parser crash must NOT propagate — steps is empty list
     assert result["transcript"]["steps"] == []
+
+
+# ---------------------------------------------------------------------------
+# _detect_invalid_tool_calls — Finding 3 CLI invalid-call detection (real signal)
+# ---------------------------------------------------------------------------
+
+def test_detect_invalid_tool_calls_classifies():
+    """The civ6 MCP frames a malformed call as 'Error executing tool <name>: ...'.
+    Game-rejected VALID actions ('...|BLOCKED', 'Error: CANNOT_START|...') are NOT
+    invalid calls — they belong to the analyze rubric, not here."""
+    steps = [
+        {"tool_name": "mcp__civ6__get_units", "tool_result_full": "2 units: Settler ..."},
+        {"tool_name": "mcp__civ6__get_map_area",
+         "tool_result_full": "Error executing tool get_map_area: 2 validation errors for "
+                             "get_map_areaArguments\ncenter_x\n  Field required"},
+        {"tool_name": "mcp__civ6__bogus_tool",
+         "tool_result_full": "Error executing tool bogus_tool: tool not found"},
+        {"tool_name": None, "tool_result_full": "Error executing tool x: whatever"},
+        {"tool_name": "mcp__civ6__move_unit", "tool_result_full": "MOVING_TO|3,3|BLOCKED"},
+        {"tool_name": "mcp__civ6__set_city_production",
+         "tool_result_full": "Error: CANNOT_START|UNIT_WARRIOR cannot start."},
+    ]
+    inv = CLIAgentPolicy._detect_invalid_tool_calls(steps)
+    pairs = {(i["tool_name"], i["reason"]) for i in inv}
+    assert ("mcp__civ6__get_map_area", "bad_arguments") in pairs
+    assert ("mcp__civ6__bogus_tool", "unknown_tool") in pairs
+    # exactly two — the no-tool-name step and the two game-rejected valid actions are excluded
+    assert len(inv) == 2
+    assert all("result_head" in i for i in inv)
+
+
+def test_detect_invalid_tool_calls_empty():
+    assert CLIAgentPolicy._detect_invalid_tool_calls([]) == []
+    assert CLIAgentPolicy._detect_invalid_tool_calls(
+        [{"tool_name": "mcp__civ6__get_units", "tool_result_full": "ok"}]) == []
+
+
+_CLAUDE_INVALID_FIXTURE = "\n".join([
+    json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "mcp__civ6__get_map_area", "input": {}}
+    ]}}),
+    json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": "Error executing tool get_map_area: 2 validation errors for "
+                    "get_map_areaArguments\ncenter_x\n  Field required"}
+    ]}}),
+    json.dumps({"type": "result", "subtype": "success", "result": "done",
+                "usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.0}),
+])
+
+
+def test_call_success_detects_invalid_from_error_result(monkeypatch):
+    """End-to-end: a real 'Error executing tool ...' result populates invalid_tool_calls."""
+    class FakeProc:
+        pid = 9
+        returncode = 0
+        async def communicate(self):
+            return (_CLAUDE_INVALID_FIXTURE.encode(), b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+    inv = result["transcript"]["invalid_tool_calls"]
+    assert len(inv) == 1
+    assert inv[0]["tool_name"] == "mcp__civ6__get_map_area"
+    assert inv[0]["reason"] == "bad_arguments"
+
+
+# ---------------------------------------------------------------------------
+# Raw stdout capture (env-gated) — enables codex-parser fixtures + debugging
+# ---------------------------------------------------------------------------
+
+def test_call_raw_capture_writes_when_env_set(monkeypatch, tmp_path):
+    raw_dir = tmp_path / "raw"
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (_CLAUDE_STREAM_FIXTURE.encode(), b"err text")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    monkeypatch.setenv("CIV_MCP_ARENA_RAW_DIR", str(raw_dir))
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
+    asyncio.run(pol(None, player_id=2, turn=7))
+
+    out_f = raw_dir / "cli-claude-p2-t7.stdout"
+    err_f = raw_dir / "cli-claude-p2-t7.stderr"
+    assert out_f.exists() and "Moved scout north" in out_f.read_text()
+    assert err_f.read_text() == "err text"
+
+
+def test_call_raw_capture_absent_when_env_unset(monkeypatch, tmp_path):
+    raw_dir = tmp_path / "raw"
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (_CLAUDE_STREAM_FIXTURE.encode(), b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    monkeypatch.delenv("CIV_MCP_ARENA_RAW_DIR", raising=False)
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
+    asyncio.run(pol(None, player_id=2, turn=7))
+
+    assert not raw_dir.exists()

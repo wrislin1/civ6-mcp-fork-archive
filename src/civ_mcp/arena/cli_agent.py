@@ -311,6 +311,51 @@ class CLIAgentPolicy:
         except (ProcessLookupError, PermissionError):
             proc.kill()
 
+    @staticmethod
+    def _detect_invalid_tool_calls(steps: list) -> list:
+        """Detect malformed / hallucinated CLI tool calls from parsed steps.
+
+        The civ6 MCP server frames a rejected call as ``Error executing tool <name>: ...``
+        (e.g. pydantic validation errors for bad/missing args, or an unknown tool). That
+        framing is distinct from a VALID call the game rejected on rules grounds
+        (``Error: CANNOT_START|...``, ``...|BLOCKED``), which the analyze rubric scores —
+        NOT here. Both CLI providers share the same civ6 MCP, so this generalizes across
+        claude and codex once their steps carry tool_name + tool_result_full.
+        """
+        invalid: list[dict] = []
+        for s in steps:
+            if not isinstance(s, dict) or not s.get("tool_name"):
+                continue
+            res = str(s.get("tool_result_full") or "")
+            if not res.startswith("Error executing tool"):
+                continue
+            low = res.lower()
+            if "validation error" in low:
+                reason = "bad_arguments"
+            elif "not found" in low or "unknown tool" in low or "no such tool" in low:
+                reason = "unknown_tool"
+            else:
+                reason = "tool_error"
+            invalid.append({"tool_name": s.get("tool_name"), "reason": reason,
+                            "result_head": res[:160]})
+        return invalid
+
+    def _dump_raw(self, raw_dir: str, player_id: int, turn: int, stdout: str, stderr: str) -> None:
+        """Best-effort persist of raw CLI stdout/stderr for fixture-pinning + debugging.
+
+        Env-gated via CIV_MCP_ARENA_RAW_DIR (off by default — codex stdout is large).
+        Never raises into the turn; a capture failure must not affect the run.
+        """
+        try:
+            os.makedirs(raw_dir, exist_ok=True)
+            base = os.path.join(raw_dir, f"{self.provider}-p{player_id}-t{turn}")
+            with open(base + ".stdout", "w") as fh:
+                fh.write(stdout)
+            with open(base + ".stderr", "w") as fh:
+                fh.write(stderr)
+        except Exception:
+            pass
+
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         argv = self._build_argv(player_id, turn)
         # Layer-4 lockdown: disable run_lua/lifecycle tools server-side. Claude relays this
@@ -342,7 +387,7 @@ class CLIAgentPolicy:
                 "final_summary": timeout_summary,
                 "cli_exit": None,
                 "cli_stderr_tail": "",
-                "invalid_tool_calls": [],  # invalid-tool-call detection deferred to live Task 9 (needs real stream-json/codex stdout)
+                "invalid_tool_calls": [],  # timeout: no parsed steps to inspect
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
             }
@@ -360,7 +405,11 @@ class CLIAgentPolicy:
             raise
         wall_s = time.monotonic() - t0
         stdout = out.decode("utf-8", "replace")
-        stderr_tail = err.decode("utf-8", "replace")[-400:]
+        stderr_full = err.decode("utf-8", "replace")
+        stderr_tail = stderr_full[-400:]
+        raw_dir = os.environ.get("CIV_MCP_ARENA_RAW_DIR")
+        if raw_dir:
+            self._dump_raw(raw_dir, player_id, turn, stdout, stderr_full)
         if self.provider == "cli-codex":
             summary, pt, ct, usd = self._parse_codex(stdout)
             try:
@@ -385,7 +434,7 @@ class CLIAgentPolicy:
             "final_summary": summary,
             "cli_exit": proc.returncode,
             "cli_stderr_tail": stderr_tail,
-            "invalid_tool_calls": [],  # invalid-tool-call detection deferred to live Task 9 (needs real stream-json/codex stdout)
+            "invalid_tool_calls": self._detect_invalid_tool_calls(steps),
             "prompt_tokens": pt,
             "completion_tokens": ct,
         }
