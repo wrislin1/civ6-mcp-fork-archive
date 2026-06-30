@@ -106,7 +106,10 @@ class CLIAgentPolicy:
         # Layer-4 lockdown: disable the run_lua escape hatch server-side. This sets the var on the
         # `claude` process; .mcp.json's civ6 `env` block relays it on to the grandchild server (see
         # the TWO-HOP FORWARDING note above — claude does not auto-propagate it).
-        env = {**os.environ, "CIV_MCP_DISABLE_LUA": "1"}
+        # CIV_MCP_NO_WEB: skip the civ6 server's uvicorn web dashboard. Its capture_signals() hijacks
+        # SIGINT/SIGTERM inside the stdio MCP server and crashes the lifespan under `claude -p`,
+        # leaving the CLI civ with ZERO civ6 tools. Both vars are relayed via .mcp.json's env block.
+        env = {**os.environ, "CIV_MCP_DISABLE_LUA": "1", "CIV_MCP_NO_WEB": "1"}
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=self.project_dir, env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

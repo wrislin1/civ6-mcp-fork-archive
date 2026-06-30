@@ -4,7 +4,8 @@
       "command": "uv",
       "args": ["run", "--directory", ".", "civ-mcp"],
       "env": {
-        "CIV_MCP_DISABLE_LUA": "${CIV_MCP_DISABLE_LUA:-}"
+        "CIV_MCP_DISABLE_LUA": "${CIV_MCP_DISABLE_LUA:-}",
+        "CIV_MCP_NO_WEB": "${CIV_MCP_NO_WEB:-}"
       }
     }
   }

@@ -69,6 +69,9 @@ def test_run_lua_disabled_in_child_env(monkeypatch):
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
     asyncio.run(pol(None, player_id=2, turn=3))
     assert captured.get("env", {}).get("CIV_MCP_DISABLE_LUA") == "1"
+    # CIV_MCP_NO_WEB disables the civ6 uvicorn dashboard, whose capture_signals() otherwise
+    # crashes the stdio MCP server under `claude -p` and leaves the CLI civ with no tools
+    assert captured["env"].get("CIV_MCP_NO_WEB") == "1"
     # the rest of the host env is preserved (not replaced wholesale)
     assert "PATH" in captured["env"]
 
@@ -88,6 +91,10 @@ def test_mcp_config_relays_lua_disable():
     # the value must reference the parent env var (e.g. ${CIV_MCP_DISABLE_LUA:-}) so the
     # arena's "1" actually flows through — a hard-coded constant would not pick it up
     assert "CIV_MCP_DISABLE_LUA" in civ6_env["CIV_MCP_DISABLE_LUA"]
+    # same two-hop relay for CIV_MCP_NO_WEB (disables the uvicorn dashboard whose
+    # capture_signals() crashes the stdio server under `claude -p`)
+    assert "CIV_MCP_NO_WEB" in civ6_env
+    assert "CIV_MCP_NO_WEB" in civ6_env["CIV_MCP_NO_WEB"]
 
 
 def test_timeout_kills_process_group(monkeypatch):
