@@ -29,7 +29,7 @@ def parse_player_spec(s: str) -> PlayerSpec:
 class ArenaConfig:
     players: list[PlayerSpec]
     max_puppet_turns: int = 1
-    gateway_url: str = "http://192.168.20.146:4000/v1"  # placeholder; overridden by CLI
+    gateway_url: str = "http://192.168.20.196:11430/v1"  # overridden by CLI
     api_key_env: str = "LITELLM_OPENAI_API_KEY"
     dry_run: bool = False
     max_agent_steps: int = 6
