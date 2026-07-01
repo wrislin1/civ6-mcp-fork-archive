@@ -14,21 +14,28 @@ class PlayerSpec:
     player_id: int
     provider: str  # "local" | "cli-claude" | "cli-codex"
     model: str
+    gateway: str = ""  # optional per-civ gateway override (in-process local civs only)
 
     def driver_kind(self) -> str:
         return "cli" if self.provider in _CLI_PROVIDERS else "in_process"
 
 def parse_player_spec(s: str) -> PlayerSpec:
-    # "1:local:qwen3-coder:30b", "2:cli-claude:", or "2:cli-codex:gpt-5.5"
+    # "1:local:qwen3-coder:30b", "2:cli-claude:", "2:cli-codex:gpt-5.5", or a local civ
+    # pinned to its own gateway: "3:local:gemma4-26b@http://192.168.20.196:11440/v1".
     parts = s.split(":", 2)
     if len(parts) != 3:
-        raise ValueError(f"bad --player spec {s!r}; want '<id>:<provider>:<model>'")
+        raise ValueError(f"bad --player spec {s!r}; want '<id>:<provider>:<model>[@<gateway>]'")
     pid, provider, model = parts
     if provider not in _VALID_PROVIDERS:
         raise ValueError(
             f"unknown provider {provider!r} in --player spec {s!r}; "
             f"want one of {sorted(_VALID_PROVIDERS)}")
-    return PlayerSpec(int(pid), provider, model)
+    # A trailing '@<url>' pins this local civ to a specific gateway (e.g. a per-GPU
+    # llama-swap instance). URLs contain ':' but not '@', so rsplit is unambiguous.
+    gateway = ""
+    if "@" in model:
+        model, gateway = model.rsplit("@", 1)
+    return PlayerSpec(int(pid), provider, model, gateway)
 
 @dataclass
 class ArenaConfig:

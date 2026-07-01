@@ -12,6 +12,7 @@ class Reply:
 class OpenAICompatBackend:
     def __init__(self, base_url: str, api_key: str, model: str):
         self.model = model
+        self.base_url = base_url
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> Reply:

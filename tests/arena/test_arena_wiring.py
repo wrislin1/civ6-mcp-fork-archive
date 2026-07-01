@@ -46,6 +46,23 @@ def test_build_policies_cli_only_empty_local_backends():
     assert local_backends == []
 
 
+def test_build_policies_per_civ_gateway_pins_backend():
+    """Each local civ's backend targets its own gateway when the spec pins one;
+    civs without a pin fall back to the global cfg.gateway_url."""
+    specs = [
+        PlayerSpec(3, "local", "gemma4-26b", "http://192.168.20.196:11440/v1"),
+        PlayerSpec(4, "local", "qwen3.6-27b", "http://192.168.20.196:11441/v1"),
+        PlayerSpec(5, "local", "gemma4-26b"),  # no pin → global default
+    ]
+    cfg = ArenaConfig(players=specs, gateway_url="http://192.168.20.196:11444/v1")
+    _policies, local_backends = build_policies(specs, FakeCost(), cfg)
+    by_model_gw = {(b.model, b.base_url) for b in local_backends}
+    assert ("gemma4-26b", "http://192.168.20.196:11440/v1") in by_model_gw
+    assert ("qwen3.6-27b", "http://192.168.20.196:11441/v1") in by_model_gw
+    # the un-pinned civ uses the global gateway
+    assert ("gemma4-26b", "http://192.168.20.196:11444/v1") in by_model_gw
+
+
 def test_build_args_accepts_idle_poll_limit():
     from civ_mcp.arena.arena import build_args
 

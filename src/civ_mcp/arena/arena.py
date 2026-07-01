@@ -24,14 +24,16 @@ def build_policies(specs, cost, cfg):
                 spec.provider, cost, project_dir=os.getcwd(), model=spec.model)
         else:  # in_process local
             backend = OpenAICompatBackend(
-                cfg.gateway_url, os.environ.get(cfg.api_key_env, "x"), spec.model)
+                spec.gateway or cfg.gateway_url,   # per-civ gateway override, else the global default
+                os.environ.get(cfg.api_key_env, "x"), spec.model)
             local_backends.append(backend)
             policies[spec.player_id] = LLMPolicy(backend, cost, max_steps=cfg.max_agent_steps)
     return policies, local_backends
 
 def build_args(argv=None):
     ap = argparse.ArgumentParser(prog="civ-arena")
-    ap.add_argument("--player", action="append", default=[], help="'<id>:<provider>:<model>'")
+    ap.add_argument("--player", action="append", default=[],
+                    help="'<id>:<provider>:<model>[@<gateway>]' (local civ may pin its own gateway)")
     ap.add_argument("--max-puppet-turns", type=int, default=1)
     ap.add_argument("--gateway-url", default=DEFAULT_GATEWAY_URL)
     ap.add_argument("--api-key-env", default="LITELLM_OPENAI_API_KEY")
@@ -71,7 +73,7 @@ async def _run(args):
     else:
         for b in local_backends:                              # check EVERY local model
             if not await b.reachable():
-                raise SystemExit(f"local backend not reachable at {cfg.gateway_url} (model {b.model})")
+                raise SystemExit(f"local backend not reachable at {b.base_url} (model {b.model})")
         if any(s.driver_kind() == "cli" for s in specs):
             for cmd in sorted({CLI_PROVIDER_COMMANDS[s.provider] for s in specs if s.driver_kind() == "cli"}):
                 if shutil.which(cmd) is None:

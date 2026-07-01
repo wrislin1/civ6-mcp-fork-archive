@@ -3,6 +3,23 @@ from civ_mcp.arena.config import parse_player_spec, PlayerSpec, ArenaConfig
 
 def test_parse_player_spec_local():
     assert parse_player_spec("1:local:qwen3-coder-30b") == PlayerSpec(1, "local", "qwen3-coder-30b")
+    # no gateway override → empty string (falls back to the global --gateway-url)
+    assert parse_player_spec("1:local:qwen3-coder-30b").gateway == ""
+
+
+def test_parse_player_spec_per_civ_gateway():
+    """A trailing '@<url>' pins a local civ to its own gateway (e.g. a per-GPU llama-swap)."""
+    s = parse_player_spec("3:local:gemma4-26b@http://192.168.20.196:11440/v1")
+    assert s == PlayerSpec(3, "local", "gemma4-26b", "http://192.168.20.196:11440/v1")
+    assert s.model == "gemma4-26b"
+    assert s.gateway == "http://192.168.20.196:11440/v1"
+
+
+def test_parse_player_spec_gateway_with_colon_model():
+    """Model names may contain ':'; the gateway split is on the last '@' only."""
+    s = parse_player_spec("4:local:qwen3.6:27b@http://192.168.20.196:11441/v1")
+    assert s.model == "qwen3.6:27b"
+    assert s.gateway == "http://192.168.20.196:11441/v1"
 
 def test_parse_player_spec_rejects_bad():
     with pytest.raises(ValueError):
