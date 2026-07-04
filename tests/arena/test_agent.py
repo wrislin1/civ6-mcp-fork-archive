@@ -2,6 +2,8 @@ import pytest
 import civ_mcp.arena.agent as agent
 from civ_mcp.arena.agent import LLMPolicy
 from civ_mcp.arena.backends import Reply
+from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.agent import load_playbook
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +235,97 @@ async def test_transcript_bad_arguments():
     assert len(t["steps"]) == 1
     assert t["steps"][0]["tool_result_full"].startswith("ERROR:")
     assert t["max_steps_reached"] is False
+
+
+def _no_tool_reply(text="done"):
+    return Reply(text=text, tool_calls=[], prompt_tokens=10, completion_tokens=5)
+
+
+class SpyBackend:
+    """Records the kwargs of every chat() call; returns queued replies."""
+
+    model = "fake"
+
+    def __init__(self, replies):
+        self.replies, self.calls = list(replies), []
+
+    async def chat(self, messages, tools):
+        self.calls.append({"messages": messages, "tools": tools})
+        return self.replies.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_options_select_toolset_and_playbook():
+    be = SpyBackend([_no_tool_reply()])
+    opts = CivOptions(tools="standard", playbook="condensed", max_steps=3)
+    pol = LLMPolicy(be, FakeCost(), options=opts)
+    await pol(gs=None, player_id=3, turn=5)
+    call = be.calls[0]
+    names = {t["function"]["name"] for t in call["tools"]}
+    assert "get_map_area" in names and "attack_unit" in names
+    assert load_playbook() in call["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_options_cap_and_steps():
+    tool_reply = Reply(
+        text=None,
+        tool_calls=[{"id": "1", "name": "get_units", "arguments": "{}"}],
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    be = SpyBackend([tool_reply, _no_tool_reply()])
+
+    class FakeGSLocal:
+        async def get_units(self):
+            return "U" * 10_000
+
+    opts = CivOptions(result_char_cap=2000, max_steps=2)
+    pol = LLMPolicy(be, FakeCost(), options=opts)
+    out = await pol(FakeGSLocal(), 3, 5)
+    tool_msg = [m for m in be.calls[1]["messages"] if m["role"] == "tool"][0]
+    assert len(tool_msg["content"]) == 2000
+    step = out["transcript"]["steps"][0]
+    assert step["result_chars_fed_to_model"] == 2000 and step["truncated"]
+
+
+@pytest.mark.asyncio
+async def test_out_of_tier_tool_never_executes():
+    """A minimal-tier civ calling an in-registry but out-of-tier tool gets an
+    ERROR result; the GameState method must NOT run (A/B control integrity)."""
+
+    tool_reply = Reply(
+        text=None,
+        tool_calls=[{"id": "1", "name": "get_map_area", "arguments": '{"x": 1, "y": 1}'}],
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    be = SpyBackend([tool_reply, _no_tool_reply()])
+
+    class FakeGSLocal:
+        async def get_map_area(self, *a, **kw):
+            raise AssertionError("out-of-tier tool must never execute")
+
+    pol = LLMPolicy(be, FakeCost(), options=CivOptions(tools="minimal"))
+    out = await pol(FakeGSLocal(), 3, 5)
+    tool_msg = [m for m in be.calls[1]["messages"] if m["role"] == "tool"][0]
+    assert tool_msg["content"].startswith("ERROR")
+    assert any(
+        c["tool_name"] == "get_map_area"
+        for c in out["transcript"]["invalid_tool_calls"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_transcript_carries_options_fingerprint():
+    be = SpyBackend([_no_tool_reply()])
+    opts = CivOptions(tools="standard")
+    pol = LLMPolicy(be, FakeCost(), options=opts)
+    out = await pol(None, 3, 5)
+    assert out["transcript"]["civ_options"]["tools"] == "standard"
+
+
+def test_playbook_loads_and_is_reasonably_sized():
+    text = load_playbook()
+    assert 2000 < len(text) < 20000
+    assert "settler" in text.lower()

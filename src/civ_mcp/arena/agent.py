@@ -1,7 +1,10 @@
 from __future__ import annotations
 import json
 import time
+from functools import lru_cache
+from pathlib import Path
 
+from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.registry import (
     dispatch as _registry_dispatch,
     openai_tools,
@@ -18,17 +21,30 @@ async def _dispatch(gs, name, args, allowed=_MINIMAL_NAMES):
     a = json.loads(args or "{}")
     return await _registry_dispatch(gs, name, a, allowed=allowed)
 
+
+@lru_cache(maxsize=1)
+def load_playbook() -> str:
+    return (Path(__file__).parent / "playbook.md").read_text()
+
 SYSTEM = ("You are playing one civ in Civilization VI on its turn. Use tools to observe, then "
           "take a few sensible early-game actions (scout, move/settle, set production and "
           "research). When you are finished for this turn, reply with a short summary and NO "
           "tool calls. Keep it brief.")
 
 class LLMPolicy:
-    def __init__(self, backend, cost, max_steps: int = 6):
-        self.backend, self.cost, self.max_steps = backend, cost, max_steps
+    def __init__(self, backend, cost, max_steps: int = 6, options: CivOptions | None = None):
+        self.backend, self.cost = backend, cost
+        self.options = options or CivOptions(max_steps=max_steps)
+        self.max_steps = self.options.max_steps
+        self._tool_names = resolve_tools(self.options.tools)
+        self._tools = openai_tools(self._tool_names)
+        self._char_cap = self.options.result_char_cap
+        self._system = SYSTEM
+        if self.options.playbook == "condensed":
+            self._system = SYSTEM + "\n\n" + load_playbook()
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
-        messages = [{"role": "system", "content": SYSTEM},
+        messages = [{"role": "system", "content": self._system},
                     {"role": "user", "content": f"It is turn {turn}. You control player {player_id}. Begin."}]
         actions = []
         steps: list[dict] = []
@@ -38,7 +54,7 @@ class LLMPolicy:
         wall_clock_start = time.time()
         for _ in range(self.max_steps):
             ts_start = time.time()
-            reply = await self.backend.chat(messages, TOOLS)
+            reply = await self.backend.chat(messages, self._tools)
             self.cost.record(player_id=player_id, model=getattr(self.backend, "model", "?"),
                              provider="local", prompt_tokens=reply.prompt_tokens,
                              completion_tokens=reply.completion_tokens, turn=turn)
@@ -48,6 +64,7 @@ class LLMPolicy:
                 return {"summary": reply.text or "", "actions": actions, "transcript": {
                     "steps": steps,
                     "invalid_tool_calls": invalid_tool_calls,
+                    "civ_options": self.options.fingerprint(),
                     "wall_clock_s": time.time() - wall_clock_start,
                     "max_steps_reached": False,
                     "final_summary": reply.text or "",
@@ -59,8 +76,7 @@ class LLMPolicy:
                               "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                              for tc in reply.tool_calls]})
             for tc in reply.tool_calls:
-                # classify (observation only — dispatch below stays untouched)
-                if tc["name"] not in _MINIMAL_NAMES:
+                if tc["name"] not in self._tool_names:
                     invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                "reason": "unknown_tool"})
                 else:
@@ -70,7 +86,7 @@ class LLMPolicy:
                         invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                    "reason": "bad_arguments"})
                 try:
-                    result = await _dispatch(gs, tc["name"], tc["arguments"], _MINIMAL_NAMES)
+                    result = await _dispatch(gs, tc["name"], tc["arguments"], self._tool_names)
                 except Exception as e:
                     result = f"ERROR: {e!r}"
                 # transcript step (uses same result object, before truncation)
@@ -92,17 +108,18 @@ class LLMPolicy:
                     "tool_args": _tool_args,
                     "tool_result_full": _s,
                     "result_total_chars": _l,
-                    "result_chars_fed_to_model": min(_l, MODEL_FEED_CHAR_CAP),
-                    "truncated": _l > MODEL_FEED_CHAR_CAP,
+                    "result_chars_fed_to_model": min(_l, self._char_cap),
+                    "truncated": _l > self._char_cap,
                     "prompt_tokens": reply.prompt_tokens,
                     "completion_tokens": reply.completion_tokens,
                 })
                 actions.append({"tool": tc["name"], "result": str(result)[:300]})
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
-                                 "content": str(result)[:MODEL_FEED_CHAR_CAP]})
+                                 "content": str(result)[:self._char_cap]})
         return {"summary": "max_steps reached", "actions": actions, "transcript": {
             "steps": steps,
             "invalid_tool_calls": invalid_tool_calls,
+            "civ_options": self.options.fingerprint(),
             "wall_clock_s": time.time() - wall_clock_start,
             "max_steps_reached": True,
             "final_summary": "",
