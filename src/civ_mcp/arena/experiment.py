@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+import re
 from numbers import Integral
+from pathlib import Path
 
 import yaml
 
@@ -30,6 +31,7 @@ _TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "ci
 _BRIEFING_DEFAULTS = BriefingOptions()
 _CIV_DEFAULTS = CivOptions()
 _ARENA_DEFAULTS = ArenaConfig(players=[])
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -89,6 +91,16 @@ def _non_blank_string(scope: str, field: str, value: object) -> str:
         raise ValueError(f"experiment config: {scope}: {field} must be a non-empty string")
     if parsed != parsed.strip():
         raise ValueError(f"experiment config: {scope}: {field} must not have leading or trailing whitespace")
+    return parsed
+
+
+def _run_id_string(scope: str, value: object) -> str:
+    parsed = _non_blank_string(scope, "run_id", value)
+    if parsed in {".", ".."} or not _RUN_ID_RE.fullmatch(parsed):
+        raise ValueError(
+            f"experiment config: {scope}: run_id must contain only letters, numbers, '.', '_', or '-' "
+            "and must not be '.' or '..'"
+        )
     return parsed
 
 
@@ -255,6 +267,6 @@ def load_experiment(path: str | Path, defaults: ArenaConfig | None = None) -> Ar
         run_id=(
             arena_defaults.run_id
             if "run_id" not in data
-            else _string(str(config_path), "run_id", data["run_id"])
+            else _run_id_string(str(config_path), data["run_id"])
         ),
     )

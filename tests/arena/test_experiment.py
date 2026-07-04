@@ -398,6 +398,30 @@ def test_rejects_non_string_run_id(tmp_path):
         load_experiment(_write(tmp_path, GOOD.replace("run_id: exp-1", "run_id: [a, b]")))
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        'run_id: ""',
+        'run_id: "   "',
+        "run_id: ../outside",
+        "run_id: nested/path",
+        r"run_id: nested\path",
+        "run_id: bad id",
+        "run_id: .",
+        "run_id: ..",
+    ],
+)
+def test_rejects_unsafe_run_id_values(tmp_path, bad):
+    with pytest.raises(ValueError, match="run_id"):
+        load_experiment(_write(tmp_path, GOOD.replace("run_id: exp-1", bad)))
+
+
+@pytest.mark.parametrize("run_id", ["exp-1", "exp_1", "EXP.20260704T000000Z"])
+def test_accepts_safe_run_id_values(tmp_path, run_id):
+    cfg = load_experiment(_write(tmp_path, GOOD.replace("run_id: exp-1", f"run_id: {run_id}")))
+    assert cfg.run_id == run_id
+
+
 def test_rejects_non_string_unknown_top_level_key(tmp_path):
     with pytest.raises(ValueError, match=r"experiment config: .*top-level"):
         load_experiment(_write(tmp_path, "5: x\nfoo: y\ncivs: []\n"))
