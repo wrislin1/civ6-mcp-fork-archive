@@ -164,3 +164,28 @@ def test_agent_module_still_exposes_tools():
 
     names = {t["function"]["name"] for t in TOOLS}
     assert names == MINIMAL_9
+
+
+def test_get_map_area_radius_schema_is_bounded():
+    (tool,) = openai_tools(["get_map_area"])
+    radius = tool["function"]["parameters"]["properties"]["radius"]
+
+    assert radius["type"] == "integer"
+    assert radius["minimum"] == 0
+    assert radius["maximum"] == 5
+
+
+@pytest.mark.asyncio
+async def test_get_map_area_radius_clamped_before_game_state():
+    calls = []
+
+    class FakeGS:
+        async def get_map_area(self, x, y, radius):
+            calls.append((x, y, radius))
+            return []
+
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2, "radius": 99})
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2, "radius": -3})
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2})
+
+    assert calls == [(1, 2, 5), (1, 2, 0), (1, 2, 2)]

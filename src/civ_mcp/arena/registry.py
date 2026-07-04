@@ -15,8 +15,18 @@ class ToolDef:
     call: Callable[[Any, dict[str, Any]], Awaitable[str]]
 
 
-def _int_param(description: str) -> dict[str, str]:
-    return {"type": "integer", "description": description}
+def _int_param(
+    description: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> dict[str, Any]:
+    param: dict[str, Any] = {"type": "integer", "description": description}
+    if minimum is not None:
+        param["minimum"] = minimum
+    if maximum is not None:
+        param["maximum"] = maximum
+    return param
 
 
 def _str_param(description: str) -> dict[str, str]:
@@ -97,6 +107,16 @@ def _render(data: Any, narrator: Callable[[Any], str]) -> str:
 
 def _coerce_policy_assignments(assignments: dict[Any, str]) -> dict[int, str]:
     return {int(slot): policy for slot, policy in assignments.items()}
+
+
+_MAP_RADIUS_DEFAULT = 2
+_MAP_RADIUS_MIN = 0
+_MAP_RADIUS_MAX = 5
+
+
+def _clamp_map_radius(value: Any) -> int:
+    radius = int(value)
+    return max(_MAP_RADIUS_MIN, min(radius, _MAP_RADIUS_MAX))
 
 
 TOOL_REGISTRY: dict[str, ToolDef] = {
@@ -185,7 +205,11 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {
             "x": _int_param("Center X coordinate."),
             "y": _int_param("Center Y coordinate."),
-            "radius": _int_param("Search radius; defaults to 2."),
+            "radius": _int_param(
+                "Search radius; defaults to 2 and is clamped to 0..5.",
+                minimum=_MAP_RADIUS_MIN,
+                maximum=_MAP_RADIUS_MAX,
+            ),
         },
         ("x", "y"),
         lambda gs, args: _narrate_map(gs, args),
@@ -606,8 +630,9 @@ async def _narrate_units(gs: Any, args: dict[str, Any]) -> str:
 
 
 async def _narrate_map(gs: Any, args: dict[str, Any]) -> str:
+    radius = _clamp_map_radius(args.get("radius", _MAP_RADIUS_DEFAULT))
     return _render(
-        await gs.get_map_area(args["x"], args["y"], args.get("radius", 2)),
+        await gs.get_map_area(args["x"], args["y"], radius),
         nr.narrate_map,
     )
 
