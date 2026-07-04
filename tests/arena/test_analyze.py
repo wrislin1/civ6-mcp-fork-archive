@@ -351,6 +351,75 @@ def test_config_summary_groups_by_player() -> None:
     assert "4" in summary
 
 
+def test_config_summary_splits_same_player_when_fingerprint_changes() -> None:
+    from civ_mcp.arena.analyze import config_summary
+
+    records = [
+        {
+            "player_id": 3,
+            "model": "m-a",
+            "provider": "local",
+            "civ_options": {"tools": "minimal", "max_steps": 6},
+            "n_ctx": 16384,
+            "step_count": 2,
+            "invalid_tool_calls": [],
+            "briefing_tokens": 0,
+            "state_delta": {"score": 1},
+        },
+        {
+            "player_id": 3,
+            "model": "m-b",
+            "provider": "local",
+            "civ_options": {"tools": "standard", "max_steps": 10},
+            "n_ctx": 131072,
+            "step_count": 4,
+            "invalid_tool_calls": [],
+            "briefing_tokens": 1200,
+            "state_delta": {"score": 3},
+        },
+    ]
+
+    summary = config_summary(records)
+
+    assert set(summary) == {"3#1", "3#2"}
+    assert summary["3#1"]["model"] == "m-a"
+    assert summary["3#1"]["civ_options"]["tools"] == "minimal"
+    assert summary["3#1"]["turns"] == 1
+    assert summary["3#2"]["model"] == "m-b"
+    assert summary["3#2"]["civ_options"]["tools"] == "standard"
+    assert summary["3#2"]["turns"] == 1
+
+
+def test_config_summary_keeps_plain_player_key_for_single_fingerprint() -> None:
+    from civ_mcp.arena.analyze import config_summary
+
+    records = [
+        {
+            "player_id": 3,
+            "model": "m-a",
+            "provider": "local",
+            "civ_options": {"tools": "minimal"},
+            "n_ctx": 16384,
+            "step_count": 2,
+            "invalid_tool_calls": [],
+        },
+        {
+            "player_id": 3,
+            "model": "m-a",
+            "provider": "local",
+            "civ_options": {"tools": "minimal"},
+            "n_ctx": 16384,
+            "step_count": 3,
+            "invalid_tool_calls": [],
+        },
+    ]
+
+    summary = config_summary(records)
+
+    assert set(summary) == {"3"}
+    assert summary["3"]["turns"] == 2
+
+
 def test_config_summary_falls_back_when_player_id_missing() -> None:
     from civ_mcp.arena.analyze import config_summary
 

@@ -101,41 +101,69 @@ def _config_summary_sort_key(key: object) -> tuple[int, int | str]:
     return (1, key_str)
 
 
+def _json_fingerprint(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _config_fingerprint(rec: dict) -> dict:
+    return {
+        "model": rec.get("model", ""),
+        "provider": rec.get("provider", ""),
+        "civ_options": rec.get("civ_options") or {},
+        "n_ctx": rec.get("n_ctx"),
+    }
+
+
 def config_summary(records: list[dict]) -> dict:
     """Return per-player experiment config fingerprints and outcome averages."""
-    by_pid: dict[str, list[dict]] = defaultdict(list)
+    by_pid: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    fingerprints: dict[tuple[str, str], dict] = {}
     for rec in records:
-        by_pid[_config_summary_group_key(rec)].append(rec)
+        pid = _config_summary_group_key(rec)
+        fingerprint = _config_fingerprint(rec)
+        fingerprint_key = _json_fingerprint(fingerprint)
+        by_pid[pid][fingerprint_key].append(rec)
+        fingerprints[(pid, fingerprint_key)] = fingerprint
 
     summary: dict[str, dict] = {}
-    for pid, recs in sorted(by_pid.items(), key=lambda item: _config_summary_sort_key(item[0])):
-        total_steps = 0
-        total_invalid = 0
-        total_briefing_tokens = 0
-        total_score_delta = 0
+    for pid, groups in sorted(by_pid.items(), key=lambda item: _config_summary_sort_key(item[0])):
+        ordered_groups = sorted(
+            groups.items(),
+            key=lambda item: (
+                str(fingerprints[(pid, item[0])].get("model", "")),
+                str(fingerprints[(pid, item[0])].get("provider", "")),
+                item[0],
+            ),
+        )
+        for index, (fingerprint_key, recs) in enumerate(ordered_groups, start=1):
+            summary_key = pid if len(ordered_groups) == 1 else f"{pid}#{index}"
+            fingerprint = fingerprints[(pid, fingerprint_key)]
+            total_steps = 0
+            total_invalid = 0
+            total_briefing_tokens = 0
+            total_score_delta = 0
 
-        for rec in recs:
-            step_count = rec.get("step_count")
-            if step_count is None:
-                step_count = len(_steps_of(rec))
-            total_steps += step_count or 0
-            total_invalid += len(_counted_invalid_calls(rec))
-            total_briefing_tokens += rec.get("briefing_tokens") or 0
-            total_score_delta += (rec.get("state_delta") or {}).get("score", 0) or 0
+            for rec in recs:
+                step_count = rec.get("step_count")
+                if step_count is None:
+                    step_count = len(_steps_of(rec))
+                total_steps += step_count or 0
+                total_invalid += len(_counted_invalid_calls(rec))
+                total_briefing_tokens += rec.get("briefing_tokens") or 0
+                total_score_delta += (rec.get("state_delta") or {}).get("score", 0) or 0
 
-        turns = len(recs)
-        last = recs[-1]
-        summary[pid] = {
-            "model": last.get("model", ""),
-            "provider": last.get("provider", ""),
-            "civ_options": last.get("civ_options") or {},
-            "n_ctx": last.get("n_ctx"),
-            "turns": turns,
-            "avg_steps": total_steps / turns,
-            "invalid_call_rate": (total_invalid / total_steps) if total_steps else 0.0,
-            "avg_briefing_tokens": total_briefing_tokens / turns,
-            "avg_score_delta": total_score_delta / turns,
-        }
+            turns = len(recs)
+            summary[summary_key] = {
+                "model": fingerprint.get("model", ""),
+                "provider": fingerprint.get("provider", ""),
+                "civ_options": fingerprint.get("civ_options") or {},
+                "n_ctx": fingerprint.get("n_ctx"),
+                "turns": turns,
+                "avg_steps": total_steps / turns,
+                "invalid_call_rate": (total_invalid / total_steps) if total_steps else 0.0,
+                "avg_briefing_tokens": total_briefing_tokens / turns,
+                "avg_score_delta": total_score_delta / turns,
+            }
 
     return summary
 
