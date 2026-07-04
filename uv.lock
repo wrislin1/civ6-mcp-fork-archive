@@ -493,6 +493,7 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "mcp" },
     { name = "openai" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -583,6 +584,7 @@ requires-dist = [
     { name = "pytesseract", marker = "extra == 'launcher-linux'", specifier = ">=0.3.10" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "winrt-windows-foundation", marker = "extra == 'launcher-windows'", specifier = ">=2.1" },
     { name = "winrt-windows-foundation-collections", marker = "extra == 'launcher-windows'", specifier = ">=2.1" },
     { name = "winrt-windows-graphics-imaging", marker = "extra == 'launcher-windows'", specifier = ">=2.1" },
