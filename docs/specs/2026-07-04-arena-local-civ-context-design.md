@@ -82,15 +82,16 @@ civs:
 ```
 
 Validation happens at load, before any game contact: unknown provider / tool name /
-tier / section / playbook value, duplicate player ids, and local-only knobs on CLI civs
-all fail fast with the offending civ named.
+tier / section / playbook value, duplicate player ids, local-only knobs on CLI civs,
+and malformed or out-of-range numeric knobs (`map_radius` must be 0–5) all fail fast
+with the offending civ and field named.
 
 ### Context budgeting
 
 ```
 briefing_budget_tokens = n_ctx − reserve
 reserve = playbook_tokens + tool_schema_tokens
-          + max_steps × (result_char_cap/4 + 512 completion) + 1024 margin
+          + max_steps × (result_char_cap/3 + 512 completion) + 1024 margin
 ```
 
 `n_ctx` resolution order (path recorded in the transcript):

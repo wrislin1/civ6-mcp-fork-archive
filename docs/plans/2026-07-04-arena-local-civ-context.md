@@ -490,6 +490,28 @@ passing — the registry's `_render` wrapper passes string results through untou
 pre-existing test asserts on repr-style content of a tool result, update the assertion to
 the narrated text.
 
+One pre-existing test imports the deleted name: `tests/arena/test_analyze.py`
+`test_local_tool_verbs_subset_of_known_tools` (~line 968) asserts
+`set(LOCAL_TOOL_VERBS) - agent_mod._KNOWN_TOOLS` is empty. Update it in this task to
+couple against the registry instead — after this change the set of tools a local civ can
+call is the registry table, not the minimal nine:
+
+```python
+def test_local_tool_verbs_subset_of_registry():
+    """All LOCAL_TOOL_VERBS keys must be real registry tool names.
+
+    A rename in either place without updating the other will surface here.
+    (Pre-registry this checked agent._KNOWN_TOOLS, which Task 1 deleted.)
+    """
+    from civ_mcp.arena.registry import TOOL_REGISTRY
+    from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS
+
+    missing = set(LOCAL_TOOL_VERBS) - set(TOOL_REGISTRY)
+    assert not missing, (
+        f"LOCAL_TOOL_VERBS keys not in registry TOOL_REGISTRY: {missing!r}"
+    )
+```
+
 - [ ] **Step 5: Run the full arena suite**
 
 Run: `uv run pytest tests/arena/ -q`
@@ -498,7 +520,7 @@ Expected: PASS (registry tests + all pre-existing, incl. `test_agent.py`).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/civ_mcp/arena/registry.py src/civ_mcp/arena/agent.py tests/arena/test_registry.py
+git add src/civ_mcp/arena/registry.py src/civ_mcp/arena/agent.py tests/arena/test_registry.py tests/arena/test_analyze.py
 git commit -m "feat(arena): tool registry with minimal/standard/full tiers"
 ```
 
@@ -695,6 +717,20 @@ def test_explicit_tool_list(tmp_path):
 def test_rejects_missing_player_key(tmp_path):
     with pytest.raises(ValueError, match="player"):
         load_experiment(_write(tmp_path, "civs:\n  - {provider: local, model: m}\n"))
+
+@pytest.mark.parametrize("good,bad,field", [
+    ("max_steps: 10", "max_steps: nope", "max_steps"),
+    ("context_budget: auto", "context_budget: nope", "context_budget"),
+    ("map_radius: 4", "map_radius: nope", "briefing.map_radius"),
+])
+def test_rejects_malformed_ints_with_civ_named(tmp_path, good, bad, field):
+    # bare int() would raise "invalid literal..." without naming the civ or field
+    with pytest.raises(ValueError, match=f"player 3.*{field}"):
+        load_experiment(_write(tmp_path, GOOD.replace(good, bad)))
+
+def test_rejects_out_of_range_map_radius(tmp_path):
+    with pytest.raises(ValueError, match="map_radius must be 0..5"):
+        load_experiment(_write(tmp_path, GOOD.replace("map_radius: 4", "map_radius: 9")))
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -727,6 +763,13 @@ _TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "ci
 def _err(civ_label: str, msg: str) -> ValueError:
     return ValueError(f"experiment config: {civ_label}: {msg}")
 
+def _int(civ_label: str, field: str, value) -> int:
+    # bare int() raises "invalid literal for int()..." with no civ/field context
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise _err(civ_label, f"{field} must be an integer, got {value!r}") from None
+
 def _parse_briefing(civ_label: str, raw: dict) -> BriefingOptions:
     keys = set(raw) - {"enabled", "map_radius", "sections"}
     if keys:
@@ -735,8 +778,11 @@ def _parse_briefing(civ_label: str, raw: dict) -> BriefingOptions:
     bad = [s for s in sections if s not in VALID_SECTIONS]
     if bad:
         raise _err(civ_label, f"unknown briefing section(s) {bad}; want {VALID_SECTIONS}")
+    radius = _int(civ_label, "briefing.map_radius", raw.get("map_radius", 3))
+    if not 0 <= radius <= 5:
+        raise _err(civ_label, f"briefing.map_radius must be 0..5, got {radius}")
     return BriefingOptions(enabled=bool(raw.get("enabled", False)),
-                           map_radius=int(raw.get("map_radius", 3)),
+                           map_radius=radius,
                            sections=sections)
 
 def _parse_civ(raw: dict) -> PlayerSpec:
@@ -753,8 +799,8 @@ def _parse_civ(raw: dict) -> PlayerSpec:
         present = [k for k in _LOCAL_KNOBS if k in raw]
         if present:
             raise _err(label, f"knob(s) {present} only apply to local civs, not {provider}")
-        return PlayerSpec(int(raw["player"]), provider, str(raw.get("model", "")),
-                          str(raw.get("gateway", "")))
+        return PlayerSpec(_int(label, "player", raw["player"]), provider,
+                          str(raw.get("model", "")), str(raw.get("gateway", "")))
     tools = raw.get("tools", "minimal")
     if isinstance(tools, list):
         tools = tuple(tools)
@@ -767,18 +813,18 @@ def _parse_civ(raw: dict) -> PlayerSpec:
         raise _err(label, f"unknown playbook {playbook!r}; want {VALID_PLAYBOOKS}")
     budget = raw.get("context_budget", "auto")
     if budget != "auto":
-        budget = int(budget)
+        budget = _int(label, "context_budget", budget)
         if budget <= 0:
             raise _err(label, "context_budget must be positive or 'auto'")
-    cap = int(raw.get("result_char_cap", 1500))
-    steps = int(raw.get("max_steps", 6))
+    cap = _int(label, "result_char_cap", raw.get("result_char_cap", 1500))
+    steps = _int(label, "max_steps", raw.get("max_steps", 6))
     if cap <= 0 or steps <= 0:
         raise _err(label, "result_char_cap and max_steps must be positive")
     opts = CivOptions(tools=tools, result_char_cap=cap, max_steps=steps,
                       playbook=playbook, context_budget=budget,
                       briefing=_parse_briefing(label, dict(raw.get("briefing") or {})))
-    return PlayerSpec(int(raw["player"]), provider, str(raw.get("model", "")),
-                      str(raw.get("gateway", "")), opts)
+    return PlayerSpec(_int(label, "player", raw["player"]), provider,
+                      str(raw.get("model", "")), str(raw.get("gateway", "")), opts)
 
 def load_experiment(path: str | Path) -> ArenaConfig:
     data = yaml.safe_load(Path(path).read_text())
@@ -1416,6 +1462,38 @@ async def test_map_tiles_deduplicated():
     assert b.text.count("(10,10):") == 1
 
 @pytest.mark.asyncio
+async def test_map_radius_capped_at_five():
+    # config validates 0..5, but BriefingOptions can be constructed directly;
+    # the builder must never fetch beyond the expansion ceiling
+    gs = FakeGS()
+    b = await build_briefing(gs, BriefingOptions(enabled=True, map_radius=9,
+                                                 sections=("map",)), 100_000)
+    assert max(c[2] for c in gs.map_calls) <= 5
+    assert b.radius == 5
+
+@pytest.mark.asyncio
+async def test_rivals_and_threats_render_real_dataclasses():
+    # rivals/threats are the only hand-rolled f-string sections (no narrate fn
+    # exists for them); only real dataclasses catch a bad field name — a fake
+    # would mask it, and the section-isolation except would swallow it at runtime.
+    gs = FakeGS()
+    async def rivals():
+        return [lq.RivalSnapshot(id=1, name="Rome", score=50, cities=2, pop=6,
+                                 sci=4.0, cul=3.0, gold=20.0, mil=120, techs=5,
+                                 civics=3, faith=0.0, sci_vp=0, diplo_vp=0)]
+    async def threats():
+        return [lq.ThreatInfo(unit_type="UNIT_BARBARIAN_WARRIOR", x=9, y=9,
+                              hp=100, max_hp=100, combat_strength=20,
+                              ranged_strength=0, distance=3)]
+    gs.get_rival_snapshot = rivals
+    gs.get_threat_scan = threats
+    b = await build_briefing(gs, BriefingOptions(enabled=True,
+                             sections=("rivals", "threats")), 100_000)
+    assert b.errors == []
+    assert "Rome: score 50, 2 cities, pop 6, mil 120" in b.text
+    assert "Barbarian UNIT_BARBARIAN_WARRIOR at (9,9) CS 20" in b.text
+
+@pytest.mark.asyncio
 async def test_hard_truncation_at_budget():
     gs = FakeGS()
     b = await build_briefing(gs, BriefingOptions(enabled=True, sections=ALL), 50)
@@ -1562,7 +1640,9 @@ async def build_briefing(gs, opts, budget_tokens: int) -> Briefing:
                 centers = [(u.x, u.y) for u in units] + [(c.x, c.y) for c in cities]
                 if not centers:
                     continue
-                radius = opts.map_radius
+                # config validates 0..5, but BriefingOptions can be built directly —
+                # never fetch beyond the expansion ceiling
+                radius = min(opts.map_radius, _MAX_RADIUS)
                 text = await _map_at(gs, centers, radius)
                 # Predictive expansion: each fetch pass costs one FireTuner Lua
                 # round-trip PER CENTER, so never step +1 at a time. Tile count per
@@ -1895,7 +1975,7 @@ civs:
 max_puppet_turns: 12    # 6 rounds x 2 seats
 idle_poll_limit: 3600
 civs:
-  - player: 3           # control: today's behavior exactly
+  - player: 3           # control: today's configuration baseline (narrated rendering applies globally)
     provider: local
     model: gemma4-26b
     gateway: http://192.168.20.196:11440/v1
@@ -1956,8 +2036,11 @@ coordinator wiring.
 **Gate C — one-round live smoke:** deploy branch to `.141` (push feature branch, ff-merge
 NOT allowed — check it out directly: `git fetch && git checkout arena-local-civ-context`),
 start via `start-hybrid-watch.sh --config experiments/smoke-rich-gemma.yaml`, user ends
-turn; verify transcript record has `briefing_tokens > 5000`, `n_ctx_source` ∈
-{upstream_props, explicit}, no `briefing_errors`, control returns to human. **Budget
+turn; verify transcript record has `briefing_tokens > 2000` (calibrate, don't hard-fail:
+on an early-game save with 1–2 units and 0–1 cities even a radius-5 briefing can be small —
+if lower, eyeball the briefing text for missing sections rather than treating the floor as
+a defect), `n_ctx_source` ∈ {upstream_props, explicit}, no `briefing_errors`, control
+returns to human. **Budget
 check (empirical):** read the record's first step's `prompt_tokens` (the backend-reported
 count) and assert it is comfortably under the resolved `n_ctx` — this turns the //3
 chars-per-token heuristic from a hope into a measured fact. If it is within ~5% of
@@ -2003,3 +2086,20 @@ the main code block; `production_options` fetches cities itself and moved direct
 Task 9 tests cover `analyze()` + `render_markdown()`; httpx>=0.28 first-class dep;
 Task 0 `git status --short` gate; `resolve_config` uses `getattr(args, "config", "")`;
 `_parse_civ` validates `player` presence before use.
+
+## Review round 2 (2026-07-04, separate-session re-review — applied)
+
+Incorporated: `test_analyze.py::test_local_tool_verbs_subset_of_known_tools` updated in
+Task 1 to couple against `registry.TOOL_REGISTRY` (it imported the deleted
+`agent._KNOWN_TOOLS`, so Task 1's full-suite step would have failed); `_int()` helper so
+malformed numeric knobs raise with the civ and field named (+ parametrized tests);
+`briefing.map_radius` validated 0..5 at load and defensively capped at `_MAX_RADIUS` in
+`build_briefing` (+ tests); spec reserve formula `/4`→`/3` (stale from review round 1);
+Gate D YAML comment reworded ("today's configuration baseline; narrated rendering applies
+globally"); Gate C `briefing_tokens` floor 5000→2000 and reworded calibrate-don't-fail
+(early-game saves are legitimately small; the load-bearing check is `prompt_tokens <
+n_ctx`); new `test_rivals_and_threats_render_real_dataclasses` covering the only two
+hand-rolled f-string sections. REFUTED: the reported `_sec_rivals` `r.mil` AttributeError
+— `RivalSnapshot` does define `mil` (src/civ_mcp/lua/models.py:27, plus `techs`, `civics`,
+`faith`, `sci_vp`, `diplo_vp`); the reviewer's field list was truncated at `gold`. The
+`r.mil` rendering stands; the test above pins it against the real dataclass either way.
