@@ -216,6 +216,70 @@ async def test_map_radius_expands_with_budget():
 
 
 @pytest.mark.asyncio
+async def test_map_expansion_accounts_for_header_and_separator(monkeypatch):
+    import civ_mcp.arena.briefing as briefing_mod
+
+    class OneCenterGS:
+        async def get_units(self):
+            return [_unit(10, 10)]
+
+        async def get_cities(self):
+            return ([], [])
+
+        async def get_map_area(self, x, y, radius):
+            return [_tile(x + dx, y) for dx in range(radius)]
+
+    async def fake_map_text(gs, centers, radius):
+        if radius == 2:
+            return "a" * 10
+        if radius == 3:
+            return "b" * 21
+        raise AssertionError(f"unexpected radius {radius}")
+
+    monkeypatch.setattr(briefing_mod, "_MAX_RADIUS", 3)
+    monkeypatch.setattr(briefing_mod, "_map_text", fake_map_text)
+
+    b = await build_briefing(
+        OneCenterGS(),
+        BriefingOptions(enabled=True, map_radius=2, sections=("map",)),
+        10,  # 30 chars; radius 3 text plus the 10-char header would overflow
+    )
+
+    assert b.radius == 2
+    assert len(b.text) == 20
+    assert b.text == "== MAP ==\n" + ("a" * 10)
+
+
+@pytest.mark.asyncio
+async def test_map_expansion_accounts_for_join_separator_after_prior_section(monkeypatch):
+    import civ_mcp.arena.briefing as briefing_mod
+
+    class PriorSectionGS(FakeGS):
+        async def get_game_overview(self):
+            return "OVERVIEW"
+
+    async def fake_map_text(gs, centers, radius):
+        if radius == 2:
+            return "a"
+        if radius == 3:
+            return "b" * 9
+        raise AssertionError(f"unexpected radius {radius}")
+
+    monkeypatch.setattr(briefing_mod, "_MAX_RADIUS", 3)
+    monkeypatch.setattr(briefing_mod, "_EXPAND_BELOW", 2.0)
+    monkeypatch.setattr(briefing_mod, "_map_text", fake_map_text)
+
+    b = await build_briefing(
+        PriorSectionGS(),
+        BriefingOptions(enabled=True, map_radius=2, sections=("overview", "map")),
+        14,
+    )
+
+    assert len(b.text) <= 42
+    assert b.radius == 2
+
+
+@pytest.mark.asyncio
 async def test_map_tiles_deduplicated():
     gs = FakeGS(city_xy=(12, 10))
 

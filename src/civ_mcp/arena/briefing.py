@@ -260,9 +260,8 @@ async def build_briefing(
 
         try:
             if name == "map":
-                text, radius = await _map(
-                    gs, ctx, opts, len("\n".join(parts)), char_budget
-                )
+                map_prefix_used = len(_join_with(parts, "== MAP ==\n"))
+                text, radius = await _map(gs, ctx, opts, map_prefix_used, char_budget)
                 if not text:
                     continue
             else:
