@@ -1,13 +1,20 @@
 # tests/arena/test_arena_wiring.py
 import asyncio
+import os
 import os.path
 import shutil
 import pytest
 
-from civ_mcp.arena.arena import build_policies, _run
-from civ_mcp.arena.config import PlayerSpec, ArenaConfig
+from civ_mcp.arena.arena import build_args, build_policies, resolve_config, _run
+from civ_mcp.arena.config import (
+    PlayerSpec,
+    ArenaConfig,
+    CivOptions,
+    parse_player_spec,
+)
 from civ_mcp.arena.agent import LLMPolicy
 from civ_mcp.arena.cli_agent import CLIAgentPolicy
+from civ_mcp.arena.cost import CostLog
 
 class FakeCost:
     def record(self, **kw): pass
@@ -64,10 +71,100 @@ def test_build_policies_per_civ_gateway_pins_backend():
 
 
 def test_build_args_accepts_idle_poll_limit():
-    from civ_mcp.arena.arena import build_args
-
     args = build_args(["--player", "1:cli-codex:gpt-5.5", "--idle-poll-limit", "12"])
     assert args.idle_poll_limit == 12
+
+
+def test_build_args_accepts_config():
+    a = build_args(["--config", "experiments/x.yaml"])
+    assert a.config == "experiments/x.yaml"
+
+
+def test_config_and_player_are_mutually_exclusive(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        resolve_config(build_args(["--config", "x.yaml", "--player", "1:local:m"]))
+
+
+def test_resolve_config_from_file(tmp_path):
+    p = tmp_path / "e.yaml"
+    p.write_text(
+        "max_puppet_turns: 12\ncivs:\n  - {player: 3, provider: local, model: m, max_steps: 9}\n"
+    )
+    cfg = resolve_config(build_args(["--config", str(p)]))
+    assert cfg.max_puppet_turns == 12
+    assert cfg.players[0].options.max_steps == 9
+
+
+@pytest.mark.parametrize(
+    ("argv_tail", "flag"),
+    [
+        (["--max-puppet-turns", "2"], "--max-puppet-turns"),
+        (["--gateway-url", "http://example.invalid/v1"], "--gateway-url"),
+        (["--idle-poll-limit", "601"], "--idle-poll-limit"),
+        (["--max-agent-steps", "7"], "--max-agent-steps"),
+    ],
+)
+def test_resolve_config_rejects_non_default_config_owned_flags(tmp_path, argv_tail, flag):
+    p = tmp_path / "e.yaml"
+    p.write_text("civs:\n  - {player: 3, provider: local, model: m}\n")
+    with pytest.raises(SystemExit, match=flag):
+        resolve_config(build_args(["--config", str(p), *argv_tail]))
+
+
+def test_build_policies_threads_options(tmp_path):
+    spec = parse_player_spec("3:local:m")
+    object.__setattr__(spec, "options", CivOptions(max_steps=11, tools="standard"))
+    cfg = ArenaConfig(players=[spec])
+    cost = CostLog(str(tmp_path / "c.jsonl"))
+    policies, backends = build_policies([spec], cost, cfg)
+    pol = policies[3]
+    assert pol.max_steps == 11
+    assert any(t["function"]["name"] == "get_map_area" for t in pol._tools)
+
+
+def test_player_shorthand_honors_max_agent_steps():
+    cfg = resolve_config(build_args(["--player", "3:local:m", "--max-agent-steps", "12"]))
+    assert cfg.players[0].options.max_steps == 12
+
+
+def test_run_uses_file_run_id_for_config(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "e.yaml"
+    cfg_path.write_text(
+        "run_id: file-run\nmax_puppet_turns: 1\ncivs:\n  - {player: 3, provider: local, model: m}\n"
+    )
+    run_root = tmp_path / "runs"
+    captured = {}
+
+    class FakeConn:
+        async def connect(self):
+            captured["connected"] = True
+
+    def fake_game_state(conn):
+        captured["gs_conn"] = conn
+        return {"conn": conn}
+
+    async def fake_run_arena(conn, gs, cfg, policy_for, transcript):
+        captured["conn"] = conn
+        captured["gs"] = gs
+        captured["cfg"] = cfg
+        captured["transcript"] = transcript
+        captured["policy"] = policy_for(3)
+        return {"ok": True}
+
+    monkeypatch.setattr("civ_mcp.arena.arena.GameConnection", FakeConn)
+    monkeypatch.setattr("civ_mcp.arena.arena.GameState", fake_game_state)
+    monkeypatch.setattr("civ_mcp.arena.arena.run_arena", fake_run_arena)
+
+    asyncio.run(
+        _run(build_args(["--config", str(cfg_path), "--dry-run", "--transcript-dir", str(run_root)]))
+    )
+
+    cfg = captured["cfg"]
+    assert cfg.run_id == "file-run"
+    assert cfg.cost_path == str(run_root / "file-run" / "arena_cost.jsonl")
+    assert cfg.transcript_dir == str(run_root)
+    assert captured["transcript"].path == str(run_root / "file-run" / "transcript.jsonl")
+    assert os.path.isdir(run_root / "file-run")
 
 
 def test_cli_preflight_raises_when_claude_not_on_path(monkeypatch, tmp_path):
