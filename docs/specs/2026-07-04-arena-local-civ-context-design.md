@@ -1,6 +1,6 @@
 # Arena Local-Civ Context Design
 
-> **Status (2026-07-04): APPROVED design, not yet implemented.**
+> **Status (2026-07-04): IMPLEMENTED on branch arena-local-civ-context (pending live gates + user review).**
 > Companion plan: `docs/plans/2026-07-04-arena-local-civ-context.md`.
 
 ## Problem

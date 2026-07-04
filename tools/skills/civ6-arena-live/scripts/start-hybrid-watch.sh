@@ -23,6 +23,7 @@ Usage: $(basename "$0") [OPTIONS]
 Start the hybrid 4-civ arena watcher on the remote gaming PC ($remote).
 
 Options:
+  --config <path>           Repo-relative YAML experiment config
   --player <spec>           Player spec (repeatable; default: 4-player preset)
                               Preset: ${default_players[*]}
   --run-id <id>             Run identifier
@@ -40,6 +41,9 @@ EOF
 }
 
 # ── Arg parsing (must happen before SSH — exits 0 for --help) ─────────────────
+config_path=""
+config_supplied=0
+config_owned_overrides=()
 players=()
 run_id=""
 max_puppet_turns="$default_max_puppet_turns"
@@ -48,6 +52,10 @@ gateway_url="$default_gateway_url"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --config)
+      [[ $# -ge 2 ]] || { echo "error: --config requires an argument" >&2; exit 1; }
+      config_supplied=1
+      config_path="$2"; shift 2 ;;
     --player)
       [[ $# -ge 2 ]] || { echo "error: --player requires an argument" >&2; exit 1; }
       players+=("$2"); shift 2 ;;
@@ -56,12 +64,15 @@ while [[ $# -gt 0 ]]; do
       run_id="$2"; shift 2 ;;
     --max-puppet-turns)
       [[ $# -ge 2 ]] || { echo "error: --max-puppet-turns requires an argument" >&2; exit 1; }
+      config_owned_overrides+=("--max-puppet-turns")
       max_puppet_turns="$2"; shift 2 ;;
     --idle-poll-limit)
       [[ $# -ge 2 ]] || { echo "error: --idle-poll-limit requires an argument" >&2; exit 1; }
+      config_owned_overrides+=("--idle-poll-limit")
       idle_poll_limit="$2"; shift 2 ;;
     --gateway-url)
       [[ $# -ge 2 ]] || { echo "error: --gateway-url requires an argument" >&2; exit 1; }
+      config_owned_overrides+=("--gateway-url")
       gateway_url="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
@@ -70,26 +81,47 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$config_supplied" -eq 1 && -z "$config_path" ]]; then
+  echo "error: --config requires a non-empty path" >&2
+  exit 1
+fi
+
+if [[ "$config_supplied" -eq 1 && ${#players[@]} -gt 0 ]]; then
+  echo "error: --config and --player are mutually exclusive" >&2
+  exit 1
+fi
+
+if [[ "$config_supplied" -eq 1 && ${#config_owned_overrides[@]} -gt 0 ]]; then
+  rejected_flags="${config_owned_overrides[*]}"
+  rejected_flags="${rejected_flags// /, }"
+  echo "error: --config cannot be combined with config-owned override(s): $rejected_flags" >&2
+  exit 1
+fi
+
 # Compute run_id locally so it is consistent between the .arena-runs/ filename
 # and the --run-id value forwarded to civ-arena.
 [[ -n "$run_id" ]] || run_id="hybrid-4civ-$(date -u +%Y%m%dT%H%M%SZ)"
 
-# Use default 4-player roster when no --player args were supplied.
-if [[ ${#players[@]} -eq 0 ]]; then
+# Use default 4-player roster when no --config or --player args were supplied.
+if [[ "$config_supplied" -eq 0 && ${#players[@]} -eq 0 ]]; then
   players=("${default_players[@]}")
 fi
 
 # ── Build civ-arena argument vector ───────────────────────────────────────────
 arena_args=()
-for spec in "${players[@]}"; do
-  arena_args+=("--player" "$spec")
-done
-arena_args+=(
-  "--gateway-url"       "$gateway_url"
-  "--max-puppet-turns"  "$max_puppet_turns"
-  "--idle-poll-limit"   "$idle_poll_limit"
-  "--run-id"            "$run_id"
-)
+if [[ "$config_supplied" -eq 1 ]]; then
+  arena_args=("--config" "$config_path" "--run-id" "$run_id")
+else
+  for spec in "${players[@]}"; do
+    arena_args+=("--player" "$spec")
+  done
+  arena_args+=(
+    "--gateway-url"       "$gateway_url"
+    "--max-puppet-turns"  "$max_puppet_turns"
+    "--idle-poll-limit"   "$idle_poll_limit"
+    "--run-id"            "$run_id"
+  )
+fi
 
 # Encode args for forwarding over SSH.  printf '%q' produces bash-safe quoting;
 # all current tokens are space-free so it is effectively a no-op, but the

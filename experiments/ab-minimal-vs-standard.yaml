@@ -1,0 +1,21 @@
+# experiments/ab-minimal-vs-standard.yaml — Gate D: same model, control vs rich
+max_puppet_turns: 12    # 6 rounds x 2 seats
+idle_poll_limit: 3600
+civs:
+  - player: 3           # control: today's configuration baseline (narrated rendering applies globally)
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+  - player: 4           # treatment: rich context (same model, other GPU)
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11441/v1
+    tools: standard
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [overview, units, cities, map, research, production_options]

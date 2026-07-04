@@ -1,0 +1,17 @@
+# experiments/smoke-rich-gemma.yaml — Gate C: one-round live smoke, rich config
+max_puppet_turns: 1
+idle_poll_limit: 3600
+civs:
+  - player: 3
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: standard
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [overview, units, cities, map, research, production_options]
