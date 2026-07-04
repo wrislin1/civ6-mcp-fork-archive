@@ -403,6 +403,42 @@ async def test_n_ctx_resolved_once_across_turns(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_n_ctx_default_fallback_retries_on_next_turn(monkeypatch):
+    from civ_mcp.arena import agent as agent_mod
+    from civ_mcp.arena.briefing import Briefing
+
+    calls = []
+
+    async def fake_resolve(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            return 16384, "default"
+        return 131072, "upstream_props"
+
+    async def fake_build(gs, opts, budget):
+        return Briefing(text="B", tokens=1)
+
+    monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
+    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+
+    be = SpyBackend([_no_tool_reply(), _no_tool_reply()])
+    be.base_url = "http://h:1/v1"
+    pol = LLMPolicy(
+        be,
+        FakeCost(),
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+
+    first = await pol(None, 3, 7)
+    second = await pol(None, 3, 8)
+
+    assert len(calls) == 2
+    assert first["transcript"]["n_ctx_source"] == "default"
+    assert second["transcript"]["n_ctx"] == 131072
+    assert second["transcript"]["n_ctx_source"] == "upstream_props"
+
+
+@pytest.mark.asyncio
 async def test_briefing_disabled_is_todays_message():
     be = SpyBackend([_no_tool_reply()])
     pol = LLMPolicy(be, FakeCost(), options=CivOptions())

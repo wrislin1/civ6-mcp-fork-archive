@@ -33,6 +33,13 @@ SYSTEM = ("You are playing one civ in Civilization VI on its turn. Use tools to 
           "research). When you are finished for this turn, reply with a short summary and NO "
           "tool calls. Keep it brief.")
 
+
+def _should_resolve_n_ctx(current: int | None, source: str, context_budget: int | str) -> bool:
+    if current is None:
+        return True
+    return context_budget == "auto" and source == "default"
+
+
 class LLMPolicy:
     def __init__(self, backend, cost, max_steps: int = 6, options: CivOptions | None = None):
         self.backend, self.cost = backend, cost
@@ -50,7 +57,11 @@ class LLMPolicy:
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         briefing = Briefing()
         if self.options.briefing.enabled:
-            if self._n_ctx is None:
+            if _should_resolve_n_ctx(
+                self._n_ctx,
+                self._n_ctx_source,
+                self.options.context_budget,
+            ):
                 self._n_ctx, self._n_ctx_source = await resolve_n_ctx(
                     getattr(self.backend, "base_url", ""),
                     getattr(self.backend, "model", ""),
