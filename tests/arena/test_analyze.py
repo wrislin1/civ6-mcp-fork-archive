@@ -1187,6 +1187,66 @@ def test_local_tool_verbs_subset_of_registry():
     )
 
 
+def test_local_tool_verbs_cover_registry_action_tools() -> None:
+    from civ_mcp.arena.registry import TOOL_REGISTRY
+    from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS
+
+    expected_actions = {
+        "move_unit",
+        "found_city",
+        "fortify_unit",
+        "skip_unit",
+        "attack_unit",
+        "improve_tile",
+        "remove_feature",
+        "purchase_item",
+        "heal_unit",
+        "alert_unit",
+        "set_civic",
+        "send_envoy",
+        "set_policies",
+        "appoint_governor",
+        "assign_governor",
+        "choose_pantheon",
+        "upgrade_unit",
+        "promote_unit",
+        "automate_explore",
+        "skip_remaining_units",
+        "purchase_tile",
+        "set_city_focus",
+    }
+
+    assert expected_actions <= set(TOOL_REGISTRY)
+    assert expected_actions <= set(LOCAL_TOOL_VERBS)
+
+
+def test_rubric_counts_automate_explore_as_exploration() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze(
+        [
+            {
+                "player_id": 1,
+                "model": "m",
+                "provider": "local",
+                "driver": "in_process",
+                "turn": 1,
+                "steps": [
+                    {
+                        "tool_name": "automate_explore",
+                        "tool_args": {"unit_index": 2},
+                        "tool_result_full": "OK",
+                    }
+                ],
+                "invalid_tool_calls": [],
+            }
+        ],
+        [],
+    )
+
+    assert report["by_player"][1]["rubric"]["explored_vs_idle"] is not None
+
+
 def test_step_verb_uses_vocab_constants():
     """_step_verb must map each LOCAL_TOOL_VERBS key to its verb value, and strip MCP_CIV6_PREFIX."""
     from civ_mcp.arena.analyze import _step_verb
