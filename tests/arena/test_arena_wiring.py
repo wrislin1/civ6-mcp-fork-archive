@@ -194,6 +194,33 @@ def test_run_uses_file_run_id_for_config(tmp_path, monkeypatch):
     assert os.path.isdir(run_root / "file-run")
 
 
+def test_config_yaml_run_id_survives_when_cli_run_id_absent(tmp_path):
+    p = tmp_path / "e.yaml"
+    p.write_text("run_id: file-run\ncivs:\n  - {player: 3, provider: local, model: m}\n")
+
+    args = build_args(["--config", str(p)])
+    cfg = resolve_config(args)
+
+    assert args.run_id is None
+    assert cfg.run_id == "file-run"
+
+
+def test_config_rejects_cli_run_id_when_yaml_run_id_present(tmp_path):
+    p = tmp_path / "e.yaml"
+    p.write_text("run_id: file-run\ncivs:\n  - {player: 3, provider: local, model: m}\n")
+
+    with pytest.raises(SystemExit, match="--run-id"):
+        resolve_config(build_args(["--config", str(p), "--run-id", "cli-run"]))
+
+
+def test_config_rejects_empty_cli_run_id_when_yaml_run_id_present(tmp_path):
+    p = tmp_path / "e.yaml"
+    p.write_text("run_id: file-run\ncivs:\n  - {player: 3, provider: local, model: m}\n")
+
+    with pytest.raises(SystemExit, match="--run-id"):
+        resolve_config(build_args(["--config", str(p), "--run-id", ""]))
+
+
 def test_cli_preflight_raises_when_claude_not_on_path(monkeypatch, tmp_path):
     """_run raises SystemExit before driving any turns if cli spec present but claude missing."""
     monkeypatch.setattr(shutil, "which", lambda name: None)

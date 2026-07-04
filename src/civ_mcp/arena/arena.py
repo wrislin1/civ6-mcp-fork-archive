@@ -100,6 +100,10 @@ def resolve_config(args) -> ArenaConfig:
             ),
         )
         cfg = load_experiment(config_path, defaults=config_defaults)
+        if args.run_id is not None and cfg.run_id:
+            raise SystemExit("--config file run_id cannot be overridden by --run-id")
+        if args.run_id:
+            cfg.run_id = args.run_id
         cfg.dry_run = args.dry_run
         cfg.api_key_env = args.api_key_env
         return cfg
