@@ -47,6 +47,63 @@ def test_load_good(tmp_path):
     assert cli.provider == "cli-claude" and cli.options == CivOptions()
 
 
+def test_load_experiment_uses_supplied_defaults_for_omitted_run_controls(tmp_path):
+    from civ_mcp.arena.config import ArenaConfig
+
+    p = _write(
+        tmp_path,
+        """
+civs:
+  - player: 3
+    provider: local
+    model: gemma4-26b
+""",
+    )
+    cfg = load_experiment(
+        p,
+        defaults=ArenaConfig(
+            players=[],
+            max_puppet_turns=8,
+            idle_poll_limit=3600,
+            gateway_url="http://launcher.example/v1",
+        ),
+    )
+
+    assert cfg.max_puppet_turns == 8
+    assert cfg.idle_poll_limit == 3600
+    assert cfg.gateway_url == "http://launcher.example/v1"
+
+
+def test_load_experiment_yaml_values_override_supplied_defaults(tmp_path):
+    from civ_mcp.arena.config import ArenaConfig
+
+    p = _write(
+        tmp_path,
+        """
+max_puppet_turns: 12
+idle_poll_limit: 7200
+gateway_url: http://yaml.example/v1
+civs:
+  - player: 3
+    provider: local
+    model: gemma4-26b
+""",
+    )
+    cfg = load_experiment(
+        p,
+        defaults=ArenaConfig(
+            players=[],
+            max_puppet_turns=8,
+            idle_poll_limit=3600,
+            gateway_url="http://launcher.example/v1",
+        ),
+    )
+
+    assert cfg.max_puppet_turns == 12
+    assert cfg.idle_poll_limit == 7200
+    assert cfg.gateway_url == "http://yaml.example/v1"
+
+
 def test_rejects_duplicate_players(tmp_path):
     bad = GOOD.replace("player: 1", "player: 3")
     with pytest.raises(ValueError, match="duplicate"):

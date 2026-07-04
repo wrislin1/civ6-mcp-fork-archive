@@ -38,56 +38,88 @@ def build_args(argv=None):
                     help="'<id>:<provider>:<model>[@<gateway>]' (local civ may pin its own gateway)")
     ap.add_argument("--config", default="",
                     help="YAML experiment file (mutually exclusive with --player)")
-    ap.add_argument("--max-puppet-turns", type=int, default=1)
-    ap.add_argument("--gateway-url", default=DEFAULT_GATEWAY_URL)
+    ap.add_argument("--max-puppet-turns", type=int, default=None)
+    ap.add_argument("--gateway-url", default=None)
     ap.add_argument("--api-key-env", default="LITELLM_OPENAI_API_KEY")
     ap.add_argument("--cost-path", default="", help="path for cost log (default: auto under run dir)")
-    ap.add_argument("--run-id", default="", help="run ID (generated if empty)")
+    ap.add_argument("--run-id", default=None, help="run ID (generated if empty)")
     ap.add_argument("--transcript-dir", default="arena_runs", help="base directory for run dirs")
     ap.add_argument("--no-transcript", action="store_true", help="disable transcript writing")
-    ap.add_argument("--max-agent-steps", type=int, default=6)
-    ap.add_argument("--idle-poll-limit", type=int, default=600,
+    ap.add_argument("--max-agent-steps", type=int, default=None)
+    ap.add_argument("--idle-poll-limit", type=int, default=None,
                     help="number of 1s polls to wait for puppet turns before exiting")
     ap.add_argument("--dry-run", action="store_true", help="scripted policy, no LLM")
+    ap.add_argument("--config-default-max-puppet-turns", type=int, default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--config-default-idle-poll-limit", type=int, default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--config-default-gateway-url", default=None, help=argparse.SUPPRESS)
     return ap.parse_args(argv)
+
+def _arena_defaults() -> ArenaConfig:
+    return ArenaConfig(players=[])
+
+def _value_or_default(value, default):
+    return default if value is None else value
 
 def resolve_config(args) -> ArenaConfig:
     from civ_mcp.arena.experiment import load_experiment
 
+    defaults = _arena_defaults()
     config_path = getattr(args, "config", "")
     if config_path and args.player:
         raise SystemExit("--config and --player are mutually exclusive")
+    max_puppet_turns_arg = getattr(args, "max_puppet_turns", None)
+    gateway_url_arg = getattr(args, "gateway_url", None)
+    idle_poll_limit_arg = getattr(args, "idle_poll_limit", None)
+    max_agent_steps_arg = getattr(args, "max_agent_steps", None)
     if config_path:
         rejected = []
-        if args.max_puppet_turns != 1:
+        if max_puppet_turns_arg is not None:
             rejected.append("--max-puppet-turns")
-        if args.gateway_url != DEFAULT_GATEWAY_URL:
+        if gateway_url_arg is not None:
             rejected.append("--gateway-url")
-        if getattr(args, "idle_poll_limit", 600) != 600:
+        if idle_poll_limit_arg is not None:
             rejected.append("--idle-poll-limit")
-        if args.max_agent_steps != 6:
+        if max_agent_steps_arg is not None:
             rejected.append("--max-agent-steps")
         if rejected:
             flags = ", ".join(rejected)
             raise SystemExit(f"--config does not allow overriding config-owned flags: {flags}")
-        cfg = load_experiment(config_path)
+        config_defaults = ArenaConfig(
+            players=[],
+            max_puppet_turns=_value_or_default(
+                getattr(args, "config_default_max_puppet_turns", None),
+                defaults.max_puppet_turns,
+            ),
+            idle_poll_limit=_value_or_default(
+                getattr(args, "config_default_idle_poll_limit", None),
+                defaults.idle_poll_limit,
+            ),
+            gateway_url=_value_or_default(
+                getattr(args, "config_default_gateway_url", None),
+                defaults.gateway_url,
+            ),
+        )
+        cfg = load_experiment(config_path, defaults=config_defaults)
         cfg.dry_run = args.dry_run
         cfg.api_key_env = args.api_key_env
         return cfg
 
     specs = [parse_player_spec(s) for s in args.player]
-    if args.max_agent_steps != 6:
+    max_agent_steps = _value_or_default(max_agent_steps_arg, defaults.max_agent_steps)
+    if max_agent_steps_arg is not None:
         updated = []
         for spec in specs:
             if spec.provider == "local":
-                opts = replace(spec.options, max_steps=args.max_agent_steps)
+                opts = replace(spec.options, max_steps=max_agent_steps)
                 spec = replace(spec, options=opts)
             updated.append(spec)
         specs = updated
-    return ArenaConfig(players=specs, max_puppet_turns=args.max_puppet_turns,
-                       gateway_url=args.gateway_url, api_key_env=args.api_key_env,
-                       dry_run=args.dry_run, max_agent_steps=args.max_agent_steps,
-                       idle_poll_limit=getattr(args, "idle_poll_limit", 600),
+    return ArenaConfig(players=specs,
+                       max_puppet_turns=_value_or_default(max_puppet_turns_arg, defaults.max_puppet_turns),
+                       gateway_url=_value_or_default(gateway_url_arg, defaults.gateway_url),
+                       api_key_env=args.api_key_env,
+                       dry_run=args.dry_run, max_agent_steps=max_agent_steps,
+                       idle_poll_limit=_value_or_default(idle_poll_limit_arg, defaults.idle_poll_limit),
                        puppet_ids=[s.player_id for s in specs])
 
 async def _run(args):

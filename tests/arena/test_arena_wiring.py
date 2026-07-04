@@ -10,6 +10,7 @@ from civ_mcp.arena.config import (
     PlayerSpec,
     ArenaConfig,
     CivOptions,
+    DEFAULT_GATEWAY_URL,
     parse_player_spec,
 )
 from civ_mcp.arena.agent import LLMPolicy
@@ -71,8 +72,16 @@ def test_build_policies_per_civ_gateway_pins_backend():
 
 
 def test_build_args_accepts_idle_poll_limit():
-    args = build_args(["--player", "1:cli-codex:gpt-5.5", "--idle-poll-limit", "12"])
+    args = build_args(["--idle-poll-limit", "12"])
     assert args.idle_poll_limit == 12
+
+
+def test_resolve_config_non_config_uses_arena_defaults():
+    cfg = resolve_config(build_args(["--player", "3:local:m"]))
+    assert cfg.max_puppet_turns == 1
+    assert cfg.idle_poll_limit == 600
+    assert cfg.gateway_url == DEFAULT_GATEWAY_URL
+    assert cfg.max_agent_steps == 6
 
 
 def test_build_args_accepts_config():
@@ -105,6 +114,24 @@ def test_resolve_config_from_file(tmp_path):
     ],
 )
 def test_resolve_config_rejects_non_default_config_owned_flags(tmp_path, argv_tail, flag):
+    p = tmp_path / "e.yaml"
+    p.write_text("civs:\n  - {player: 3, provider: local, model: m}\n")
+    with pytest.raises(SystemExit, match=flag):
+        resolve_config(build_args(["--config", str(p), *argv_tail]))
+
+
+@pytest.mark.parametrize(
+    ("argv_tail", "flag"),
+    [
+        (["--max-puppet-turns", "1"], "--max-puppet-turns"),
+        (["--gateway-url", DEFAULT_GATEWAY_URL], "--gateway-url"),
+        (["--idle-poll-limit", "600"], "--idle-poll-limit"),
+        (["--max-agent-steps", "6"], "--max-agent-steps"),
+    ],
+)
+def test_resolve_config_rejects_config_owned_flags_even_when_default_value_passed(
+    tmp_path, argv_tail, flag
+):
     p = tmp_path / "e.yaml"
     p.write_text("civs:\n  - {player: 3, provider: local, model: m}\n")
     with pytest.raises(SystemExit, match=flag):

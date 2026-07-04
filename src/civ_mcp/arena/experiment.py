@@ -207,8 +207,9 @@ def _top_int(path: Path, field: str, value: object) -> int:
     return parsed
 
 
-def load_experiment(path: str | Path) -> ArenaConfig:
+def load_experiment(path: str | Path, defaults: ArenaConfig | None = None) -> ArenaConfig:
     config_path = Path(path)
+    arena_defaults = defaults or _ARENA_DEFAULTS
     try:
         text = config_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -238,21 +239,21 @@ def load_experiment(path: str | Path) -> ArenaConfig:
         max_puppet_turns=_top_int(
             config_path,
             "max_puppet_turns",
-            data.get("max_puppet_turns", _ARENA_DEFAULTS.max_puppet_turns),
+            data.get("max_puppet_turns", arena_defaults.max_puppet_turns),
         ),
         gateway_url=(
-            DEFAULT_GATEWAY_URL
+            arena_defaults.gateway_url
             if "gateway_url" not in data
             else _non_blank_string(str(config_path), "gateway_url", data["gateway_url"])
         ),
         idle_poll_limit=_top_int(
             config_path,
             "idle_poll_limit",
-            data.get("idle_poll_limit", _ARENA_DEFAULTS.idle_poll_limit),
+            data.get("idle_poll_limit", arena_defaults.idle_poll_limit),
         ),
         puppet_ids=ids,
         run_id=(
-            _ARENA_DEFAULTS.run_id
+            arena_defaults.run_id
             if "run_id" not in data
             else _string(str(config_path), "run_id", data["run_id"])
         ),
