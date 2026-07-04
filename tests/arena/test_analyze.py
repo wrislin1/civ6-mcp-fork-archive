@@ -965,18 +965,18 @@ def test_same_model_different_seat_produces_two_groups(tmp_path: Path) -> None:
 # Task-H3 — shared vocab coupling test
 # ---------------------------------------------------------------------------
 
-def test_local_tool_verbs_subset_of_known_tools():
-    """All LOCAL_TOOL_VERBS keys must appear in agent._KNOWN_TOOLS.
+def test_local_tool_verbs_subset_of_registry():
+    """All LOCAL_TOOL_VERBS keys must appear in registry TOOL_REGISTRY.
 
     A rename in either place without updating the other will surface here.
     FAILS before H3 (vocab.py does not exist yet).
     """
-    import civ_mcp.arena.agent as agent_mod
+    from civ_mcp.arena.registry import TOOL_REGISTRY
     from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS
 
-    missing = set(LOCAL_TOOL_VERBS) - agent_mod._KNOWN_TOOLS
+    missing = set(LOCAL_TOOL_VERBS) - set(TOOL_REGISTRY)
     assert not missing, (
-        f"LOCAL_TOOL_VERBS keys not in agent._KNOWN_TOOLS: {missing!r}"
+        f"LOCAL_TOOL_VERBS keys not in registry TOOL_REGISTRY: {missing!r}"
     )
 
 

@@ -2,53 +2,21 @@ from __future__ import annotations
 import json
 import time
 
+from civ_mcp.arena.registry import (
+    dispatch as _registry_dispatch,
+    openai_tools,
+    resolve_tools,
+)
+
 MODEL_FEED_CHAR_CAP = 1500  # max chars of a tool result fed to the model
 
-def _tool(name, desc, props=None, required=None):
-    return {"type": "function", "function": {"name": name, "description": desc,
-            "parameters": {"type": "object", "properties": props or {}, "required": required or []}}}
+_MINIMAL_NAMES = resolve_tools("minimal")
+TOOLS = openai_tools(_MINIMAL_NAMES)
 
-TOOLS = [
-    _tool("get_overview", "Empire/turn overview for your civ"),
-    _tool("get_units", "List your units (with their unit_index)"),
-    _tool("get_cities", "List your cities"),
-    _tool("move_unit", "Move a unit toward (x,y)",
-          {"unit_index": {"type": "integer"}, "x": {"type": "integer"}, "y": {"type": "integer"}},
-          ["unit_index", "x", "y"]),
-    _tool("found_city", "Found a city with a settler",
-          {"unit_index": {"type": "integer"}}, ["unit_index"]),
-    _tool("set_city_production", "Set a city's production",
-          {"city_id": {"type": "integer"},
-           "item_type": {"type": "string", "description": "UNIT | BUILDING | DISTRICT | PROJECT"},
-           "item_name": {"type": "string", "description": "e.g. UNIT_WARRIOR, BUILDING_MONUMENT"}},
-          ["city_id", "item_type", "item_name"]),
-    _tool("set_research", "Set the research tech (TECH_*)",
-          {"tech": {"type": "string"}}, ["tech"]),
-    _tool("fortify_unit", "Fortify a unit", {"unit_index": {"type": "integer"}}, ["unit_index"]),
-    _tool("skip_unit", "Skip a unit this turn", {"unit_index": {"type": "integer"}}, ["unit_index"]),
-]
 
-# known tool names for invalid-call classification
-_KNOWN_TOOLS = frozenset({
-    "get_overview", "get_units", "get_cities", "move_unit", "found_city",
-    "set_city_production", "set_research", "fortify_unit", "skip_unit",
-})
-
-# tool name -> (GameState method name, arg-mapping function)
-def _dispatch(gs, name, args):
+async def _dispatch(gs, name, args, allowed=_MINIMAL_NAMES):
     a = json.loads(args or "{}")
-    table = {
-        "get_overview": lambda: gs.get_game_overview(),
-        "get_units": lambda: gs.get_units(),
-        "get_cities": lambda: gs.get_cities(),
-        "move_unit": lambda: gs.move_unit(a["unit_index"], a["x"], a["y"]),
-        "found_city": lambda: gs.found_city(a["unit_index"]),
-        "set_city_production": lambda: gs.set_city_production(a["city_id"], a["item_type"], a["item_name"]),
-        "set_research": lambda: gs.set_research(a["tech"]),
-        "fortify_unit": lambda: gs.fortify_unit(a["unit_index"]),
-        "skip_unit": lambda: gs.skip_unit(a["unit_index"]),
-    }
-    return table[name]()
+    return await _registry_dispatch(gs, name, a, allowed=allowed)
 
 SYSTEM = ("You are playing one civ in Civilization VI on its turn. Use tools to observe, then "
           "take a few sensible early-game actions (scout, move/settle, set production and "
@@ -92,7 +60,7 @@ class LLMPolicy:
                              for tc in reply.tool_calls]})
             for tc in reply.tool_calls:
                 # classify (observation only — dispatch below stays untouched)
-                if tc["name"] not in _KNOWN_TOOLS:
+                if tc["name"] not in _MINIMAL_NAMES:
                     invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                "reason": "unknown_tool"})
                 else:
@@ -102,7 +70,7 @@ class LLMPolicy:
                         invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                    "reason": "bad_arguments"})
                 try:
-                    result = await _dispatch(gs, tc["name"], tc["arguments"])
+                    result = await _dispatch(gs, tc["name"], tc["arguments"], _MINIMAL_NAMES)
                 except Exception as e:
                     result = f"ERROR: {e!r}"
                 # transcript step (uses same result object, before truncation)
