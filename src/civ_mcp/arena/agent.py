@@ -4,6 +4,8 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from civ_mcp.arena.briefing import Briefing, build_briefing
+from civ_mcp.arena.budget import briefing_budget, resolve_n_ctx
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.registry import (
     dispatch as _registry_dispatch,
@@ -42,10 +44,32 @@ class LLMPolicy:
         self._system = SYSTEM
         if self.options.playbook == "condensed":
             self._system = SYSTEM + "\n\n" + load_playbook()
+        self._n_ctx: int | None = None
+        self._n_ctx_source = ""
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
+        briefing = Briefing()
+        if self.options.briefing.enabled:
+            if self._n_ctx is None:
+                self._n_ctx, self._n_ctx_source = await resolve_n_ctx(
+                    getattr(self.backend, "base_url", ""),
+                    getattr(self.backend, "model", ""),
+                    self.options.context_budget,
+                )
+            playbook_chars = len(self._system) - len(SYSTEM)
+            tool_schema_chars = len(json.dumps(self._tools))
+            budget = briefing_budget(
+                self._n_ctx,
+                self.options,
+                playbook_chars,
+                tool_schema_chars,
+            )
+            briefing = await build_briefing(gs, self.options.briefing, budget)
+        opening = f"It is turn {turn}. You control player {player_id}. Begin."
+        if briefing.text:
+            opening = f"{briefing.text}\n\n{opening}"
         messages = [{"role": "system", "content": self._system},
-                    {"role": "user", "content": f"It is turn {turn}. You control player {player_id}. Begin."}]
+                    {"role": "user", "content": opening}]
         actions = []
         steps: list[dict] = []
         invalid_tool_calls: list[dict] = []
@@ -65,6 +89,12 @@ class LLMPolicy:
                     "steps": steps,
                     "invalid_tool_calls": invalid_tool_calls,
                     "civ_options": self.options.fingerprint(),
+                    "briefing_tokens": briefing.tokens,
+                    "briefing_sections": briefing.sections,
+                    "briefing_radius": briefing.radius,
+                    "briefing_errors": briefing.errors,
+                    "n_ctx": self._n_ctx,
+                    "n_ctx_source": self._n_ctx_source,
                     "wall_clock_s": time.time() - wall_clock_start,
                     "max_steps_reached": False,
                     "final_summary": reply.text or "",
@@ -120,6 +150,12 @@ class LLMPolicy:
             "steps": steps,
             "invalid_tool_calls": invalid_tool_calls,
             "civ_options": self.options.fingerprint(),
+            "briefing_tokens": briefing.tokens,
+            "briefing_sections": briefing.sections,
+            "briefing_radius": briefing.radius,
+            "briefing_errors": briefing.errors,
+            "n_ctx": self._n_ctx,
+            "n_ctx_source": self._n_ctx_source,
             "wall_clock_s": time.time() - wall_clock_start,
             "max_steps_reached": True,
             "final_summary": "",

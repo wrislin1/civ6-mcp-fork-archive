@@ -2,7 +2,7 @@ import pytest
 import civ_mcp.arena.agent as agent
 from civ_mcp.arena.agent import LLMPolicy
 from civ_mcp.arena.backends import Reply
-from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.config import BriefingOptions, CivOptions
 from civ_mcp.arena.agent import load_playbook
 
 
@@ -329,3 +329,83 @@ def test_playbook_loads_and_is_reasonably_sized():
     text = load_playbook()
     assert 2000 < len(text) < 20000
     assert "settler" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_briefing_prepended_and_telemetry(monkeypatch):
+    from civ_mcp.arena import agent as agent_mod
+    from civ_mcp.arena.briefing import Briefing
+
+    async def fake_resolve(base_url, model, budget, http_get=None):
+        assert base_url == "http://h:11440/v1"
+        assert model == "fake"
+        assert budget == "auto"
+        return 131072, "upstream_props"
+
+    async def fake_build(gs, opts, budget_tokens):
+        assert budget_tokens > 100_000
+        return Briefing(
+            text="BRIEFING BODY",
+            tokens=3,
+            sections=["overview"],
+            radius=4,
+            errors=[],
+        )
+
+    monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
+    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+
+    be = SpyBackend([_no_tool_reply()])
+    be.base_url = "http://h:11440/v1"
+    opts = CivOptions(briefing=BriefingOptions(enabled=True))
+    pol = LLMPolicy(be, FakeCost(), options=opts)
+    out = await pol(None, 3, 7)
+
+    user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
+    assert user_msg["content"].startswith("BRIEFING BODY")
+    assert "It is turn 7. You control player 3. Begin." in user_msg["content"]
+    tr = out["transcript"]
+    assert tr["briefing_tokens"] == 3
+    assert tr["briefing_sections"] == ["overview"]
+    assert tr["briefing_radius"] == 4
+    assert tr["briefing_errors"] == []
+    assert tr["n_ctx"] == 131072
+    assert tr["n_ctx_source"] == "upstream_props"
+
+
+@pytest.mark.asyncio
+async def test_n_ctx_resolved_once_across_turns(monkeypatch):
+    from civ_mcp.arena import agent as agent_mod
+    from civ_mcp.arena.briefing import Briefing
+
+    calls = []
+
+    async def fake_resolve(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 32768, "props"
+
+    async def fake_build(gs, opts, budget):
+        return Briefing(text="B", tokens=1)
+
+    monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
+    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+
+    be = SpyBackend([_no_tool_reply(), _no_tool_reply()])
+    be.base_url = "http://h:1/v1"
+    pol = LLMPolicy(
+        be,
+        FakeCost(),
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+    await pol(None, 3, 7)
+    await pol(None, 3, 8)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_briefing_disabled_is_todays_message():
+    be = SpyBackend([_no_tool_reply()])
+    pol = LLMPolicy(be, FakeCost(), options=CivOptions())
+    await pol(None, 3, 7)
+    user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
+    assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
