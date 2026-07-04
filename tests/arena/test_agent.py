@@ -116,6 +116,36 @@ async def test_transcript_payload():
     assert isinstance(t["wall_clock_s"], float) and t["wall_clock_s"] >= 0
 
 
+class FakeBackendOutOfTier:
+    def __init__(self):
+        self.n = 0
+
+    async def chat(self, messages, tools):
+        self.n += 1
+        if self.n == 1:
+            return Reply(
+                text=None,
+                tool_calls=[
+                    {"id": "tc1", "name": "get_map_area", "arguments": '{"x": 1, "y": 2}'},
+                    {"id": "tc2", "name": "bogus_tool", "arguments": "{}"},
+                ],
+                prompt_tokens=10,
+                completion_tokens=1,
+            )
+        return Reply(text="done", tool_calls=[], prompt_tokens=10, completion_tokens=1)
+
+
+@pytest.mark.asyncio
+async def test_policy_distinguishes_out_of_tier_from_unknown_tool():
+    gs, cost = FakeGS(), FakeCost()
+    pol = LLMPolicy(FakeBackendOutOfTier(), cost, options=CivOptions(tools="minimal"))
+    out = await pol(gs, player_id=1, turn=3)
+
+    invalid = out["transcript"]["invalid_tool_calls"]
+    assert {"tool_name": "get_map_area", "arguments": '{"x": 1, "y": 2}', "reason": "out_of_tier"} in invalid
+    assert {"tool_name": "bogus_tool", "arguments": "{}", "reason": "unknown_tool"} in invalid
+
+
 @pytest.mark.asyncio
 async def test_transcript_max_steps_reached():
     """When the loop exhausts max_steps, max_steps_reached=True in transcript."""

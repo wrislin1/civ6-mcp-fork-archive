@@ -59,6 +59,18 @@ def _steps_of(rec: dict) -> list[dict]:
     return [s for s in (rec.get("steps") or []) if isinstance(s, dict)]
 
 
+def _counted_invalid_calls(rec: dict) -> list[dict]:
+    counted = []
+    for item in rec.get("invalid_tool_calls") or []:
+        if not isinstance(item, dict):
+            counted.append(item)
+            continue
+        if item.get("reason") == "out_of_tier":
+            continue
+        counted.append(item)
+    return counted
+
+
 def _is_error_result(s: str) -> bool:
     """Return True if a tool result string represents a game-level failure.
 
@@ -107,7 +119,7 @@ def config_summary(records: list[dict]) -> dict:
             if step_count is None:
                 step_count = len(_steps_of(rec))
             total_steps += step_count or 0
-            total_invalid += len(rec.get("invalid_tool_calls") or [])
+            total_invalid += len(_counted_invalid_calls(rec))
             total_briefing_tokens += rec.get("briefing_tokens") or 0
             total_score_delta += (rec.get("state_delta") or {}).get("score", 0) or 0
 
@@ -177,7 +189,7 @@ def _rubric_for_model(records: list[dict]) -> dict:
         turn: int = rec.get("turn", 0)
         state_delta: dict = rec.get("state_delta") or {}
         steps = _steps_of(rec)
-        invalid_calls: list[dict] = rec.get("invalid_tool_calls") or []
+        invalid_calls: list[dict] = _counted_invalid_calls(rec)
 
         # ---- founded_extra_city ----
         if rubric["founded_extra_city"] is None:
@@ -357,7 +369,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
             state_after: dict = rec.get("state_after") or {}
             state_delta: dict = rec.get("state_delta") or {}
             steps = _steps_of(rec)
-            invalid_calls: list = rec.get("invalid_tool_calls") or []
+            invalid_calls: list = _counted_invalid_calls(rec)
             step_count: int = rec.get("step_count") or len(steps)
 
             # --- token totals: always top-level, never step-sum ---

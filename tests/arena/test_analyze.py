@@ -494,6 +494,31 @@ def test_rubric_hallucinated_tools_model_b(run_dir: Path) -> None:
     assert rubric_b["hallucinated_tools"] is None
 
 
+def test_out_of_tier_calls_do_not_count_as_invalid_rate_or_hallucination():
+    from civ_mcp.arena.analyze import analyze
+
+    records = [
+        {
+            "player_id": 1,
+            "model": "m",
+            "provider": "local",
+            "driver": "in_process",
+            "turn": 1,
+            "step_count": 2,
+            "steps": [],
+            "invalid_tool_calls": [
+                {"tool_name": "get_map_area", "reason": "out_of_tier"},
+            ],
+        }
+    ]
+
+    report = analyze(records, [])
+
+    assert report["by_player"][1]["rates"]["invalid_call_rate"] == 0.0
+    assert report["by_player"][1]["rubric"]["hallucinated_tools"] is None
+    assert report["config_summary"]["1"]["invalid_call_rate"] == 0.0
+
+
 def test_default_output_paths(tmp_path: Path) -> None:
     """Default output paths are derived from --runs-dir and --run-id."""
     from civ_mcp.arena.analyze import main

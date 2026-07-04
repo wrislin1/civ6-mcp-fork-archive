@@ -8,6 +8,7 @@ from civ_mcp.arena.briefing import Briefing, build_briefing
 from civ_mcp.arena.budget import briefing_budget, resolve_n_ctx
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.registry import (
+    TOOL_REGISTRY,
     dispatch as _registry_dispatch,
     openai_tools,
     resolve_tools,
@@ -118,8 +119,9 @@ class LLMPolicy:
                              for tc in reply.tool_calls]})
             for tc in reply.tool_calls:
                 if tc["name"] not in self._tool_names:
+                    reason = "out_of_tier" if tc["name"] in TOOL_REGISTRY else "unknown_tool"
                     invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
-                                               "reason": "unknown_tool"})
+                                               "reason": reason})
                 else:
                     try:
                         json.loads(tc["arguments"] or "{}")
