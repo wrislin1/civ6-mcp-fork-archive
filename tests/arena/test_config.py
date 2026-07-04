@@ -1,5 +1,11 @@
 import pytest
-from civ_mcp.arena.config import parse_player_spec, PlayerSpec, ArenaConfig
+from civ_mcp.arena.config import (
+    ArenaConfig,
+    BriefingOptions,
+    CivOptions,
+    PlayerSpec,
+    parse_player_spec,
+)
 
 def test_parse_player_spec_local():
     assert parse_player_spec("1:local:qwen3-coder-30b") == PlayerSpec(1, "local", "qwen3-coder-30b")
@@ -55,3 +61,26 @@ def test_arena_config_run_id_default():
 
 def test_arena_config_transcript_dir_default():
     assert ArenaConfig(players=[]).transcript_dir == "arena_runs"
+
+
+def test_civ_options_defaults_match_today():
+    o = CivOptions()
+    assert (o.tools, o.result_char_cap, o.max_steps, o.playbook) == ("minimal", 1500, 6, "none")
+    assert o.context_budget == "auto"
+    assert o.briefing.enabled is False
+
+
+def test_player_spec_gets_default_options():
+    s = parse_player_spec("1:local:qwen3-coder:30b")
+    assert s.options == CivOptions()
+
+
+def test_civ_options_fingerprint_is_json_safe():
+    import json
+
+    o = CivOptions(tools=("get_units", "move_unit"), max_steps=10,
+                   briefing=BriefingOptions(enabled=True, map_radius=4))
+    fp = o.fingerprint()
+    assert json.dumps(fp)
+    assert fp["tools"] == ["get_units", "move_unit"]
+    assert fp["briefing"]["enabled"] is True
