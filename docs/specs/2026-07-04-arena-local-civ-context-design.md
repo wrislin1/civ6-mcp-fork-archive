@@ -47,6 +47,12 @@ actions) for follow-up queries and moves.
 hand-written `TOOLS` + `_dispatch` with a table of name → schema → `GameState` method,
 from which named tiers are subsets.
 
+**Rendering:** every tool result and briefing section is rendered via `civ_mcp.narrate` —
+the same compact text CLI civs see through the MCP server — never Python dataclass reprs
+(reprs cost ~2–3× the tokens for the same information and are noisier for 20–30B models).
+This applies to all tiers including the `minimal` control: the A/B control is defined by
+same tools/caps/steps/prompt, not by preserving the old accidental repr rendering.
+
 ### Experiment config file
 
 `civ-arena --config experiments/<name>.yaml` (existing `--player` flags remain as
@@ -93,8 +99,11 @@ reserve = playbook_tokens + tool_schema_tokens
    `{origin}/props` (bare llama-server), reading `default_generation_settings.n_ctx`.
 3. Fallback: 16,384 conservative default.
 
-Budget is denominated in tokens; text is measured at 4 chars/token (llama.cpp-adjacent
-heuristic, good enough for budgeting with the 1,024-token margin absorbing error).
+Budget is denominated in tokens; text is measured at 3 chars/token — deliberately
+conservative. Civ text is identifier-dense (`TERRAIN_GRASS`, coordinates) and tokenizes
+at ~3–3.3 chars/token; measuring at 4 would overestimate the budget in the direction that
+blows the context window. The live smoke gate verifies empirically that the first-step
+`prompt_tokens` stays under the resolved `n_ctx`.
 
 ### Briefing builder
 
@@ -103,13 +112,18 @@ and fill in priority order until the budget is spent:
 
 1. `overview` — `get_game_overview()`
 2. `units` — `get_units()`, untruncated
-3. `cities` — `get_cities()` + `list_city_production(city_id)` per city
-   (`production_options` section toggles the latter)
-4. `map` — `get_map_area(x, y, radius)` around each unit and city, deduplicated;
-   radius starts at `map_radius` and **auto-expands** (+1 up to 5) while ≥25% of
-   the budget remains unspent — the "fill to ceiling" lever
-5. `research` — `get_tech_civics()`
-6. Extended, config-enabled: `empire_resources`, `rivals` (`get_rival_snapshot`),
+3. `cities` — `get_cities()`
+4. `production_options` — `list_city_production(city_id)` per city (fetches cities
+   itself if the `cities` section is not configured); sits directly after `cities`
+   because it is small, high-value input to `set_city_production`
+5. `map` — `get_map_area(x, y, radius)` around each unit and city, deduplicated;
+   radius starts at `map_radius` and **auto-expands** (up to 5) while ≥25% of the
+   budget remains unspent — the "fill to ceiling" lever. Expansion is a single
+   predictive jump: tile count per center grows as 3r²+3r+1, so the cost of a larger
+   radius is projected from the first fetch and at most one extra fetch pass runs
+   (each pass is one FireTuner Lua round-trip per center)
+6. `research` — `get_tech_civics()`
+7. Extended, config-enabled: `empire_resources`, `rivals` (`get_rival_snapshot`),
    `threats` (`get_threat_scan`), `victory` (`get_victory_progress`)
 
 The assembled briefing is **hard-truncated at budget** even if estimates were wrong; an
@@ -118,11 +132,16 @@ reached, and errors are recorded per turn.
 
 ### Toolset tiers
 
-Registry-driven; a tier is a named subset of the one `TOOL_REGISTRY` table.
+Registry-driven; a tier is a named subset of the one `TOOL_REGISTRY` table. Dispatch is
+**gated on the per-civ resolved toolset**: a tool name outside the civ's tier — even one
+defined in the registry — is rejected with an `ERROR:` result, never executed. Without the
+gate, a control-seat civ that hallucinates an out-of-tier tool name would silently escape
+its tier and contaminate the A/B comparison.
 
 - `minimal` — today's 9: `get_overview`, `get_units`, `get_cities`, `move_unit`,
   `found_city`, `set_city_production`, `set_research`, `fortify_unit`, `skip_unit`
-  (baseline control group).
+  (baseline control group — same tools/caps/steps/prompt as today; results narrated
+  like everything else).
 - `standard` — minimal + reads `get_map_area`, `get_tech_civics`; + actions
   `attack_unit`, `improve_tile`, `remove_feature`, `purchase_item`, `heal_unit`,
   `alert_unit`, `set_civic`.

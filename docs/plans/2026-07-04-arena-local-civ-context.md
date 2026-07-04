@@ -12,23 +12,34 @@ briefing sized to each model's real context window), so configurations can be A/
 briefing as the opening user message (push); a new tool registry replaces `agent.py`'s
 hand-written tool table and exposes named tier subsets (pull + actions). All knobs live on a new
 `CivOptions` dataclass carried by `PlayerSpec`, populated either from a YAML experiment file
-(`civ-arena --config`) or defaulted by the existing `--player` shorthand (which must reproduce
-today's behavior exactly).
+(`civ-arena --config`) or defaulted by the existing `--player` shorthand (which keeps today's
+configuration; all tool results are now rendered via `civ_mcp.narrate` — a deliberate,
+user-approved change from raw dataclass reprs).
 
 **Tech Stack:** Python 3.12, asyncio, pytest + pytest-asyncio, PyYAML (new explicit dep),
-httpx (already present via the openai SDK).
+httpx>=0.28 (new explicit dep — `budget.py` imports it directly; do not rely on the openai
+SDK's transitive copy).
 
 **Spec:** `docs/specs/2026-07-04-arena-local-civ-context-design.md` — read it first.
 
 ## Global Constraints
 
-- `--player` shorthand runs must be **behavior-identical** to today: tier `minimal`,
+- `--player` shorthand runs keep today's **configuration**: tier `minimal`,
   `result_char_cap=1500`, `max_steps=6` (or `--max-agent-steps`), playbook `none`, briefing off.
+  Rendering is NOT preserved: all tool results are narrated via `civ_mcp.narrate` (the same
+  compact text CLI civs see) instead of dataclass reprs — deliberate, user-approved. The A/B
+  control is defined by same tools/caps/steps/prompt, not byte-identical output.
+- A civ may only EXECUTE tools in its own resolved toolset. An out-of-tier name — even one
+  that exists in the registry, e.g. `attack_unit` called by a `minimal` civ — must be rejected
+  with an `ERROR:` tool result and never dispatched to `GameState`.
 - Local civs must NEVER see: `end_turn`, save/load/lifecycle tools, `execute_lua`,
   diplomacy-session responses, World Congress voting. The registry simply never defines them.
 - The assembled briefing is hard-truncated at budget — never blow the model's window.
 - Briefing section failures are logged, never fatal.
-- Token estimate heuristic everywhere: `tokens = len(text) // 4`.
+- Token estimate heuristic everywhere: `tokens = len(text) // 3` — conservative on purpose.
+  Civ text is identifier-dense (`TERRAIN_GRASS`, coordinates) and tokenizes at ~3–3.3
+  chars/token; dividing by 4 would overestimate the budget in the direction that blows the
+  context window.
 - Stage files explicitly — never `git add -A` (repo has untracked `.serena/`, generated
   `*.jsonl`, `arena_runs/`).
 - End state: commits on the feature branch, **unmerged**; the user reviews in a separate
@@ -64,11 +75,17 @@ httpx (already present via the openai SDK).
 
 ### Task 0: Branch setup
 
-- [ ] **Step 1: Create the feature branch** (worktree optional; a branch on the main checkout
-  is acceptable since this session owns the repo)
+- [ ] **Step 1: Check the worktree, then create the feature branch** (worktree optional; a
+  branch on the main checkout is acceptable since this session owns the repo — but the
+  checkout is known-dirty, so gate on it explicitly)
 
 ```bash
 cd /home/riz/dev/civ6-mcp
+git status --short
+# Expect EXACTLY these pre-existing entries — leave them alone, never stage them:
+#    M docs/agent-arena-hybrid-driver-plan.md
+#   ?? .serena/
+# Anything else in the output: STOP and report before branching.
 git checkout -b arena-local-civ-context
 uv run pytest tests/arena/ -q   # baseline green before any change
 ```
@@ -87,10 +104,11 @@ Expected: all arena tests pass (115+). If not, STOP and report.
 **Interfaces:**
 - Consumes: `GameState` async methods (`get_game_overview`, `get_units`, `get_cities`,
   `move_unit(unit_index,x,y)`, `found_city(unit_index)`,
-  `set_city_production(city_id,item_type,item_name)`, `set_research(tech)`,
+  `set_city_production(city_id,item_type,item_name,target_x=None,target_y=None)`,
+  `set_research(tech)`,
   `fortify_unit`, `skip_unit`, `get_map_area(center_x,center_y,radius)`, `get_tech_civics()`,
   `attack_unit(unit_index,target_x,target_y)`, `improve_tile(unit_index,improvement_name)`,
-  `remove_feature(unit_index)`, `purchase_item(city_id,item_type,item_name)`,
+  `remove_feature(unit_index)`, `purchase_item(city_id,item_type,item_name,yield_type="YIELD_GOLD")`,
   `heal_unit`, `alert_unit`, `set_civic(civic_name)`, `get_settle_advisor(unit_index)`,
   `get_district_advisor`, `get_wonder_advisor`, `get_builder_tasks`, `get_diplomacy()`,
   `get_city_states()`, `get_great_people()`, `get_empire_resources()`,
@@ -100,11 +118,16 @@ Expected: all arena tests pass (115+). If not, STOP and report.
   `promote_unit(unit_id,promotion_type)`, `get_unit_promotions(unit_id)`,
   `automate_explore(unit_index)`, `skip_remaining_units()`, `purchase_tile(city_id,x,y)`,
   `get_purchasable_tiles(city_id)`, `set_city_focus(city_id,focus)`)
+- Consumes also: `civ_mcp.narrate` renderers (`narrate_overview`, `narrate_units`,
+  `narrate_cities`, `narrate_map`, `narrate_tech_civics`, `narrate_diplomacy`, …) — every
+  read tool returns narrated text, never dataclass reprs. Action tools already return strings.
 - Produces: `ToolDef(name, description, params, required, call)`;
   `TOOL_REGISTRY: dict[str, ToolDef]`; `TIERS: dict[str, tuple[str, ...]]` with keys
   `minimal|standard|full`; `resolve_tools(selector: str | Sequence[str]) -> tuple[str, ...]`
   (ValueError on unknown tier/tool); `openai_tools(names) -> list[dict]`;
-  `async dispatch(gs, name: str, args: dict)`.
+  `async dispatch(gs, name: str, args: dict, allowed: Sequence[str] | None = None)` —
+  raises `KeyError` when `allowed` is given and `name` is not in it (out-of-tier ==
+  nonexistent, from that civ's point of view).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -161,6 +184,29 @@ async def test_dispatch_maps_args():
     assert await dispatch(FakeGS(), "attack_unit", {"unit_index": 2, "x": 9, "y": 9}) == "ATTACKED"
     assert calls == [(1, 4, 5), ("atk", 2)]
 
+@pytest.mark.asyncio
+async def test_dispatch_rejects_out_of_allowed():
+    """An in-registry name outside the allowed set must never reach GameState."""
+    class FakeGS:
+        async def get_map_area(self, x, y, radius):
+            raise AssertionError("out-of-tier tool must never execute")
+    with pytest.raises(KeyError):
+        await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 1},
+                       allowed=("get_units", "move_unit"))
+
+@pytest.mark.asyncio
+async def test_read_tools_narrate_not_repr():
+    from civ_mcp import lua as lq
+    class FakeGS:
+        async def get_units(self):
+            return [lq.UnitInfo(unit_id=65537, unit_index=1, name="Warrior",
+                                unit_type="UNIT_WARRIOR", x=10, y=10,
+                                moves_remaining=2, max_moves=2,
+                                health=100, max_health=100)]
+    out = await dispatch(FakeGS(), "get_units", {})
+    assert "UnitInfo(" not in out          # narrated, not a dataclass repr
+    assert "at (10,10)" in out             # narrate_units coordinate format
+
 def test_agent_module_still_exposes_tools():
     from civ_mcp.arena.agent import TOOLS
     names = {t["function"]["name"] for t in TOOLS}
@@ -179,12 +225,16 @@ Expected: FAIL — `ModuleNotFoundError: civ_mcp.arena.registry`
 """Tool registry for in-process local civs.
 
 One table maps tool name -> schema -> GameState call. Tiers are named subsets.
+Read results are rendered via civ_mcp.narrate — the same compact text CLI civs
+see through the MCP server — never raw dataclass reprs.
 Host-owned or unsafe operations (end_turn, save/load, execute_lua, diplomacy
 session responses, World Congress votes) are NEVER defined here.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Sequence
+
+from civ_mcp import narrate as nar
 
 @dataclass(frozen=True)
 class ToolDef:
@@ -203,23 +253,63 @@ def _s(desc=""):
 _UNIT = {"unit_index": _i("from get_units")}
 _XY = {"x": _i(), "y": _i()}
 
+def _render(fetch, render):
+    """Wrap a GameState read so the model sees narrated text.
+
+    Results that are already strings (advisor error strings, test fakes) pass
+    through untouched.
+    """
+    async def call(gs, a):
+        r = await fetch(gs, a)
+        return r if isinstance(r, str) else render(r)
+    return call
+
+async def _cities_text(gs, a):
+    r = await gs.get_cities()
+    if isinstance(r, str):
+        return r
+    cities, warnings = r
+    text = nar.narrate_cities(cities)
+    return text + ("\n" + "\n".join(warnings) if warnings else "")
+
+async def _empire_resources_text(gs, a):
+    r = await gs.get_empire_resources()
+    return r if isinstance(r, str) else nar.narrate_empire_resources(*r)
+
+async def _builder_tasks_text(gs, a):
+    r = await gs.get_builder_tasks()
+    if isinstance(r, str):
+        return r
+    tasks, builders = r
+    return nar.narrate_builder_tasks(tasks, builders)
+
+async def _district_advisor_text(gs, a):
+    r = await gs.get_district_advisor(a["city_id"], a["district_type"])
+    return r if isinstance(r, str) else nar.narrate_district_advisor(r, a["district_type"])
+
+async def _wonder_advisor_text(gs, a):
+    r = await gs.get_wonder_advisor(a["city_id"], a["wonder_name"])
+    return r if isinstance(r, str) else nar.narrate_wonder_advisor(r, a["wonder_name"])
+
 _DEFS = [
-    # ---- minimal (today's nine) ----
+    # ---- minimal (today's nine tools; read results now narrated) ----
     ToolDef("get_overview", "Empire/turn overview for your civ",
-            lambda gs, a: gs.get_game_overview()),
+            _render(lambda gs, a: gs.get_game_overview(), nar.narrate_overview)),
     ToolDef("get_units", "List your units (with their unit_index)",
-            lambda gs, a: gs.get_units()),
-    ToolDef("get_cities", "List your cities",
-            lambda gs, a: gs.get_cities()),
+            _render(lambda gs, a: gs.get_units(), nar.narrate_units)),
+    ToolDef("get_cities", "List your cities", _cities_text),
     ToolDef("move_unit", "Move a unit toward (x,y)",
             lambda gs, a: gs.move_unit(a["unit_index"], a["x"], a["y"]),
             {**_UNIT, **_XY}, ("unit_index", "x", "y")),
     ToolDef("found_city", "Found a city with a settler",
             lambda gs, a: gs.found_city(a["unit_index"]), dict(_UNIT), ("unit_index",)),
-    ToolDef("set_city_production", "Set a city's production",
-            lambda gs, a: gs.set_city_production(a["city_id"], a["item_type"], a["item_name"]),
+    ToolDef("set_city_production",
+            "Set a city's production (districts/wonders need target_x/target_y)",
+            lambda gs, a: gs.set_city_production(a["city_id"], a["item_type"], a["item_name"],
+                                                 a.get("target_x"), a.get("target_y")),
             {"city_id": _i(), "item_type": _s("UNIT | BUILDING | DISTRICT | PROJECT"),
-             "item_name": _s("e.g. UNIT_WARRIOR, BUILDING_MONUMENT")},
+             "item_name": _s("e.g. UNIT_WARRIOR, BUILDING_MONUMENT"),
+             "target_x": _i("tile for a district/wonder"), "target_y": _i()},
             ("city_id", "item_type", "item_name")),
     ToolDef("set_research", "Set the research tech (TECH_*)",
             lambda gs, a: gs.set_research(a["tech"]), {"tech": _s()}, ("tech",)),
@@ -229,10 +319,11 @@ _DEFS = [
             lambda gs, a: gs.skip_unit(a["unit_index"]), dict(_UNIT), ("unit_index",)),
     # ---- standard additions ----
     ToolDef("get_map_area", "Tiles around (x,y): terrain, resources, foreign units",
-            lambda gs, a: gs.get_map_area(a["x"], a["y"], a.get("radius", 2)),
+            _render(lambda gs, a: gs.get_map_area(a["x"], a["y"], a.get("radius", 2)),
+                    nar.narrate_map),
             {**_XY, "radius": _i("default 2, max 5")}, ("x", "y")),
     ToolDef("get_tech_civics", "Available techs and civics with turns to complete",
-            lambda gs, a: gs.get_tech_civics()),
+            _render(lambda gs, a: gs.get_tech_civics(), nar.narrate_tech_civics)),
     ToolDef("attack_unit", "Attack an enemy at (x,y) with a unit (melee/ranged auto)",
             lambda gs, a: gs.attack_unit(a["unit_index"], a["x"], a["y"]),
             {**_UNIT, **_XY}, ("unit_index", "x", "y")),
@@ -242,9 +333,11 @@ _DEFS = [
             ("unit_index", "improvement")),
     ToolDef("remove_feature", "Builder: chop forest/jungle/marsh on current tile",
             lambda gs, a: gs.remove_feature(a["unit_index"]), dict(_UNIT), ("unit_index",)),
-    ToolDef("purchase_item", "Buy a unit/building instantly with gold",
-            lambda gs, a: gs.purchase_item(a["city_id"], a["item_type"], a["item_name"]),
-            {"city_id": _i(), "item_type": _s("UNIT | BUILDING"), "item_name": _s()},
+    ToolDef("purchase_item", "Buy a unit/building instantly with gold (or faith)",
+            lambda gs, a: gs.purchase_item(a["city_id"], a["item_type"], a["item_name"],
+                                           a.get("yield_type", "YIELD_GOLD")),
+            {"city_id": _i(), "item_type": _s("UNIT | BUILDING"), "item_name": _s(),
+             "yield_type": _s("YIELD_GOLD (default) or YIELD_FAITH")},
             ("city_id", "item_type", "item_name")),
     ToolDef("heal_unit", "Fortify until healed (auto-wakes at full HP)",
             lambda gs, a: gs.heal_unit(a["unit_index"]), dict(_UNIT), ("unit_index",)),
@@ -254,34 +347,36 @@ _DEFS = [
             lambda gs, a: gs.set_civic(a["civic"]), {"civic": _s()}, ("civic",)),
     # ---- full additions ----
     ToolDef("get_settle_advisor", "Rank settle spots near a settler",
-            lambda gs, a: gs.get_settle_advisor(a["unit_index"]), dict(_UNIT), ("unit_index",)),
+            lambda gs, a: gs.get_settle_advisor(a["unit_index"]),   # already returns narrated str
+            dict(_UNIT), ("unit_index",)),
     ToolDef("get_district_advisor", "Ranked tiles for a district in a city",
-            lambda gs, a: gs.get_district_advisor(a["city_id"], a["district_type"]),
+            _district_advisor_text,
             {"city_id": _i(), "district_type": _s("e.g. DISTRICT_CAMPUS")},
             ("city_id", "district_type")),
     ToolDef("get_wonder_advisor", "Placement tiles for a wonder in a city",
-            lambda gs, a: gs.get_wonder_advisor(a["city_id"], a["wonder_name"]),
+            _wonder_advisor_text,
             {"city_id": _i(), "wonder_name": _s()}, ("city_id", "wonder_name")),
     ToolDef("get_builder_tasks", "All tiles needing improvements, prioritized",
-            lambda gs, a: gs.get_builder_tasks()),
+            _builder_tasks_text),
     ToolDef("get_diplomacy", "Rival civs: strength, relationship, agendas",
-            lambda gs, a: gs.get_diplomacy()),
+            _render(lambda gs, a: gs.get_diplomacy(), nar.narrate_diplomacy)),
     ToolDef("get_city_states", "City-states, envoy counts, suzerains",
-            lambda gs, a: gs.get_city_states()),
+            _render(lambda gs, a: gs.get_city_states(), nar.narrate_city_states)),
     ToolDef("get_great_people", "Great People candidates and recruitment progress",
-            lambda gs, a: gs.get_great_people()),
+            _render(lambda gs, a: gs.get_great_people(), nar.narrate_great_people)),
     ToolDef("get_empire_resources", "Stockpiles, owned and nearby resources",
-            lambda gs, a: gs.get_empire_resources()),
+            _empire_resources_text),
     ToolDef("get_victory_progress", "All victory types, your and rivals' progress",
-            lambda gs, a: gs.get_victory_progress()),
+            _render(lambda gs, a: gs.get_victory_progress(), nar.narrate_victory_progress)),
     ToolDef("get_pathing_estimate", "Turns for a unit to reach (x,y)",
-            lambda gs, a: gs.get_pathing_estimate(a["unit_index"], a["x"], a["y"]),
+            _render(lambda gs, a: gs.get_pathing_estimate(a["unit_index"], a["x"], a["y"]),
+                    nar.narrate_pathing_estimate),
             {**_UNIT, **_XY}, ("unit_index", "x", "y")),
     ToolDef("send_envoy", "Send an envoy to a city-state",
             lambda gs, a: gs.send_envoy(a["city_state_player_id"]),
             {"city_state_player_id": _i()}, ("city_state_player_id",)),
     ToolDef("get_policies", "Current government, slots, and available policies",
-            lambda gs, a: gs.get_policies()),
+            _render(lambda gs, a: gs.get_policies(), nar.narrate_policies)),
     ToolDef("set_policies", "Assign policy cards to slots",
             lambda gs, a: gs.set_policies({int(k): v for k, v in a["assignments"].items()}),
             {"assignments": {"type": "object",
@@ -296,14 +391,16 @@ _DEFS = [
     ToolDef("choose_pantheon", "Choose a pantheon belief (BELIEF_*)",
             lambda gs, a: gs.choose_pantheon(a["belief"]), {"belief": _s()}, ("belief",)),
     ToolDef("get_pantheon_status", "Pantheon availability and belief options",
-            lambda gs, a: gs.get_pantheon_status()),
+            _render(lambda gs, a: gs.get_pantheon_status(), nar.narrate_pantheon_status)),
     ToolDef("upgrade_unit", "Upgrade a unit to its next type (needs tech+gold)",
             lambda gs, a: gs.upgrade_unit(a["unit_id"]), {"unit_id": _i()}, ("unit_id",)),
     ToolDef("promote_unit", "Apply a promotion to a unit",
             lambda gs, a: gs.promote_unit(a["unit_id"], a["promotion"]),
             {"unit_id": _i(), "promotion": _s("PROMOTION_*")}, ("unit_id", "promotion")),
     ToolDef("get_unit_promotions", "Available promotions for a unit",
-            lambda gs, a: gs.get_unit_promotions(a["unit_id"]), {"unit_id": _i()}, ("unit_id",)),
+            _render(lambda gs, a: gs.get_unit_promotions(a["unit_id"]),
+                    nar.narrate_unit_promotions),
+            {"unit_id": _i()}, ("unit_id",)),
     ToolDef("automate_explore", "Set a scout to auto-explore",
             lambda gs, a: gs.automate_explore(a["unit_index"]), dict(_UNIT), ("unit_index",)),
     ToolDef("skip_remaining_units", "Skip all units that still have moves",
@@ -312,7 +409,9 @@ _DEFS = [
             lambda gs, a: gs.purchase_tile(a["city_id"], a["x"], a["y"]),
             {"city_id": _i(), **_XY}, ("city_id", "x", "y")),
     ToolDef("get_purchasable_tiles", "Tiles a city can buy and their cost",
-            lambda gs, a: gs.get_purchasable_tiles(a["city_id"]), {"city_id": _i()}, ("city_id",)),
+            _render(lambda gs, a: gs.get_purchasable_tiles(a["city_id"]),
+                    nar.narrate_purchasable_tiles),
+            {"city_id": _i()}, ("city_id",)),
     ToolDef("set_city_focus", "Set a city's yield focus (FOOD/PRODUCTION/GOLD/...)",
             lambda gs, a: gs.set_city_focus(a["city_id"], a["focus"]),
             {"city_id": _i(), "focus": _s()}, ("city_id", "focus")),
@@ -355,11 +454,13 @@ def openai_tools(names: Sequence[str]) -> list[dict]:
                            "required": list(d.required)}}})
     return out
 
-async def dispatch(gs, name: str, args: dict):
+async def dispatch(gs, name: str, args: dict, allowed: Sequence[str] | None = None):
+    if allowed is not None and name not in allowed:
+        raise KeyError(f"unknown tool {name!r}")   # out-of-tier == nonexistent to this civ
     return await TOOL_REGISTRY[name].call(gs, args)
 ```
 
-- [ ] **Step 4: Rewire `agent.py` to the registry (behavior-neutral)**
+- [ ] **Step 4: Rewire `agent.py` to the registry**
 
 In `src/civ_mcp/arena/agent.py`, delete the `_tool` helper, the `TOOLS` list literal, the
 `_KNOWN_TOOLS` frozenset, and the `_dispatch` function. Replace with:
@@ -370,15 +471,24 @@ from civ_mcp.arena.registry import resolve_tools, openai_tools, dispatch as _reg
 _MINIMAL_NAMES = resolve_tools("minimal")
 TOOLS = openai_tools(_MINIMAL_NAMES)          # module-level default, minimal tier
 
-async def _dispatch(gs, name, args):
+async def _dispatch(gs, name, args, allowed=_MINIMAL_NAMES):
     a = json.loads(args or "{}")
-    return await _registry_dispatch(gs, name, a)
+    return await _registry_dispatch(gs, name, a, allowed=allowed)
 ```
 
 In `LLMPolicy.__call__`, replace the `tc["name"] not in _KNOWN_TOOLS` check with
 `tc["name"] not in _MINIMAL_NAMES` for now (Task 4 makes this per-civ), and replace the
-`table[name]()` dispatch with the new `_dispatch`. Dispatch of an unknown name must still
-land in the existing `except Exception` → `result = f"ERROR: {e!r}"` path (KeyError does).
+`table[name]()` dispatch with the new `_dispatch`. Dispatch is gated on the same set: an
+out-of-set name — even a real registry entry like `attack_unit` — raises `KeyError` inside
+`dispatch` and lands in the existing `except Exception` → `result = f"ERROR: {e!r}"` path,
+exactly like a hallucinated name today. Without this gate the registry would silently grant
+every civ the full tier.
+
+Rendering note: config/step behavior is unchanged, but read results are now narrated
+(user-approved change). Pre-existing agent tests whose fakes return plain strings keep
+passing — the registry's `_render` wrapper passes string results through untouched. If any
+pre-existing test asserts on repr-style content of a tool result, update the assertion to
+the narrated text.
 
 - [ ] **Step 5: Run the full arena suite**
 
@@ -581,6 +691,10 @@ def test_explicit_tool_list(tmp_path):
     cfg = load_experiment(_write(tmp_path,
         GOOD.replace("tools: standard", "tools: [get_units, move_unit]")))
     assert cfg.players[0].options.tools == ("get_units", "move_unit")
+
+def test_rejects_missing_player_key(tmp_path):
+    with pytest.raises(ValueError, match="player"):
+        load_experiment(_write(tmp_path, "civs:\n  - {provider: local, model: m}\n"))
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -627,6 +741,8 @@ def _parse_briefing(civ_label: str, raw: dict) -> BriefingOptions:
 
 def _parse_civ(raw: dict) -> PlayerSpec:
     label = f"player {raw.get('player', '?')}"
+    if "player" not in raw:
+        raise _err(label, "missing required key 'player'")
     unknown = set(raw) - _CIV_KEYS
     if unknown:
         raise _err(label, f"unknown key(s) {sorted(unknown)}")
@@ -760,6 +876,25 @@ async def test_options_cap_and_steps(fake_cost):
     assert step["result_chars_fed_to_model"] == 2000 and step["truncated"]
 
 @pytest.mark.asyncio
+async def test_out_of_tier_tool_never_executes(fake_cost):
+    """A minimal-tier civ calling an in-registry but out-of-tier tool gets an
+    ERROR result; the GameState method must NOT run (A/B control integrity)."""
+    from civ_mcp.arena.backends import Reply
+    tool_reply = Reply(text=None, tool_calls=[
+        {"id": "1", "name": "get_map_area", "arguments": '{"x": 1, "y": 1}'}],
+        prompt_tokens=10, completion_tokens=5)
+    be = SpyBackend([tool_reply, _no_tool_reply()])
+    class FakeGS:
+        async def get_map_area(self, *a, **kw):
+            raise AssertionError("out-of-tier tool must never execute")
+    pol = LLMPolicy(be, fake_cost, options=CivOptions(tools="minimal"))
+    out = await pol(FakeGS(), 3, 5)
+    tool_msg = [m for m in be.calls[1]["messages"] if m["role"] == "tool"][0]
+    assert tool_msg["content"].startswith("ERROR")
+    assert any(c["tool_name"] == "get_map_area"
+               for c in out["transcript"]["invalid_tool_calls"])
+
+@pytest.mark.asyncio
 async def test_transcript_carries_options_fingerprint(fake_cost):
     be = SpyBackend([_no_tool_reply()])
     opts = CivOptions(tools="standard")
@@ -872,7 +1007,10 @@ class LLMPolicy:
 ```
 
 Inside `__call__`: use `self._system` for the system message, `self._tools` in the
-`backend.chat` call, `self._tool_names` for the unknown-tool classification,
+`backend.chat` call, `self._tool_names` for BOTH the unknown-tool classification AND the
+dispatch gate — the dispatch call becomes
+`result = await _dispatch(gs, tc["name"], tc["arguments"], self._tool_names)`, so an
+out-of-tier name takes the `KeyError` → `ERROR:` path and never reaches `GameState`. Use
 `self._char_cap` in place of both `MODEL_FEED_CHAR_CAP` uses, and add
 `"civ_options": self.options.fingerprint()` to BOTH returned transcript dicts (the
 normal-return one and the max-steps one). Keep `MODEL_FEED_CHAR_CAP = 1500` as the
@@ -961,10 +1099,13 @@ Add a pure resolver (used by `_run`, testable without asyncio):
 def resolve_config(args) -> ArenaConfig:
     """--config file XOR --player flags -> ArenaConfig (run_id/cost/transcript set later)."""
     from civ_mcp.arena.experiment import load_experiment
-    if args.config and args.player:
+    # getattr, not args.config: pre-existing tests drive _run with hand-built Args
+    # classes (test_arena_wiring.py ~lines 77/97/122) that lack a config attribute.
+    config_path = getattr(args, "config", "")
+    if config_path and args.player:
         raise SystemExit("--config and --player are mutually exclusive")
-    if args.config:
-        cfg = load_experiment(args.config)
+    if config_path:
+        cfg = load_experiment(config_path)
         cfg.dry_run = args.dry_run
         cfg.api_key_env = args.api_key_env
         return cfg
@@ -1020,15 +1161,17 @@ git commit -m "feat(arena): --config experiment file wiring; options threaded to
 
 **Files:**
 - Create: `src/civ_mcp/arena/budget.py`
+- Modify: `pyproject.toml` (add `"httpx>=0.28"` to `[project] dependencies` — budget.py
+  imports it directly; today it is only a transitive dep of the openai SDK)
 - Test: `tests/arena/test_budget.py`
 
 **Interfaces:**
-- Consumes: `CivOptions` (Task 2); `httpx` (dep of openai SDK).
+- Consumes: `CivOptions` (Task 2); `httpx` (now a first-class dep).
 - Produces:
   `async resolve_n_ctx(base_url: str, model: str, context_budget: int | str, http_get=None) -> tuple[int, str]`
   returning `(n_ctx, source)` with source ∈ `explicit|upstream_props|props|default`;
   `briefing_budget(n_ctx: int, options: CivOptions, playbook_chars: int, tool_schema_chars: int) -> int`
-  (tokens, ≥ 0); `DEFAULT_N_CTX = 16384`; `CHARS_PER_TOKEN = 4`.
+  (tokens, ≥ 0); `DEFAULT_N_CTX = 16384`; `CHARS_PER_TOKEN = 3`.
   `http_get` is an injectable `async (url) -> dict | None` for tests; production default
   uses `httpx.AsyncClient` with a 5s timeout, returning `None` on any error/non-200.
 
@@ -1070,9 +1213,9 @@ async def test_auto_falls_back_to_bare_props_then_default():
 
 def test_briefing_budget_formula():
     opts = CivOptions(max_steps=10, result_char_cap=6000)
-    # reserve = playbook + schemas + steps*(cap/4 + 512) + 1024
+    # reserve = playbook + schemas + steps*(cap/3 + 512) + 1024
     got = briefing_budget(131072, opts, playbook_chars=12000, tool_schema_chars=4000)
-    reserve = 12000 // 4 + 4000 // 4 + 10 * (6000 // 4 + 512) + 1024
+    reserve = 12000 // 3 + 4000 // 3 + 10 * (6000 // 3 + 512) + 1024
     assert got == 131072 - reserve
 
 def test_briefing_budget_floors_at_zero():
@@ -1085,7 +1228,10 @@ def test_briefing_budget_floors_at_zero():
 Run: `uv run pytest tests/arena/test_budget.py -q`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `budget.py`**
+- [ ] **Step 3: Add the httpx dependency, then implement `budget.py`**
+
+In `pyproject.toml` `[project] dependencies`, add `"httpx>=0.28",` after `"pyyaml>=6",`
+then run `uv sync --extra test`.
 
 ```python
 # src/civ_mcp/arena/budget.py
@@ -1093,7 +1239,11 @@ Expected: FAIL — module missing.
 from __future__ import annotations
 
 DEFAULT_N_CTX = 16384
-CHARS_PER_TOKEN = 4
+# 3, not 4: Civ text is identifier-dense (TERRAIN_GRASS, UNIT_WARRIOR, coordinates)
+# and measures ~3-3.3 chars/token on llama.cpp tokenizers. Overestimating chars/token
+# overestimates the briefing budget and blows the context window; 3 errs safe on both
+# the budget and the reserve side. Gate C verifies empirically (prompt_tokens < n_ctx).
+CHARS_PER_TOKEN = 3
 _COMPLETION_RESERVE_PER_STEP = 512
 _MARGIN_TOKENS = 1024
 
@@ -1144,7 +1294,7 @@ Run: `uv run pytest tests/arena/ -q` — Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/civ_mcp/arena/budget.py tests/arena/test_budget.py
+git add src/civ_mcp/arena/budget.py tests/arena/test_budget.py pyproject.toml uv.lock
 git commit -m "feat(arena): context-window probe + briefing budget allocator"
 ```
 
@@ -1162,42 +1312,70 @@ git commit -m "feat(arena): context-window probe + briefing budget allocator"
   `get_map_area(x, y, radius) -> list[TileInfo(x, y, ...)]`, `get_tech_civics()`,
   `get_empire_resources()`, `get_rival_snapshot()`, `get_threat_scan()`,
   `get_victory_progress()`; `CHARS_PER_TOKEN` (Task 6).
+- Consumes also: `civ_mcp.narrate` renderers — sections are narrated text, never reprs.
 - Produces: `Briefing(text: str, tokens: int, sections: list[str], radius: int,
-  errors: list[str])`; `async build_briefing(gs, opts: BriefingOptions, budget_tokens: int) -> Briefing`.
-  Behavior: sections build independently in the fixed priority order below, appended while
-  they fit the char budget (`budget_tokens * CHARS_PER_TOKEN`); the map section retries at
-  radius+1 (max 5) while total usage stays under 75% of the char budget; final text is
-  hard-truncated at the char budget.
+  errors: list[str])` — `tokens` is a `len(text) // CHARS_PER_TOKEN` estimate, not a
+  tokenizer count; `async build_briefing(gs, opts: BriefingOptions, budget_tokens: int) -> Briefing`.
+  Behavior: sections build independently in the fixed priority order
+  overview → units → cities → production_options → map → research → extended sections
+  (production options sit right after cities: they are small, high-value input to
+  `set_city_production`; the map is the bulky budget-filler), appended while they fit the
+  char budget (`budget_tokens * CHARS_PER_TOKEN`); the map section expands from
+  `map_radius` toward 5 via ONE predictive jump (tile count per center grows as
+  3r²+3r+1, so the char cost of a bigger radius is projected from the first fetch —
+  one extra fetch pass total, not one FireTuner round-trip per +1 step) while usage
+  stays under 75% of the char budget; final text is hard-truncated at the char budget.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/arena/test_briefing.py
 import pytest
-from dataclasses import dataclass
+from civ_mcp import lua as lq
 from civ_mcp.arena.briefing import build_briefing, Briefing
 from civ_mcp.arena.config import BriefingOptions
 
-@dataclass
-class T:  # minimal TileInfo stand-in (str() used for rendering)
-    x: int; y: int
-    def __str__(self): return f"({self.x},{self.y}) grass"
+# Real lq dataclasses, not __str__-carrying fakes: the builder narrates via
+# civ_mcp.narrate, so the tests must exercise the real rendering path.
 
-@dataclass
-class U:
-    x: int; y: int
-    def __str__(self): return f"Warrior at ({self.x},{self.y})"
+def _unit(x, y):
+    return lq.UnitInfo(unit_id=65537, unit_index=1, name="Warrior",
+                       unit_type="UNIT_WARRIOR", x=x, y=y, moves_remaining=2,
+                       max_moves=2, health=100, max_health=100)
+
+def _city(x, y):
+    return lq.CityInfo(city_id=65536, name="Nidaros", x=x, y=y, population=1,
+                       food=3.0, production=2.0, gold=1.0, science=1.0,
+                       culture=1.0, faith=0.0, housing=4.0, amenities=1,
+                       turns_to_grow=10)
+
+def _tile(x, y):
+    return lq.TileInfo(x, y, "TERRAIN_GRASS", None, None, False, False, False,
+                       None, -1)
+
+def _overview():
+    return lq.GameOverview(turn=5, player_id=3, civ_name="CIVILIZATION_NORWAY",
+                           leader_name="LEADER_HARDRADA", gold=10.0,
+                           gold_per_turn=1.5, science_yield=2.0,
+                           culture_yield=1.0, faith=0.0,
+                           current_research="TECH_MINING",
+                           current_civic="CIVIC_CODE_OF_LAWS",
+                           num_cities=1, num_units=2)
 
 class FakeGS:
-    def __init__(self): self.map_calls = []
-    async def get_game_overview(self): return "OVERVIEW turn=5"
-    async def get_units(self): return [U(10, 10)]
-    async def get_cities(self): return ([type("C", (), {"x": 12, "y": 12,
-        "city_id": 65536, "__str__": lambda s: "CITY Nidaros"})()], ["warn"])
-    async def list_city_production(self, city_id): return [f"opt-{city_id}"]
+    def __init__(self, city_xy=(12, 10)):
+        self.map_calls = []
+        self._city_xy = city_xy
+    async def get_game_overview(self): return _overview()
+    async def get_units(self): return [_unit(10, 10)]
+    async def get_cities(self): return ([_city(*self._city_xy)], ["warn"])
+    async def list_city_production(self, city_id):
+        # str results pass through un-narrated (same contract as the registry)
+        return f"PRODUCTION OPTIONS city {city_id}: UNIT_WARRIOR"
     async def get_map_area(self, x, y, radius):
         self.map_calls.append((x, y, radius))
-        return [T(x + dx, y, ) for dx in range(-radius, radius + 1)]
+        # one row of tiles per center at the center's own y
+        return [_tile(x + dx, y) for dx in range(-radius, radius + 1)]
     async def get_tech_civics(self): return "TECHS: pottery 3t"
 
 ALL = ("overview", "units", "cities", "map", "research", "production_options")
@@ -1207,12 +1385,14 @@ async def test_sections_in_priority_order_and_meta():
     gs = FakeGS()
     b = await build_briefing(gs, BriefingOptions(enabled=True, sections=ALL), 100_000)
     assert isinstance(b, Briefing)
-    assert b.sections == ["overview", "units", "cities", "map", "research",
-                          "production_options"]
-    for marker in ("OVERVIEW turn=5", "Warrior at (10,10)", "CITY Nidaros",
-                   "TECHS: pottery 3t", "opt-65536"):
+    assert b.sections == ["overview", "units", "cities", "production_options",
+                          "map", "research"]
+    for marker in ("== OVERVIEW ==", "at (10,10)", "Nidaros",
+                   "PRODUCTION OPTIONS city 65536", "(10,10):",
+                   "TECHS: pottery 3t"):
         assert marker in b.text
-    assert b.tokens == len(b.text) // 4
+    assert "UnitInfo(" not in b.text and "CityInfo(" not in b.text   # narrated
+    assert b.tokens == len(b.text) // 3
     assert b.errors == []
 
 @pytest.mark.asyncio
@@ -1221,21 +1401,25 @@ async def test_map_radius_expands_with_budget():
     b = await build_briefing(gs, BriefingOptions(enabled=True, map_radius=2,
                                                  sections=ALL), 100_000)
     assert b.radius == 5                       # plenty of budget -> max radius
-    assert gs.map_calls[0][2] == 2             # started at configured radius
+    assert gs.map_calls[0][2] == 2             # first pass at configured radius
+    # predictive jump: exactly two radii fetched (start + target), never one per +1
+    assert {c[2] for c in gs.map_calls} == {2, 5}
 
 @pytest.mark.asyncio
 async def test_map_tiles_deduplicated():
-    gs = FakeGS()
+    # city on the SAME row as the unit: unit (10,10) radius-2 row covers x 8..12,
+    # city (12,10) row covers x 10..14 -> (10,10) genuinely comes back from BOTH
+    # centers' fetches (already at radius 2), and must render exactly once.
+    gs = FakeGS(city_xy=(12, 10))
     b = await build_briefing(gs, BriefingOptions(enabled=True, map_radius=2,
                                                  sections=("map",)), 100_000)
-    # unit (10,10) and city (12,12) rows overlap at radius>=2; each tile once
-    assert b.text.count("(10,10) grass") == 1
+    assert b.text.count("(10,10):") == 1
 
 @pytest.mark.asyncio
 async def test_hard_truncation_at_budget():
     gs = FakeGS()
     b = await build_briefing(gs, BriefingOptions(enabled=True, sections=ALL), 50)
-    assert len(b.text) <= 50 * 4
+    assert len(b.text) <= 50 * 3
 
 @pytest.mark.asyncio
 async def test_failing_section_skipped_and_logged():
@@ -1245,7 +1429,7 @@ async def test_failing_section_skipped_and_logged():
     b = await build_briefing(gs, BriefingOptions(enabled=True, sections=ALL), 100_000)
     assert "research" not in b.sections
     assert any("research" in e and "no tuner" in e for e in b.errors)
-    assert "OVERVIEW" in b.text                # earlier sections unaffected
+    assert "== OVERVIEW ==" in b.text          # earlier sections unaffected
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1257,10 +1441,15 @@ Expected: FAIL — module missing.
 
 ```python
 # src/civ_mcp/arena/briefing.py
-"""Assemble a budgeted game-state briefing for a local civ's turn (the 'push' half)."""
+"""Assemble a budgeted game-state briefing for a local civ's turn (the 'push' half).
+
+Sections are rendered via civ_mcp.narrate — the same compact text CLI civs see —
+never dataclass reprs. Results that are already strings pass through untouched.
+"""
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+from civ_mcp import narrate as nar
 from civ_mcp.arena.budget import CHARS_PER_TOKEN
 
 _MAX_RADIUS = 5
@@ -1269,45 +1458,83 @@ _EXPAND_BELOW = 0.75   # expand map radius while total usage < 75% of char budge
 @dataclass
 class Briefing:
     text: str = ""
-    tokens: int = 0
+    tokens: int = 0        # len(text) // CHARS_PER_TOKEN estimate, NOT a tokenizer count
     sections: list[str] = field(default_factory=list)
     radius: int = 0
     errors: list[str] = field(default_factory=list)
 
-def _fmt(items) -> str:
-    if isinstance(items, (list, tuple)):
-        return "\n".join(str(i) for i in items)
-    return str(items)
+def _narrate(result, render):
+    """Render via narrate unless already a string (error strings, test fakes)."""
+    return result if isinstance(result, str) else render(result)
 
-async def _sec_overview(gs, ctx): return _fmt(await gs.get_game_overview())
+async def _sec_overview(gs, ctx):
+    return _narrate(await gs.get_game_overview(), nar.narrate_overview)
+
 async def _sec_units(gs, ctx):
-    ctx["units"] = await gs.get_units()
-    return _fmt(ctx["units"])
+    units = await gs.get_units()
+    ctx["units"] = [] if isinstance(units, str) else units
+    return _narrate(units, nar.narrate_units)
+
 async def _sec_cities(gs, ctx):
-    cities, _warn = await gs.get_cities()
+    r = await gs.get_cities()
+    if isinstance(r, str):
+        ctx["cities"] = []
+        return r
+    cities, warnings = r
     ctx["cities"] = cities
-    return _fmt(cities)
-async def _sec_research(gs, ctx): return _fmt(await gs.get_tech_civics())
+    text = nar.narrate_cities(cities)
+    return text + ("\n" + "\n".join(warnings) if warnings else "")
+
+async def _sec_research(gs, ctx):
+    return _narrate(await gs.get_tech_civics(), nar.narrate_tech_civics)
+
 async def _sec_production_options(gs, ctx):
+    cities = ctx.get("cities")
+    if cities is None:                  # section configured without 'cities'
+        cities, _ = await gs.get_cities()
     parts = []
-    for c in ctx.get("cities") or []:
+    for c in cities:
         opts = await gs.list_city_production(c.city_id)
-        parts.append(f"[city {c.city_id}]\n" + _fmt(opts))
+        parts.append(f"[city {c.city_id} {c.name}]\n"
+                     + _narrate(opts, nar.narrate_city_production))
     return "\n".join(parts)
-async def _sec_empire_resources(gs, ctx): return _fmt(await gs.get_empire_resources())
-async def _sec_rivals(gs, ctx): return _fmt(await gs.get_rival_snapshot())
-async def _sec_threats(gs, ctx): return _fmt(await gs.get_threat_scan())
-async def _sec_victory(gs, ctx): return _fmt(await gs.get_victory_progress())
+
+async def _sec_empire_resources(gs, ctx):
+    r = await gs.get_empire_resources()
+    return r if isinstance(r, str) else nar.narrate_empire_resources(*r)
+
+async def _sec_rivals(gs, ctx):
+    rivals = await gs.get_rival_snapshot()
+    if isinstance(rivals, str):
+        return rivals
+    return "\n".join(
+        f"{r.name}: score {r.score}, {r.cities} cities, pop {r.pop}, "
+        f"mil {r.mil}, sci {r.sci:.0f}, gold {r.gold:.0f}" for r in rivals)
+
+async def _sec_threats(gs, ctx):
+    threats = await gs.get_threat_scan()
+    if isinstance(threats, str):
+        return threats
+    return "\n".join(
+        f"{t.owner_name} {t.unit_type} at ({t.x},{t.y}) CS {t.combat_strength} "
+        f"HP {t.hp}/{t.max_hp}, {t.distance} tiles away" for t in threats)
+
+async def _sec_victory(gs, ctx):
+    return _narrate(await gs.get_victory_progress(), nar.narrate_victory_progress)
 
 async def _map_at(gs, centers, radius) -> str:
     tiles = {}
     for (x, y) in centers:
         for t in await gs.get_map_area(x, y, radius):
-            tiles[(t.x, t.y)] = t
-    ordered = [tiles[k] for k in sorted(tiles)]
-    return "\n".join(str(t) for t in ordered)
+            tiles[(t.x, t.y)] = t                      # dedup overlapping centers
+    return nar.narrate_map([tiles[k] for k in sorted(tiles)])
 
-_ORDER = ("overview", "units", "cities", "map", "research", "production_options",
+def _tiles_at(radius: int) -> int:
+    return 3 * radius * radius + 3 * radius + 1        # hex tile count per center
+
+# production_options sits directly after cities: small, high-value input to
+# set_city_production. The map is the bulky budget-filler and comes after.
+_ORDER = ("overview", "units", "cities", "production_options", "map", "research",
           "empire_resources", "rivals", "threats", "victory")
 _BUILDERS = {"overview": _sec_overview, "units": _sec_units, "cities": _sec_cities,
              "research": _sec_research, "production_options": _sec_production_options,
@@ -1317,6 +1544,7 @@ _BUILDERS = {"overview": _sec_overview, "units": _sec_units, "cities": _sec_citi
 async def build_briefing(gs, opts, budget_tokens: int) -> Briefing:
     char_budget = budget_tokens * CHARS_PER_TOKEN
     b = Briefing()
+    ctx: dict = {}          # units/cities shared with map + production sections
     parts: list[str] = []
     used = 0
     wanted = [s for s in _ORDER if s in opts.sections]
@@ -1325,21 +1553,34 @@ async def build_briefing(gs, opts, budget_tokens: int) -> Briefing:
             if name == "map":
                 if opts.map_radius <= 0:
                     continue
-                centers = [(u.x, u.y) for u in (b_ctx.get("units") or [])]
-                centers += [(c.x, c.y) for c in (b_ctx.get("cities") or [])]
+                units = ctx.get("units")
+                if units is None:                     # map configured without 'units'
+                    units = await gs.get_units()
+                cities = ctx.get("cities")
+                if cities is None:                    # map configured without 'cities'
+                    cities, _ = await gs.get_cities()
+                centers = [(u.x, u.y) for u in units] + [(c.x, c.y) for c in cities]
                 if not centers:
                     continue
                 radius = opts.map_radius
                 text = await _map_at(gs, centers, radius)
-                while (radius < _MAX_RADIUS
-                       and used + len(text) < char_budget * _EXPAND_BELOW):
-                    bigger = await _map_at(gs, centers, radius + 1)
-                    if used + len(bigger) > char_budget:
-                        break
-                    radius, text = radius + 1, bigger
+                # Predictive expansion: each fetch pass costs one FireTuner Lua
+                # round-trip PER CENTER, so never step +1 at a time. Tile count per
+                # center grows as 3r^2+3r+1; project the char cost from the first
+                # fetch (an overestimate — dedup only shrinks it) and jump straight
+                # to the largest radius under the expansion threshold.
+                target = radius
+                while (target < _MAX_RADIUS
+                       and used + len(text) * _tiles_at(target + 1) / _tiles_at(radius)
+                           < char_budget * _EXPAND_BELOW):
+                    target += 1
+                if target > radius:
+                    bigger = await _map_at(gs, centers, target)
+                    if used + len(bigger) <= char_budget:
+                        radius, text = target, bigger
                 b.radius = radius
             else:
-                text = await _BUILDERS[name](gs, b_ctx)
+                text = await _BUILDERS[name](gs, ctx)
         except Exception as e:
             b.errors.append(f"{name}: {e!r}")
             continue
@@ -1356,20 +1597,6 @@ async def build_briefing(gs, opts, budget_tokens: int) -> Briefing:
     b.text = "\n".join(parts)[:char_budget]
     b.tokens = len(b.text) // CHARS_PER_TOKEN
     return b
-```
-
-NOTE for the implementer: `b_ctx` above is the shared dict the section builders read/write
-(`units`, `cities`). Initialize `b_ctx: dict = {}` right after `b = Briefing()` — the test
-`test_map_tiles_deduplicated` (map-only sections) requires the map section to fall back to
-fetching units/cities itself when the dict is empty:
-
-```python
-                centers = [(u.x, u.y) for u in (b_ctx.get("units")
-                            or await gs.get_units())]
-                cities = b_ctx.get("cities")
-                if cities is None:
-                    cities, _ = await gs.get_cities()
-                centers += [(c.x, c.y) for c in cities]
 ```
 
 - [ ] **Step 4: Run the suite**
@@ -1507,6 +1734,9 @@ Add to BOTH transcript dicts (alongside `civ_options` from Task 4):
                     "n_ctx_source": self._n_ctx_source,
 ```
 
+(`briefing_tokens` is the builder's `len(text) // 3` estimate, not a tokenizer count —
+Gate C checks the real first-step `prompt_tokens` against `n_ctx`.)
+
 - [ ] **Step 4: Run the suite**
 
 Run: `uv run pytest tests/arena/ -q` — Expected: PASS.
@@ -1540,7 +1770,7 @@ git commit -m "feat(arena): inject budgeted briefing into local-civ turns + tele
 - [ ] **Step 1: Write the failing test** (append to `tests/arena/test_analyze.py`)
 
 ```python
-from civ_mcp.arena.analyze import config_summary
+from civ_mcp.arena.analyze import analyze, config_summary, render_markdown
 
 def _rec(pid, steps, invalid, brief, score):
     return {"player_id": pid, "model": "gemma4-26b", "provider": "local",
@@ -1562,6 +1792,17 @@ def test_config_summary_groups_by_player():
     assert p3["avg_score_delta"] == 2.5
     assert p3["civ_options"]["tools"] == "standard"
     assert "4" in s
+
+def test_analyze_report_carries_config_summary():
+    # main() writes analyze()'s dict verbatim to report.json, so this covers the file too
+    report = analyze([_rec(3, 4, 1, 30000, 2)], [])
+    assert report["config_summary"]["3"]["turns"] == 1
+
+def test_render_markdown_has_experiment_config_table():
+    report = analyze([_rec(3, 4, 1, 30000, 2)], [])
+    md = render_markdown(report)
+    assert "## Experiment config" in md
+    assert "gemma4-26b" in md
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1599,8 +1840,10 @@ def config_summary(records: list[dict]) -> dict:
     return out
 ```
 
-Wire into the report: find the function that assembles the top-level `report.json` dict and
-add `"config_summary": config_summary(transcript_records)`; in the Markdown assembly, add a
+Wire into the report: `analyze(transcript_records, cost_records)` returns the top-level
+report dict that `main()` writes verbatim to `report.json` — add
+`"config_summary": config_summary(transcript_records)` to that returned dict; in
+`render_markdown(report)`, add a
 `## Experiment config` table with one row per player
 (`| player | model | tools | max_steps | n_ctx | avg briefing tok | avg steps | invalid rate | avg Δscore |`).
 Follow the file's existing md-table helpers/style.
@@ -1714,7 +1957,11 @@ coordinator wiring.
 NOT allowed — check it out directly: `git fetch && git checkout arena-local-civ-context`),
 start via `start-hybrid-watch.sh --config experiments/smoke-rich-gemma.yaml`, user ends
 turn; verify transcript record has `briefing_tokens > 5000`, `n_ctx_source` ∈
-{upstream_props, explicit}, no `briefing_errors`, control returns to human.
+{upstream_props, explicit}, no `briefing_errors`, control returns to human. **Budget
+check (empirical):** read the record's first step's `prompt_tokens` (the backend-reported
+count) and assert it is comfortably under the resolved `n_ctx` — this turns the //3
+chars-per-token heuristic from a hope into a measured fact. If it is within ~5% of
+`n_ctx`, stop and revisit `CHARS_PER_TOKEN` before Gate D.
 
 **Gate D — A/B baseline:** `--config experiments/ab-minimal-vs-standard.yaml`, ~6 rounds;
 then `civ-arena-analyze` on the run dir and read the `config_summary` table: does the
@@ -1725,8 +1972,9 @@ experiment result.)
 
 ## Self-Review
 
-- **Spec coverage:** config file (T3, T5), registry/tiers incl. never-exposed list (T1),
-  CivOptions knobs + `--player` behavior parity (T2, T4, T5), playbook (T4), budget probe +
+- **Spec coverage:** config file (T3, T5), registry/tiers incl. never-exposed list + narrated
+  rendering + out-of-tier dispatch gating (T1, T4),
+  CivOptions knobs + `--player` config parity (T2, T4, T5), playbook (T4), budget probe +
   formula + fallbacks (T6), briefing sections/priority/expansion/truncation/error-skip (T7),
   integration + telemetry fields (T8), analyze summary (T9), experiment files + watcher +
   live gates incl. Slice 0 ctx raises (T10, Gates A–D). ✓
@@ -1741,3 +1989,17 @@ experiment result.)
 - **Known judgment calls for the implementer:** exact `test_agent.py` fixture names (read the
   file first); `analyze.py` report-assembly location; `PlayerSpec` immutability workaround in
   one T5 test uses `object.__setattr__` (acceptable in tests only).
+
+## Review round (2026-07-04, separate-session review — applied)
+
+Incorporated: out-of-tier dispatch gating + tests (was classification-only);
+`CHARS_PER_TOKEN` 4→3 + Gate C empirical prompt_tokens check (4 overestimated the budget in
+the window-blowing direction); narrate.py rendering everywhere (user-approved; `--player`
+parity constraint reworded to config parity); `set_city_production` target_x/y +
+`purchase_item` yield_type in ToolDefs; briefing test fakes now real `lq` dataclasses with
+genuinely overlapping map rows (old dedup test was a false-green); `b_ctx` NOTE folded into
+the main code block; `production_options` fetches cities itself and moved directly after
+`cities`; predictive map-radius jump (one extra fetch pass instead of one per +1);
+Task 9 tests cover `analyze()` + `render_markdown()`; httpx>=0.28 first-class dep;
+Task 0 `git status --short` gate; `resolve_config` uses `getattr(args, "config", "")`;
+`_parse_civ` validates `player` presence before use.
