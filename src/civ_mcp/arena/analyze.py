@@ -75,6 +75,59 @@ def _is_local_driver(rec: dict) -> bool:
     return rec.get("driver", "in_process") == "in_process"
 
 
+def _config_summary_group_key(rec: dict) -> str:
+    pid = rec.get("player_id")
+    if pid is not None:
+        return str(pid)
+    return str(rec.get("model") or rec.get("provider") or "unknown")
+
+
+def _config_summary_sort_key(key: object) -> tuple[int, int | str]:
+    key_str = str(key)
+    if key_str.isdigit():
+        return (0, int(key_str))
+    return (1, key_str)
+
+
+def config_summary(records: list[dict]) -> dict:
+    """Return per-player experiment config fingerprints and outcome averages."""
+    by_pid: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        by_pid[_config_summary_group_key(rec)].append(rec)
+
+    summary: dict[str, dict] = {}
+    for pid, recs in sorted(by_pid.items(), key=lambda item: _config_summary_sort_key(item[0])):
+        total_steps = 0
+        total_invalid = 0
+        total_briefing_tokens = 0
+        total_score_delta = 0
+
+        for rec in recs:
+            step_count = rec.get("step_count")
+            if step_count is None:
+                step_count = len(_steps_of(rec))
+            total_steps += step_count or 0
+            total_invalid += len(rec.get("invalid_tool_calls") or [])
+            total_briefing_tokens += rec.get("briefing_tokens") or 0
+            total_score_delta += (rec.get("state_delta") or {}).get("score", 0) or 0
+
+        turns = len(recs)
+        last = recs[-1]
+        summary[pid] = {
+            "model": last.get("model", ""),
+            "provider": last.get("provider", ""),
+            "civ_options": last.get("civ_options") or {},
+            "n_ctx": last.get("n_ctx"),
+            "turns": turns,
+            "avg_steps": total_steps / turns,
+            "invalid_call_rate": (total_invalid / total_steps) if total_steps else 0.0,
+            "avg_briefing_tokens": total_briefing_tokens / turns,
+            "avg_score_delta": total_score_delta / turns,
+        }
+
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Rubric helpers (turns 1-20, purely heuristic)
 # ---------------------------------------------------------------------------
@@ -251,6 +304,19 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
               "rubric": {...}
             }
           }
+          "config_summary": {
+            <player_id>: {
+              "model": <str>,
+              "provider": <str | None>,
+              "civ_options": <dict>,
+              "n_ctx": <int | None>,
+              "turns": <int>,
+              "avg_steps": <float>,
+              "invalid_call_rate": <float>,
+              "avg_briefing_tokens": <float>,
+              "avg_score_delta": <float>,
+            }
+          }
         }
 
     Grouping key is ``player_id`` when present; falls back to
@@ -342,7 +408,10 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
             "rubric": _rubric_for_model(records),
         }
 
-    return {"by_player": result}
+    return {
+        "by_player": result,
+        "config_summary": config_summary(transcript_records),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +427,34 @@ def render_markdown(report: dict) -> str:
     if not by_player:
         lines.append("_No players found in this run._\n")
         return "\n".join(lines)
+
+    config: dict = report.get("config_summary", {})
+    if config:
+        lines.append("## Experiment config\n")
+        lines.append(
+            "| player | model | tools | max_steps | n_ctx | avg briefing tok | avg steps | invalid rate | avg Δscore |"
+        )
+        lines.append(
+            "|--------|-------|-------|-----------|-------|------------------|-----------|--------------|------------|"
+        )
+        for pid, data in sorted(config.items(), key=lambda item: _config_summary_sort_key(item[0])):
+            civ_options = data.get("civ_options") or {}
+            tools = civ_options.get("tools", "")
+            if isinstance(tools, list):
+                tools = ", ".join(str(tool) for tool in tools)
+            max_steps = civ_options.get("max_steps", "")
+            model = data.get("model") or data.get("provider") or ""
+            n_ctx = data.get("n_ctx")
+            avg_briefing = data.get("avg_briefing_tokens", 0.0)
+            avg_steps = data.get("avg_steps", 0.0)
+            invalid_rate = data.get("invalid_call_rate", 0.0)
+            avg_score_delta = data.get("avg_score_delta", 0.0)
+            lines.append(
+                f"| {pid} | {model} | {tools} | {max_steps} | {'' if n_ctx is None else n_ctx} | "
+                f"{avg_briefing:.1f} | {avg_steps:.1f} | {invalid_rate:.1%} | "
+                f"{avg_score_delta:.1f} |"
+            )
+        lines.append("")
 
     for _seat, data in by_player.items():
         pid = data.get("player_id")

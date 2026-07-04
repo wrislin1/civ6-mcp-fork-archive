@@ -36,6 +36,24 @@ def _make_step(
     }
 
 
+def _config_rec(pid: int, steps: int, invalid: int, brief: int, score: int) -> dict:
+    return {
+        "player_id": pid,
+        "model": "gemma4-26b",
+        "provider": "local",
+        "driver": "in_process",
+        "step_count": steps,
+        "invalid_tool_calls": [{}] * invalid,
+        "civ_options": {"tools": "standard", "max_steps": 10},
+        "briefing_tokens": brief,
+        "n_ctx": 131072,
+        "state_delta": {"score": score},
+        "steps": [],
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+    }
+
+
 @pytest.fixture()
 def run_dir(tmp_path: Path) -> Path:
     """Create a synthetic arena run with 2 models."""
@@ -310,6 +328,101 @@ def test_invalid_call_rate_model_b(run_dir: Path) -> None:
 
     rates_b = report["by_player"][2]["rates"]
     assert rates_b["invalid_call_rate"] == pytest.approx(0.0)
+
+
+def test_config_summary_groups_by_player() -> None:
+    from civ_mcp.arena.analyze import config_summary
+
+    recs = [
+        _config_rec(3, 4, 1, 30000, 2),
+        _config_rec(3, 6, 0, 31000, 3),
+        _config_rec(4, 2, 0, 0, 1),
+    ]
+
+    summary = config_summary(recs)
+
+    p3 = summary["3"]
+    assert p3["turns"] == 2
+    assert p3["avg_steps"] == 5.0
+    assert p3["invalid_call_rate"] == pytest.approx(1 / 10)
+    assert p3["avg_briefing_tokens"] == 30500
+    assert p3["avg_score_delta"] == 2.5
+    assert p3["civ_options"]["tools"] == "standard"
+    assert "4" in summary
+
+
+def test_config_summary_falls_back_when_player_id_missing() -> None:
+    from civ_mcp.arena.analyze import config_summary
+
+    legacy_model = _config_rec(0, 4, 1, 12000, 2)
+    legacy_model.pop("player_id")
+    legacy_model["model"] = "legacy-model"
+    legacy_model["provider"] = "local"
+
+    legacy_provider = _config_rec(0, 2, 0, 8000, 1)
+    legacy_provider.pop("player_id")
+    legacy_provider["model"] = ""
+    legacy_provider["provider"] = "cli-claude"
+
+    unknown = _config_rec(0, 1, 0, 0, 0)
+    unknown.pop("player_id")
+    unknown["model"] = ""
+    unknown["provider"] = ""
+
+    summary = config_summary([legacy_model, legacy_provider, unknown])
+
+    assert summary["legacy-model"]["turns"] == 1
+    assert summary["cli-claude"]["turns"] == 1
+    assert summary["unknown"]["turns"] == 1
+
+
+def test_analyze_report_carries_config_summary() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([_config_rec(3, 4, 1, 30000, 2)], [])
+
+    assert report["config_summary"]["3"]["turns"] == 1
+
+
+def test_render_markdown_has_experiment_config_table() -> None:
+    from civ_mcp.arena.analyze import analyze, render_markdown
+
+    report = analyze([_config_rec(3, 4, 1, 30000, 2)], [])
+    md = render_markdown(report)
+
+    assert "## Experiment config" in md
+    assert "| player | model | tools | max_steps | n_ctx | avg briefing tok | avg steps | invalid rate | avg Δscore |" in md
+    assert "gemma4-26b" in md
+
+
+def test_render_markdown_sorts_numeric_players_numerically() -> None:
+    from civ_mcp.arena.analyze import analyze, render_markdown
+
+    report = analyze([
+        _config_rec(10, 1, 0, 100, 1),
+        _config_rec(2, 1, 0, 100, 1),
+    ], [])
+    md = render_markdown(report)
+
+    assert md.index("| 2 |") < md.index("| 10 |")
+
+
+def test_config_summary_and_markdown_tolerate_partial_config_fields() -> None:
+    from civ_mcp.arena.analyze import analyze, render_markdown
+
+    report = analyze([{
+        "player_id": 5,
+        "turn": 1,
+    }], [])
+    summary = report["config_summary"]["5"]
+    md = render_markdown(report)
+
+    assert summary["model"] == ""
+    assert summary["provider"] == ""
+    assert summary["civ_options"] == {}
+    assert summary["n_ctx"] is None
+    assert summary["invalid_call_rate"] == 0.0
+    assert "| 5 |" in md
 
 
 def test_truncation_incident_rate_model_a(run_dir: Path) -> None:
