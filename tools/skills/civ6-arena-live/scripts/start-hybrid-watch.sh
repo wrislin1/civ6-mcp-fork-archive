@@ -27,7 +27,8 @@ Options:
                               Preset: ${default_players[*]}
   --run-id <id>             Run identifier
                               Default: hybrid-4civ-<ISO8601Z>
-  --max-puppet-turns <n>    Max puppet turns per player (default: $default_max_puppet_turns)
+  --max-puppet-turns <n>    Max puppet turns TOTAL across all seats, not per player
+                              (default: $default_max_puppet_turns; one 4-civ round = 4)
   --idle-poll-limit <n>     Idle poll limit in seconds   (default: $default_idle_poll_limit)
   --gateway-url <url>       LiteLLM gateway URL          (default: $default_gateway_url)
   -h, --help                Print this usage and exit
