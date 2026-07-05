@@ -47,12 +47,16 @@ class _GS:
         self._units = units
         self._promo = promo_by_id
         self._promote_impl = promote_impl
+        self.promotion_checks = []
         self.promoted = []
 
     async def get_units(self):
+        if isinstance(self._units, Exception):
+            raise self._units
         return self._units
 
     async def get_unit_promotions(self, unit_id):
+        self.promotion_checks.append(unit_id)
         v = self._promo[unit_id]
         if isinstance(v, Exception):
             raise v
@@ -72,6 +76,7 @@ async def test_sweep_promotes_units_with_pending_promotions():
         promo_by_id={1: _status("PROMOTION_BATTLECRY"), 2: _status()},  # unit 2 has none
     )
     swept = await autoresolve.sweep_promotions(gs)
+    assert gs.promotion_checks == [1, 2]  # every unit is queried; needs_promotion is not a filter
     assert gs.promoted == [(1, "PROMOTION_BATTLECRY")]  # unit 2 skipped despite no filter on needs_promotion
     assert swept == [
         {
@@ -88,6 +93,24 @@ async def test_sweep_swallows_get_promotions_error():
     gs = _GS(units=[_Unit(1)], promo_by_id={1: RuntimeError("no experience")})
     swept = await autoresolve.sweep_promotions(gs)
     assert swept == []
+    assert gs.promoted == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_returns_empty_when_get_units_raises():
+    gs = _GS(units=RuntimeError("no units"), promo_by_id={})
+    swept = await autoresolve.sweep_promotions(gs)
+    assert swept == []
+    assert gs.promotion_checks == []
+    assert gs.promoted == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_returns_empty_when_get_units_returns_string():
+    gs = _GS(units="Error: game unavailable", promo_by_id={})
+    swept = await autoresolve.sweep_promotions(gs)
+    assert swept == []
+    assert gs.promotion_checks == []
     assert gs.promoted == []
 
 
@@ -110,3 +133,32 @@ async def test_sweep_swallows_promote_exception():
     gs = _GS(units=[_Unit(1)], promo_by_id={1: _status("PROMOTION_BATTLECRY")}, promote_impl=_raise)
     swept = await autoresolve.sweep_promotions(gs)  # must not raise
     assert swept[0]["ok"] is False and "error" in swept[0]
+
+
+class _MalformedPromotion:
+    @property
+    def promotion_type(self):
+        raise RuntimeError("broken option")
+
+
+class _MalformedStatus:
+    promotions = [_MalformedPromotion()]
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_malformed_promotion_data_without_raising():
+    gs = _GS(
+        units=[_Unit(1, "UNIT_SCOUT"), _Unit(2, "UNIT_WARRIOR")],
+        promo_by_id={1: _MalformedStatus(), 2: _status("PROMOTION_BATTLECRY")},
+    )
+    swept = await autoresolve.sweep_promotions(gs)
+    assert gs.promotion_checks == [1, 2]
+    assert gs.promoted == [(2, "PROMOTION_BATTLECRY")]
+    assert swept == [
+        {
+            "unit_id": 2,
+            "unit_type": "UNIT_WARRIOR",
+            "promotion_type": "PROMOTION_BATTLECRY",
+            "ok": True,
+        }
+    ]

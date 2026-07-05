@@ -63,22 +63,25 @@ async def sweep_promotions(gs: Any) -> list[dict]:
 
     for u in units:
         try:
-            status = await gs.get_unit_promotions(u.unit_id)
+            unit_id = u.unit_id
+            unit_type = getattr(u, "unit_type", "")
+            status = await gs.get_unit_promotions(unit_id)
+            if not getattr(status, "promotions", None):
+                continue
+            pick = pick_promotion(status)
+            if pick is None:
+                continue
+            promotion_type = pick.promotion_type
+            entry: dict = {
+                "unit_id": unit_id,
+                "unit_type": unit_type,
+                "promotion_type": promotion_type,
+                "ok": False,
+            }
         except Exception:
-            continue  # e.g. civilians have no experience object
-        if not getattr(status, "promotions", None):
-            continue
-        pick = pick_promotion(status)
-        if pick is None:
-            continue
-        entry: dict = {
-            "unit_id": u.unit_id,
-            "unit_type": getattr(u, "unit_type", ""),
-            "promotion_type": pick.promotion_type,
-            "ok": False,
-        }
+            continue  # e.g. civilians have no experience object or malformed promotion data
         try:
-            result = await gs.promote_unit(u.unit_id, pick.promotion_type)
+            result = await gs.promote_unit(unit_id, promotion_type)
             entry["ok"] = not (isinstance(result, str) and result.startswith("Error"))
         except Exception as e:  # never let a single unit break the sweep
             entry["error"] = repr(e)
