@@ -122,7 +122,7 @@ def _parse_briefing(civ_label: str, raw: object) -> BriefingOptions:
     if not isinstance(raw, dict):
         raise _err(civ_label, f"briefing must be a mapping, got {raw!r}")
     _validate_mapping_keys(civ_label, raw, {"enabled", "map_radius", "sections"}, "briefing")
-    enabled = raw.get("enabled", _BRIEFING_DEFAULTS.enabled)
+    enabled = raw.get("enabled", bool(raw))
     if "enabled" in raw and not isinstance(enabled, bool):
         raise _err(civ_label, f"briefing.enabled must be a boolean, got {enabled!r}")
     sections_raw = raw.get("sections", _BRIEFING_DEFAULTS.sections)

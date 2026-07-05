@@ -47,6 +47,34 @@ def test_load_good(tmp_path):
     assert cli.provider == "cli-claude" and cli.options == CivOptions()
 
 
+def test_non_empty_briefing_block_defaults_enabled_true(tmp_path):
+    text = GOOD.replace(
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
+        "briefing: {map_radius: 4, sections: [overview, map, rivals]}",
+    )
+
+    cfg = load_experiment(_write(tmp_path, text))
+    briefing = cfg.players[0].options.briefing
+
+    assert briefing.enabled is True
+    assert briefing.map_radius == 4
+    assert briefing.sections == ("overview", "map", "rivals")
+
+
+def test_briefing_block_explicit_enabled_false_stays_disabled(tmp_path):
+    text = GOOD.replace(
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
+        "briefing: {enabled: false, map_radius: 4, sections: [overview, map]}",
+    )
+
+    cfg = load_experiment(_write(tmp_path, text))
+    briefing = cfg.players[0].options.briefing
+
+    assert briefing.enabled is False
+    assert briefing.map_radius == 4
+    assert briefing.sections == ("overview", "map")
+
+
 def test_load_experiment_uses_supplied_defaults_for_omitted_run_controls(tmp_path):
     from civ_mcp.arena.config import ArenaConfig
 
