@@ -42,13 +42,11 @@ async def _overview_snapshot(gs):
         return None
 
 
-# When the human seat is idle, a first-meet greeting can get orphaned by the puppet
-# local-player switch and block the whole game — sometimes as an open session,
-# sometimes as a fully orphaned view with no locatable session. Check for a blocking
-# diplomacy modal every this-many idle polls (~seconds) and clear it if present.
-_DIPLO_CLEAR_EVERY = 3
-
-
+# Reactive-only recovery for an orphaned first-meet greeting (the puppet local-player
+# switch can leave one on screen — a session, or a view with no locatable session).
+# NOT run automatically from the poll loop: it cannot tell an orphaned greeting from a
+# leader scene the human is actively using, and force-hiding the latter blacks out the
+# map. Invoked manually when a stuck greeting is actually reported.
 async def _clear_blocking_diplomacy(conn) -> str:
     """Best-effort: if a diplomacy modal is blocking the idle human, clear it
     (close any real session, hide orphaned views, restore the in-game UI). Only
@@ -86,7 +84,6 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
         deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
-        idle_since_clear = 0
         while remaining > 0 and deadline_polls > 0:
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
@@ -139,15 +136,12 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 await hook.restore_local(conn, 0)
                 played += 1
                 remaining -= 1
-                idle_since_clear = 0
             else:
-                # Human seat is idle. Periodically clear any blocking first-meet
-                # greeting (session or orphaned view) so it cannot stall the game.
-                if st.local not in puppet_ids and st.local >= 0:
-                    idle_since_clear += 1
-                    if idle_since_clear >= _DIPLO_CLEAR_EVERY:
-                        idle_since_clear = 0
-                        await _clear_blocking_diplomacy(conn)
+                # Human seat is idle. Do NOT auto-clear diplomacy here: it cannot
+                # distinguish an orphaned first-meet greeting from a leader scene the
+                # human is actively using (declaring war, denouncing, trading), and
+                # force-hiding the latter mid-transition can black out the map. Stuck
+                # greetings are handled reactively via _clear_blocking_diplomacy.
                 await asyncio.sleep(1.0)
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}
