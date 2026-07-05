@@ -42,34 +42,25 @@ async def _overview_snapshot(gs):
         return None
 
 
-# When the human seat is idle, a first-meet greeting can get orphaned by the
-# puppet local-player switch and block the whole game. Sweep for open sessions on
-# the human's side roughly every this-many idle polls (~seconds) and close them.
-_HUMAN_SESSION_CLEAR_EVERY = 5
+# When the human seat is idle, a first-meet greeting can get orphaned by the puppet
+# local-player switch and block the whole game — sometimes as an open session,
+# sometimes as a fully orphaned view with no locatable session. Check for a blocking
+# diplomacy modal every this-many idle polls (~seconds) and clear it if present.
+_DIPLO_CLEAR_EVERY = 3
 
 
-async def _clear_stuck_human_sessions(conn) -> int:
-    """Best-effort: force-close any open diplomacy session for the current local
-    (human) player, so an orphaned first-meet greeting cannot block turn advance.
-    Runs only in the human-idle branch; never raises into the poll loop."""
+async def _clear_blocking_diplomacy(conn) -> str:
+    """Best-effort: if a diplomacy modal is blocking the idle human, clear it
+    (close any real session, hide orphaned views, restore the in-game UI). Only
+    acts when a view is actually visible; never raises into the poll loop."""
     try:
-        lines = await conn.execute_write(lq.build_diplomacy_session_query())
+        lines = await conn.execute_write(lq.build_clear_blocking_diplomacy())
     except Exception:
-        return 0
-    pids = []
+        return "err"
     for line in lines:
-        if line.startswith("SESSION|"):
-            parts = line.split("|")
-            if len(parts) > 2 and parts[2].lstrip("-").isdigit():
-                pids.append(int(parts[2]))
-    closed = 0
-    for pid in pids:
-        try:
-            await conn.execute_write(lq.build_diplomacy_respond(pid, "EXIT"))
-            closed += 1
-        except Exception:
-            pass
-    return closed
+        if line.startswith("CLEAR|"):
+            return line
+    return "?"
 
 
 class ScriptedPolicy:
@@ -150,13 +141,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 remaining -= 1
                 idle_since_clear = 0
             else:
-                # Human seat is idle. Periodically clear any orphaned first-meet
-                # greeting session so it cannot block turn progression.
+                # Human seat is idle. Periodically clear any blocking first-meet
+                # greeting (session or orphaned view) so it cannot stall the game.
                 if st.local not in puppet_ids and st.local >= 0:
                     idle_since_clear += 1
-                    if idle_since_clear >= _HUMAN_SESSION_CLEAR_EVERY:
+                    if idle_since_clear >= _DIPLO_CLEAR_EVERY:
                         idle_since_clear = 0
-                        await _clear_stuck_human_sessions(conn)
+                        await _clear_blocking_diplomacy(conn)
                 await asyncio.sleep(1.0)
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}

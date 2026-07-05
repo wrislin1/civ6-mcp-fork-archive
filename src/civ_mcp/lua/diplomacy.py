@@ -294,6 +294,46 @@ print("{SENTINEL}")
 """
 
 
+def build_clear_blocking_diplomacy() -> str:
+    """Clear a diplomacy modal that is blocking the current (human) player.
+
+    The arena's local-player switching can leave a first-meet greeting's
+    LeaderScene / DiplomacyActionView on screen — sometimes with an open
+    session (found via FindOpenSessionID, either direction), sometimes fully
+    orphaned with no locatable session at all. Acts ONLY when a view is
+    actually visible, so it never gratuitously touches AI diplomacy: closes any
+    real session it can find, then force-hides the (possibly orphaned) views
+    and restores the in-game UI. Reports 'CLEAR|none' when nothing is blocking.
+    """
+    return f"""
+local me = Game.GetLocalPlayer()
+local ls = ContextPtr:LookUpControl("/InGame/LeaderScene")
+local dav = ContextPtr:LookUpControl("/InGame/DiplomacyActionView")
+local lsVis = ls ~= nil and not ls:IsHidden()
+local davVis = dav ~= nil and not dav:IsHidden()
+if not lsVis and not davVis then
+    print("CLEAR|none")
+    print("{SENTINEL}")
+    return
+end
+local closed = 0
+for i = 0, 63 do
+    if Players[i] ~= nil and Players[i]:IsAlive() then
+        local a = DiplomacyManager.FindOpenSessionID(me, i)
+        if a and a >= 0 then pcall(function() DiplomacyManager.CloseSession(a) end); closed = closed + 1 end
+        local b = DiplomacyManager.FindOpenSessionID(i, me)
+        if b and b >= 0 then pcall(function() DiplomacyManager.CloseSession(b) end); closed = closed + 1 end
+    end
+end
+if dav ~= nil then pcall(function() UIManager:DequeuePopup(dav) end); dav:SetHide(true) end
+if ls ~= nil then ls:SetHide(true) end
+pcall(function() LuaEvents.DiplomacyActionView_ShowIngameUI() end)
+pcall(function() Events.HideLeaderScreen() end)
+print("CLEAR|blocked|closed=" .. closed)
+print("{SENTINEL}")
+"""
+
+
 def build_check_diplomacy_session_state(other_player_id: int) -> str:
     """Check if a diplomacy session is still open after AddResponse.
 

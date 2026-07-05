@@ -492,37 +492,32 @@ async def test_transcript_sink_two_snapshot_reads():
 
 
 class _DiploConn:
-    """Stub conn for _clear_stuck_human_sessions: serves a session query, records responds."""
-    def __init__(self, session_lines):
-        self._session_lines = session_lines
+    """Stub conn for _clear_blocking_diplomacy: serves the CLEAR result, records the Lua."""
+    def __init__(self, clear_lines):
+        self._lines = clear_lines
         self.writes = []
     async def execute_write(self, lua, timeout=5.0):
         self.writes.append(lua)
-        if 'print("SESSION|"' in lua:          # build_diplomacy_session_query
-            return self._session_lines
-        return ["OK:SESSION_CLOSED"]           # build_diplomacy_respond(EXIT)
+        return self._lines
 
 
-def test_clear_stuck_human_sessions_closes_each():
-    from civ_mcp.arena.coordinator import _clear_stuck_human_sessions
-    conn = _DiploConn([
-        "SESSION|12|4|China|Wu Zetian|hi||GOODBYE|0",
-        "SESSION|13|2|Byzantium|Basil|hi||GOODBYE|0",
-    ])
-    assert asyncio.run(_clear_stuck_human_sessions(conn)) == 2
-    assert sum('EXIT' in w for w in conn.writes) == 2
+def test_clear_blocking_diplomacy_reports_blocked():
+    from civ_mcp.arena.coordinator import _clear_blocking_diplomacy
+    conn = _DiploConn(["CLEAR|blocked|closed=1", "---END---"])
+    assert asyncio.run(_clear_blocking_diplomacy(conn)) == "CLEAR|blocked|closed=1"
+    # used the single visibility-gated clear builder (checks the views by name)
+    assert any("DiplomacyActionView" in w and "LeaderScene" in w for w in conn.writes)
 
 
-def test_clear_stuck_human_sessions_no_open_sessions():
-    from civ_mcp.arena.coordinator import _clear_stuck_human_sessions
-    conn = _DiploConn([])
-    assert asyncio.run(_clear_stuck_human_sessions(conn)) == 0
-    assert all('EXIT' not in w for w in conn.writes)
+def test_clear_blocking_diplomacy_reports_none_when_nothing_visible():
+    from civ_mcp.arena.coordinator import _clear_blocking_diplomacy
+    conn = _DiploConn(["CLEAR|none", "---END---"])
+    assert asyncio.run(_clear_blocking_diplomacy(conn)) == "CLEAR|none"
 
 
-def test_clear_stuck_human_sessions_swallows_errors():
-    from civ_mcp.arena.coordinator import _clear_stuck_human_sessions
+def test_clear_blocking_diplomacy_swallows_errors():
+    from civ_mcp.arena.coordinator import _clear_blocking_diplomacy
     class _Boom:
         async def execute_write(self, lua, timeout=5.0):
             raise ConnectionError("dead socket")
-    assert asyncio.run(_clear_stuck_human_sessions(_Boom())) == 0
+    assert asyncio.run(_clear_blocking_diplomacy(_Boom())) == "err"
