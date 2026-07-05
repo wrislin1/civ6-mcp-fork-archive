@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -59,12 +60,17 @@ async def _production_options(gs: Any, ctx: dict[str, Any]) -> str:
         cities, _ = result
         ctx["cities"] = cities
 
+    if not cities:
+        return "No cities available for production options."
+
+    results = await asyncio.gather(
+        *(gs.list_city_production(city.city_id) for city in cities)
+    )
     parts = []
-    for city in cities:
-        result = await gs.list_city_production(city.city_id)
+    for city, result in zip(cities, results, strict=True):
         text = _render(result, nr.narrate_city_production)
         parts.append(f"[city {city.city_id} {city.name}]\n{text}")
-    return "\n".join(parts) if parts else "No cities available for production options."
+    return "\n".join(parts)
 
 
 async def _research(gs: Any, ctx: dict[str, Any]) -> str:
@@ -176,8 +182,11 @@ async def _fetch_cities(gs: Any, ctx: dict[str, Any]) -> list[Any]:
 
 async def _map_text(gs: Any, centers: list[tuple[int, int]], radius: int) -> str:
     tiles = {}
-    for x, y in centers:
-        for tile in await gs.get_map_area(x, y, radius):
+    results = await asyncio.gather(
+        *(gs.get_map_area(x, y, radius) for x, y in centers)
+    )
+    for area in results:
+        for tile in area:
             tiles[(tile.x, tile.y)] = tile
     return nr.narrate_map([tiles[key] for key in sorted(tiles)])
 
@@ -277,7 +286,7 @@ async def build_briefing(
 
         block = f"{_block_header(name)}{text}"
         keep_building = _append_block(briefing, parts, name, block, char_budget)
-        if name == "map" and keep_building:
+        if name == "map" and briefing.sections and briefing.sections[-1] == "map":
             briefing.radius = radius
         if not keep_building:
             break

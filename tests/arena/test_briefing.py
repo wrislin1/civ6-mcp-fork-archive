@@ -323,7 +323,7 @@ async def test_map_radius_stays_zero_when_map_not_included():
 
 
 @pytest.mark.asyncio
-async def test_partial_map_section_does_not_report_radius():
+async def test_partial_map_section_reports_rendered_radius():
     gs = FakeGS()
 
     b = await build_briefing(
@@ -335,7 +335,7 @@ async def test_partial_map_section_does_not_report_radius():
     assert "map" in b.sections
     assert "== MAP ==" in b.text
     assert len(b.text) <= 70 * 3
-    assert b.radius == 0
+    assert b.radius == 5
 
 
 @pytest.mark.asyncio
