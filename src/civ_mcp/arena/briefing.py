@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from civ_mcp import narrate as nr
+from civ_mcp.arena import autoresolve
 from civ_mcp.arena.budget import CHARS_PER_TOKEN
 from civ_mcp.arena.config import BriefingOptions
 
@@ -28,6 +29,41 @@ def _render(result: Any, renderer: Callable[..., str]) -> str:
     if isinstance(result, str):
         return result
     return renderer(result)
+
+
+async def _promotions(gs: Any, ctx: dict[str, Any]) -> str:
+    units = ctx.get("units")
+    if units is None:
+        result = await gs.get_units()
+        units = [] if isinstance(result, str) else result
+        ctx["units"] = units
+    if not units:
+        return ""
+
+    results = await asyncio.gather(
+        *(gs.get_unit_promotions(u.unit_id) for u in units),
+        return_exceptions=True,
+    )
+    lines = ["These units earn NO XP until promoted. Promote them this turn:"]
+    for unit, status in zip(units, results, strict=True):
+        if isinstance(status, Exception) or not getattr(status, "promotions", None):
+            continue
+        pick = autoresolve.pick_promotion(status)
+        if pick is None:
+            continue
+        options = ", ".join(
+            f"{opt.name} ({opt.promotion_type})" for opt in status.promotions
+        )
+        lines.append(
+            f"- {unit.unit_type} (id:{unit.unit_id}) at ({unit.x},{unit.y}): "
+            f"suggested {pick.name}"
+        )
+        lines.append(f"    options: {options}")
+
+    if len(lines) == 1:
+        return ""
+    lines.append("Use promote_unit(unit_id, promotion_type).")
+    return "\n".join(lines)
 
 
 async def _overview(gs: Any, ctx: dict[str, Any]) -> str:
@@ -130,6 +166,7 @@ async def _victory(gs: Any, ctx: dict[str, Any]) -> str:
 
 
 _ORDER = (
+    "promotions",
     "overview",
     "units",
     "cities",
@@ -143,6 +180,7 @@ _ORDER = (
 )
 
 _BUILDERS: dict[str, Callable[[Any, dict[str, Any]], Awaitable[str]]] = {
+    "promotions": _promotions,
     "overview": _overview,
     "units": _units,
     "cities": _cities,
@@ -250,6 +288,8 @@ def _append_block(
 
 def _block_header(name: str) -> str:
     """Section header used for both the budget accounting and the rendered block."""
+    if name == "promotions":
+        return "== ACTION: PROMOTIONS AVAILABLE ==\n"
     return f"== {name.upper()} ==\n"
 
 
@@ -280,6 +320,8 @@ async def build_briefing(
                     continue
             else:
                 text = await _BUILDERS[name](gs, ctx)
+                if not text:
+                    continue
         except Exception as exc:
             briefing.errors.append(f"{name}: {exc!r}")
             continue

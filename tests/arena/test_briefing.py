@@ -1,8 +1,9 @@
 import pytest
 
 from civ_mcp import lua as lq
+from civ_mcp.arena import briefing as _briefing
 from civ_mcp.arena.briefing import Briefing, build_briefing
-from civ_mcp.arena.config import BriefingOptions
+from civ_mcp.arena.config import BriefingOptions, VALID_SECTIONS
 
 
 def _unit(x, y):
@@ -139,6 +140,43 @@ class FakeGS:
 ALL = ("overview", "units", "cities", "map", "research", "production_options")
 
 
+class _PromoUnit:
+    def __init__(self, unit_id, x, y, unit_type="UNIT_WARRIOR"):
+        self.unit_id = unit_id
+        self.x = x
+        self.y = y
+        self.unit_type = unit_type
+        self.needs_promotion = False
+
+
+def _promo_status(*types):
+    return lq.UnitPromotionStatus(
+        unit_id=1,
+        unit_index=1,
+        unit_type="UNIT_WARRIOR",
+        promotions=[
+            lq.PromotionOption(
+                promotion_type=t,
+                name=t.replace("PROMOTION_", "").title(),
+                description="d",
+            )
+            for t in types
+        ],
+    )
+
+
+class _PromoGS:
+    def __init__(self, units, promo_by_id):
+        self._units = units
+        self._promo = promo_by_id
+
+    async def get_units(self):
+        return self._units
+
+    async def get_unit_promotions(self, unit_id):
+        return self._promo[unit_id]
+
+
 class NoCallGS:
     def __getattr__(self, name):
         raise AssertionError(f"GameState method {name} must not be accessed")
@@ -153,6 +191,47 @@ async def test_disabled_briefing_returns_empty_without_calling_game_state():
     )
 
     assert b == Briefing()
+
+
+def test_promotions_is_first_and_registered():
+    assert _briefing._ORDER[0] == "promotions"
+    assert "promotions" in _briefing._BUILDERS
+    assert "promotions" in VALID_SECTIONS
+
+
+@pytest.mark.asyncio
+async def test_promotions_renders_action_block_and_populates_ctx():
+    gs = _PromoGS([_PromoUnit(1, 3, 4)], {1: _promo_status("PROMOTION_BATTLECRY")})
+    ctx = {}
+
+    text = await _briefing._promotions(gs, ctx)
+
+    assert "promote_unit(unit_id, promotion_type)" in text
+    assert "PROMOTION_BATTLECRY" in text
+    assert "Battlecry" in text
+    assert "(id:1)" in text and "(3,4)" in text
+    assert ctx["units"] == gs._units
+
+
+@pytest.mark.asyncio
+async def test_promotions_empty_when_nothing_pending():
+    gs = _PromoGS([_PromoUnit(1, 3, 4)], {1: _promo_status()})
+
+    assert await _briefing._promotions(gs, {}) == ""
+
+
+@pytest.mark.asyncio
+async def test_promotions_builds_action_header():
+    gs = _PromoGS([_PromoUnit(1, 3, 4)], {1: _promo_status("PROMOTION_BATTLECRY")})
+
+    b = await build_briefing(
+        gs,
+        BriefingOptions(enabled=True, sections=("promotions",)),
+        100_000,
+    )
+
+    assert b.sections == ["promotions"]
+    assert "== ACTION: PROMOTIONS AVAILABLE ==" in b.text
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 DEFAULT_GATEWAY_URL = "http://192.168.20.196:11444/v1"
 
 VALID_SECTIONS = (
+    "promotions",
     "overview",
     "units",
     "cities",
