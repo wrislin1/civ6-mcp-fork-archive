@@ -416,6 +416,37 @@ def test_config_summary_does_not_split_on_mid_run_n_ctx_change() -> None:
     assert summary["3"]["n_ctx"] == 131072
 
 
+def test_config_summary_prefers_latest_non_default_n_ctx_over_cold_default() -> None:
+    from civ_mcp.arena.analyze import config_summary
+
+    records = [
+        {
+            "player_id": 3,
+            "model": "m",
+            "provider": "local",
+            "civ_options": {"tools": "minimal"},
+            "n_ctx": 16384,
+            "n_ctx_source": "default",
+            "step_count": 1,
+            "invalid_tool_calls": [],
+        },
+        {
+            "player_id": 3,
+            "model": "m",
+            "provider": "local",
+            "civ_options": {"tools": "minimal"},
+            "n_ctx": 8192,
+            "n_ctx_source": "upstream_props",
+            "step_count": 1,
+            "invalid_tool_calls": [],
+        },
+    ]
+
+    summary = config_summary(records)
+
+    assert summary["3"]["n_ctx"] == 8192
+
+
 def test_config_summary_keeps_plain_player_key_for_single_fingerprint() -> None:
     from civ_mcp.arena.analyze import config_summary
 

@@ -58,6 +58,16 @@ async def test_auto_falls_back_to_bare_props_then_default():
     assert (n, src) == (DEFAULT_N_CTX, "default")
 
 
+@pytest.mark.asyncio
+async def test_auto_accepts_top_level_n_ctx_from_props():
+    async def top_level(url):
+        return {"n_ctx": 4096}
+
+    n, src = await resolve_n_ctx("http://h:1/v1", "m", "auto", http_get=top_level)
+
+    assert (n, src) == (4096, "upstream_props")
+
+
 def test_briefing_budget_formula():
     opts = CivOptions(max_steps=10, result_char_cap=6000)
 

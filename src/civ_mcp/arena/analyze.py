@@ -118,12 +118,22 @@ def _config_fingerprint(rec: dict) -> dict:
 
 
 def _representative_n_ctx(recs: list[dict]) -> int | None:
-    """Pick the n_ctx to report for a group: the largest resolved value.
+    """Pick the n_ctx to report for a group.
 
-    Ignores None and prefers the warm/upstream value over a transient default.
+    Prefer the latest value whose source is not the transient fallback default.
+    If all records are default-sourced, report the latest non-null value. Older
+    records without n_ctx_source are treated as real resolved values.
     """
-    values = [n for n in (rec.get("n_ctx") for rec in recs) if n is not None]
-    return max(values) if values else None
+    fallback: int | None = None
+    for rec in reversed(recs):
+        n_ctx = rec.get("n_ctx")
+        if n_ctx is None:
+            continue
+        if fallback is None:
+            fallback = n_ctx
+        if rec.get("n_ctx_source") != "default":
+            return n_ctx
+    return fallback
 
 
 def config_summary(records: list[dict]) -> dict:

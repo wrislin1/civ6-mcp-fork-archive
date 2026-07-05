@@ -24,17 +24,25 @@ async def _default_http_get(url: str) -> dict[str, Any] | None:
         return None
 
 
+def _coerce_n_ctx(value: Any) -> int | None:
+    try:
+        n_ctx = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n_ctx if n_ctx > 0 else None
+
+
 def _n_ctx_from(payload: dict[str, Any] | None) -> int | None:
     if payload is None:
         return None
+
     settings = payload.get("default_generation_settings")
-    if not isinstance(settings, dict):
-        return None
-    try:
-        n_ctx = int(settings["n_ctx"])
-    except (TypeError, KeyError, ValueError):
-        return None
-    return n_ctx if n_ctx > 0 else None
+    if isinstance(settings, dict):
+        n_ctx = _coerce_n_ctx(settings.get("n_ctx"))
+        if n_ctx is not None:
+            return n_ctx
+
+    return _coerce_n_ctx(payload.get("n_ctx"))
 
 
 async def resolve_n_ctx(
