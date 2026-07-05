@@ -72,9 +72,13 @@ async def _overview(gs: Any, ctx: dict[str, Any]) -> str:
 
 
 async def _units(gs: Any, ctx: dict[str, Any]) -> str:
-    units = await gs.get_units()
-    ctx["units"] = [] if isinstance(units, str) else units
-    return _render(units, nr.narrate_units)
+    units = ctx.get("units")
+    if units is not None:
+        return nr.narrate_units(units)
+
+    result = await gs.get_units()
+    ctx["units"] = [] if isinstance(result, str) else result
+    return _render(result, nr.narrate_units)
 
 
 async def _cities(gs: Any, ctx: dict[str, Any]) -> str:

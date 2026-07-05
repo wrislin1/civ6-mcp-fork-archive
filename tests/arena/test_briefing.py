@@ -177,6 +177,20 @@ class _PromoGS:
         return self._promo[unit_id]
 
 
+class _CountingPromoGS(_PromoGS):
+    def __init__(self, unit_snapshots, promo_by_id):
+        super().__init__(unit_snapshots[0], promo_by_id)
+        self._unit_snapshots = unit_snapshots
+        self.get_units_calls = 0
+
+    async def get_units(self):
+        snapshot = self._unit_snapshots[
+            min(self.get_units_calls, len(self._unit_snapshots) - 1)
+        ]
+        self.get_units_calls += 1
+        return snapshot
+
+
 class NoCallGS:
     def __getattr__(self, name):
         raise AssertionError(f"GameState method {name} must not be accessed")
@@ -232,6 +246,26 @@ async def test_promotions_builds_action_header():
 
     assert b.sections == ["promotions"]
     assert "== ACTION: PROMOTIONS AVAILABLE ==" in b.text
+
+
+@pytest.mark.asyncio
+async def test_promotions_and_units_reuse_cached_units():
+    first_units = [_unit(3, 4)]
+    second_units = [_unit(8, 9)]
+    gs = _CountingPromoGS(
+        [first_units, second_units],
+        {65537: _promo_status("PROMOTION_BATTLECRY")},
+    )
+
+    b = await build_briefing(
+        gs,
+        BriefingOptions(enabled=True, sections=("promotions", "units")),
+        100_000,
+    )
+
+    assert gs.get_units_calls == 1
+    assert "(3,4)" in b.text
+    assert "(8,9)" not in b.text
 
 
 @pytest.mark.asyncio
