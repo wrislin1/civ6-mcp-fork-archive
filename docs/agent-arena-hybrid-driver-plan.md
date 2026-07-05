@@ -1,8 +1,9 @@
 # Civ Arena — Hybrid Driver Implementation Plan
 
 > **Status (2026-06-30): IMPLEMENTED + live-verified.** The hybrid driver shipped on `main`
-> (through `f62854e`). Both CLI paths are live-verified on the gaming PC: `cli-codex` and
-> `cli-claude` each drove real puppet turns with clean human hand-back. Security remediation
+> (implementation through `f62854e`, planning/live-verification notes through `c9416aa`).
+> Both CLI paths are live-verified on the gaming PC: `cli-codex` and `cli-claude` each drove real
+> puppet turns with clean human hand-back. Security remediation
 > (host lockdown, server-side `run_lua`/lifecycle removal, cancellation-safe handback) landed
 > across `25f390e`..`19cfb81`. See `arena-live-gate-cli-mcp-loading-issue.md` for the resolved
 > CLI-MCP loading investigation and the cli-claude live-verification record. Remaining checkboxes
@@ -13,22 +14,23 @@
 > use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Drive the two AI civs (P1, P2) of the live single-player game with LLMs — P1 by an
-**in-process local** model and P2 by a **`claude` CLI agent** as the cloud
-cost-probe — proving per-civ driver routing, real per-turn token/cost accounting, and clean
-hand-back to the human (P0).
+**in-process local** model and P2 by a **headless CLI agent** (`cli-claude` or `cli-codex`) as
+the cloud cost-probe — proving per-civ driver routing, real per-turn token/cost accounting, and
+clean hand-back to the human (P0).
 
 **Architecture:** Builds on the existing `arena-vertical-slice` branch. The proven
 deterministic core is **reused unchanged**: `hook.py` (tuner-injected `SetLocalPlayerAndObserver`
 takeover + hold) and `coordinator.py`'s inject→wait-for-held-puppet→run-policy→end-turn→restore
 loop. The new work is a **per-civ policy router** and a second policy type, **`CLIAgentPolicy`**,
-that spawns a headless `claude -p` pointed at the `civ6` MCP server. Because the
+that spawns a headless CLI (`claude -p` via project `.mcp.json` auto-discovery, or `codex exec`
+with inline civ6 MCP config) pointed at the `civ6` MCP server. Because the
 FireTuner is **single-client** (verified live), a CLI civ needs *exclusive* tuner access: the
 coordinator **releases its connection** for the duration of the CLI run and **reclaims** it to
 end the turn. In-process civs have no contention (the coordinator is the sole client).
 
 **Tech Stack:** Python 3.12, `asyncio`, existing `civ_mcp.connection.GameConnection` +
-`civ_mcp.game_state.GameState`, `openai` SDK (in-process backend), `claude` CLI
-(subprocess) for the CLI civ, `pytest` + `pytest-asyncio`.
+`civ_mcp.game_state.GameState`, `openai` SDK (in-process backend), `claude` and `codex` CLIs
+(subprocess) for CLI civs, `pytest` + `pytest-asyncio`.
 
 ## Global Constraints
 
@@ -49,25 +51,25 @@ end the turn. In-process civs have no contention (the coordinator is the sole cl
 - **In-process backend endpoint:** riz-llm per-GPU Ollama at `http://192.168.20.196:11430/v1`
   (LAN-reachable, OpenAI-compatible, tool-calling). LiteLLM `:4000` and Ollama-unified `:11434`
   on riz-llm are loopback-only — unreachable from the gaming PC; do not use them.
-- **boomtube is not a civ brain** (single-shot, no tool-calling, local-only). It is available
-  to CLI civs as an auxiliary `research`/`chat` MCP tool, not on the critical path for this plan.
+- **boomtube is not a civ brain** (single-shot, no tool-calling, local-only). It is intentionally
+  excluded from arena CLI civs: `cli-claude` is restricted to project/local `mcp__civ6`, and
+  `cli-codex` uses inline civ6-only MCP config. No user-scope auxiliary MCP servers are part of
+  the trusted arena path.
 - **Live game state (verified):** P0=human, P1/P2=AI majors, P3–P11=city-states, turn 3. This
   is the target game.
-- **Scope:** two AI seats, one in-process + one CLI (`cli-claude`). No `cli-codex`, no scaling
-  to N civs, no replay UI, no per-civ config file — those are the next plan. `cli-codex` is
-  deferred because `codex exec` exposes no per-MCP-tool gating (no `--allowedTools`/
-  `--disallowedTools` analog), so it cannot enforce "do not call `mcp__civ6__end_turn`" — the
-  host-ends-the-turn invariant would be prompt-only, which is not safe enough for v1. A future
-  plan can add it behind a Codex config gate (`[mcp_servers.civ6]` profile + `-s read-only`).
+- **Scope:** two AI seats, one in-process + one CLI (`cli-claude` or `cli-codex`). No scaling
+  to N civs, no replay UI, and no per-civ config file in this plan. `cli-codex` is allowed only
+  because the server-side `CIV_MCP_ARENA_PUPPET=1` gate removes `end_turn`, lifecycle tools, and
+  `run_lua`; Codex does not provide a Claude-style per-MCP-tool denylist.
 
 ---
 
 ## File Structure
 
 - `src/civ_mcp/arena/config.py` — MODIFY: `PlayerSpec.provider` becomes a driver tag
-  (`local` | `cli-claude`); add `driver_kind()` helper; **validate** provider against the known
+  (`local` | `cli-claude` | `cli-codex`); add `driver_kind()` helper; **validate** provider against the known
   set in `parse_player_spec` (reject typos).
-- `src/civ_mcp/arena/cli_agent.py` — CREATE: `CLIAgentPolicy` (`claude` subprocess spawner + usage parse).
+- `src/civ_mcp/arena/cli_agent.py` — CREATE: `CLIAgentPolicy` (`claude`/`codex` subprocess spawner + usage parse).
 - `src/civ_mcp/arena/coordinator.py` — MODIFY: accept a `policy_for(player_id)` router; honor
   `policy.needs_exclusive_tuner` by releasing/reclaiming the connection around the policy call.
 - `src/civ_mcp/arena/cost.py` — MODIFY: `record(...)` accepts an optional `usd` override (CLI
@@ -89,7 +91,7 @@ end the turn. In-process civs have no contention (the coordinator is the sole cl
 
 **Interfaces:**
 - Produces: `PlayerSpec(player_id:int, provider:str, model:str)` where `provider` ∈
-  `{"local","cli-claude"}`; `PlayerSpec.driver_kind() -> "in_process"|"cli"`.
+  `{"local","cli-claude","cli-codex"}`; `PlayerSpec.driver_kind() -> "in_process"|"cli"`.
   `parse_player_spec("2:cli-claude:")` → `PlayerSpec(2,"cli-claude","")` (empty model = CLI
   default). `parse_player_spec("1:local:qwen3-coder:30b")` →
   `PlayerSpec(1,"local","qwen3-coder:30b")` (model may itself contain a colon — split on the
@@ -112,6 +114,11 @@ def test_cli_claude_empty_model():
     assert s == PlayerSpec(2, "cli-claude", "")
     assert s.driver_kind() == "cli"
 
+def test_cli_codex_model_with_colon():
+    s = parse_player_spec("2:cli-codex:gpt-5.5")
+    assert s == PlayerSpec(2, "cli-codex", "gpt-5.5")
+    assert s.driver_kind() == "cli"
+
 def test_rejects_unknown_provider():
     with pytest.raises(ValueError):
         parse_player_spec("1:typo:model")
@@ -124,7 +131,7 @@ Expected: FAIL (`driver_kind` missing; colon-in-model assert fails; unknown-prov
 - [ ] **Step 3: Write minimal implementation**
 ```python
 # src/civ_mcp/arena/config.py  (replace parse_player_spec + add driver_kind)
-_CLI_PROVIDERS = {"cli-claude"}
+_CLI_PROVIDERS = {"cli-claude", "cli-codex"}
 _VALID_PROVIDERS = {"local"} | _CLI_PROVIDERS
 
 def parse_player_spec(s: str) -> "PlayerSpec":
@@ -216,11 +223,11 @@ git commit -m "feat(arena): cost log accepts CLI-reported usd override"
 - Produces: `class CLIAgentPolicy(provider, cost, project_dir, model="", timeout_s=900,
   max_turns=40)` with `needs_exclusive_tuner = True` and
   `async __call__(gs, player_id, turn) -> dict`. It builds the argv (`_build_argv`), runs the
-  CLI via `asyncio.create_subprocess_exec`, parses the final JSON (`_parse_claude`)
-  into `(summary, prompt_tokens, completion_tokens, usd)`, records cost, and returns
-  `{"summary":..., "actions":[], "usage":{...}}`. Only `cli-claude` is supported in v1; any other
-  provider raises `ValueError` in `_build_argv`. Argv construction is unit-tested; the
-  subprocess is not.
+  CLI via `asyncio.create_subprocess_exec`, parses provider JSON (`_parse_claude` or
+  `_parse_codex`) into `(summary, prompt_tokens, completion_tokens, usd)`, records cost, and
+  returns `{"summary":..., "actions":[], "usage":{...}}`. Shipped providers are `cli-claude`
+  and `cli-codex`; unknown CLI providers raise `ValueError` in `_build_argv`. Argv construction
+  is unit-tested; the subprocess is not.
 
 - [ ] **Step 1: Write the failing test** (pure argv + parser; no subprocess)
 ```python
@@ -255,6 +262,12 @@ def test_parse_claude_usage():
 - [ ] **Step 2: Run test to verify it fails** → FAIL (no module).
 
 - [ ] **Step 3: Write minimal implementation**
+
+> Historical note: this first minimal slice was Claude-only. Current `main` extends the shipped
+> implementation with `cli-codex`, server-side puppet env gating, provider-specific parsers, and
+> process-group cleanup. Do not copy this snippet as current complete code; use
+> `src/civ_mcp/arena/cli_agent.py` as the source of truth for maintenance.
+
 ```python
 # src/civ_mcp/arena/cli_agent.py
 from __future__ import annotations
@@ -506,8 +519,8 @@ git commit -m "feat(arena): per-civ policy router + single-client tuner release/
 
 **Interfaces:** Extract a **pure, importable** `build_policies(specs, cost, cfg) ->
 (policies: dict[int, policy], in_proc_backend | None)` that maps `--player` specs to per-civ
-policies: `local` → `LLMPolicy` over `OpenAICompatBackend` (Ollama `:11430`); `cli-claude` →
-`CLIAgentPolicy`. `_run` calls `build_policies`, then passes a `policy_for` closure to
+policies: `local` → `LLMPolicy` over `OpenAICompatBackend` (Ollama `:11430`);
+`cli-claude`/`cli-codex` → `CLIAgentPolicy`. `_run` calls `build_policies`, then passes a `policy_for` closure to
 `run_arena`. The router is unit-tested directly (not only via live gates) — construction of all
 three policy types is side-effect-free (no network on construct), so the test needs no
 monkeypatch.
@@ -629,8 +642,11 @@ the tag does not tool-call reliably — switch the local model to another tool-c
 ssh riz@192.168.20.141 'bash -lc "cd ~/projects/civ6-mcp && timeout 120 claude -p \"List the MCP tools whose name starts with mcp__civ6 and then stop.\" --output-format json --permission-mode bypassPermissions --allowedTools mcp__civ6 2>&1 | tail -c 1200"'
 ```
 Expected: JSON result mentioning civ6 tools (confirms `claude -p` loads `.mcp.json`'s `civ6`
-server). If civ6 is not loaded, pass an explicit `--mcp-config .mcp.json`. Record the working
-invocation and reconcile `cli_agent._build_argv` to it.
+server). If civ6 is not loaded, do **not** fall back to explicit `--mcp-config`: live testing found
+that explicit `--mcp-config` did not expose the civ6 stdio tools under headless `claude -p`.
+Instead, debug project auto-discovery, `--setting-sources project,local`, `.mcp.json`, and the
+env relay documented in `arena-live-gate-cli-mcp-loading-issue.md`, then reconcile
+`cli_agent._build_argv` to the verified invocation.
 
 ---
 
@@ -700,8 +716,8 @@ git commit -m "fix(arena): hybrid-driver live-gate fixes"
 ## Self-Review
 
 - **Spec coverage:** per-civ routing (T4 + T5 `build_policies` unit test), in-process local civ
-  (existing `LLMPolicy` + T5 endpoint), CLI cloud civ — `cli-claude` only (T3), per-turn
-  token/cost incl. real cloud USD (T2 + T3 + Gate 8), single-client tuner hand-off (Global
+  (existing `LLMPolicy` + T5 endpoint), CLI cloud civs (`cli-claude` and `cli-codex`), per-turn
+  token/cost incl. real Claude USD and Codex token accounting (T2 + T3 + Gate 8), single-client tuner hand-off (Global
   Constraint + T4 + test), human-safety restore (T4 finally), live P1+P2 (Gate 9). ✓
 - **Single-client constraint** is verified live and is the spine of T4; the test asserts
   disconnect-before-policy and reconnect-before-restore. The new finally-block reads
@@ -710,9 +726,10 @@ git commit -m "fix(arena): hybrid-driver live-gate fixes"
   in Step 5). ✓
 - **Provider validation:** `parse_player_spec` rejects unknown providers (T1 `test_rejects_unknown_provider`)
   — no silent `in_process` fall-through. ✓
-- **`cli-codex` deferred:** cut from v1 because `codex exec` has no per-MCP-tool gating to forbid
-  `mcp__civ6__end_turn`; the valid provider set is `{local, cli-claude}`. Re-add behind a Codex
-  config gate in a later plan. ✓
+- **`cli-codex` security:** shipped because `CIV_MCP_ARENA_PUPPET=1` removes `end_turn`,
+  lifecycle tools, and `run_lua` server-side. The valid provider set is
+  `{local, cli-claude, cli-codex}`. Codex remains more dependent on the server-side gate because it
+  has no Claude-style per-MCP-tool denylist. ✓
 - **Placeholder scan:** the only deferred unknowns are CLI argv exactness (Gate 6 Step 3 pins
   it) and the turn-end mechanic (Gate 7 decides `finish_units+restore` vs adding
   `ACTION_ENDTURN`) — both explicit gates. ✓
