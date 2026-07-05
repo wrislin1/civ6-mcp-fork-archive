@@ -20,6 +20,14 @@ _ITEM_PARAM_MAP: dict[str, str] = {
     "PROJECT": "PARAM_PROJECT_TYPE",
 }
 
+# Item type → GameInfo row's canonical type-name field (for friendly-name resolution)
+_ITEM_TYPEFIELD_MAP: dict[str, str] = {
+    "UNIT": "UnitType",
+    "BUILDING": "BuildingType",
+    "DISTRICT": "DistrictType",
+    "PROJECT": "ProjectType",
+}
+
 
 def _bail(msg: str) -> str:
     """Python-side helper that expands to the Lua bail pattern.

@@ -84,3 +84,38 @@ class TestSetCityProductionVerification:
         gs.conn = _ThrowingConn()
         result = asyncio.run(gs.set_city_production(65536, "UNIT", "UNIT_WARRIOR"))
         assert result == "PRODUCING|UNIT_WARRIOR|2 turns"
+
+
+class TestFriendlyNameResolution:
+    """Models often pass display names ("Scout") instead of type names
+    ("UNIT_SCOUT"). The produce/verify Lua builders must resolve either form.
+    """
+
+    def test_produce_emits_friendly_name_fallback(self):
+        from civ_mcp.lua.cities import build_produce_item
+
+        q = build_produce_item(65536, "UNIT", "Scout")
+        # exact lookup still tried first
+        assert 'GameInfo.Units["Scout"]' in q
+        # case-insensitive display-name / type fallback present
+        assert "Locale.Lookup(_row.Name)" in q
+        assert 'string.lower("Scout")' in q
+        # canonical type threaded into trader check + success reporting
+        assert "local _rtype = item.UnitType" in q
+        assert '_rtype == "UNIT_TRADER"' in q
+        assert 'OK:PRODUCING|" .. _rtype' in q
+
+    def test_produce_type_field_matches_item_type(self):
+        from civ_mcp.lua.cities import build_produce_item
+
+        assert "item.BuildingType" in build_produce_item(65536, "BUILDING", "Monument")
+        assert "item.DistrictType" in build_produce_item(65536, "DISTRICT", "Campus", 3, 4)
+
+    def test_verify_accepts_friendly_name(self):
+        from civ_mcp.lua.cities import build_verify_production
+
+        v = build_verify_production(65536, "Scout")
+        # resolves the currently-building canonical type back to its display name
+        assert "local matched = (cur ==" in v
+        assert "Locale.Lookup(_row.Name)" in v
+        assert 'string.lower("Scout")' in v

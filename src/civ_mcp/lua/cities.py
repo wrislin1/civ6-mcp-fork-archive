@@ -5,6 +5,7 @@ from __future__ import annotations
 from civ_mcp.lua._helpers import (
     _ITEM_PARAM_MAP,
     _ITEM_TABLE_MAP,
+    _ITEM_TYPEFIELD_MAP,
     SENTINEL,
     _bail,
     _bail_lua,
@@ -417,6 +418,7 @@ def build_produce_item(
     itype = item_type.upper()
     table_name = _ITEM_TABLE_MAP.get(itype, "Units")
     param_key = _ITEM_PARAM_MAP.get(itype, "PARAM_UNIT_TYPE")
+    type_field = _ITEM_TYPEFIELD_MAP.get(itype, "UnitType")
     # Districts require placement coordinates
     if itype == "DISTRICT" and (target_x is None or target_y is None):
         return (
@@ -434,7 +436,19 @@ def build_produce_item(
     return f"""
 {_lua_get_city(city_id)}
 local item = GameInfo.{table_name}["{item_name}"]
+if item == nil then
+    -- Models often pass the friendly display name ("Scout") instead of the type
+    -- name ("UNIT_SCOUT"). Fall back to a case-insensitive match on the localized
+    -- name or the canonical type field before giving up.
+    local _want = string.lower("{item_name}")
+    for _row in GameInfo.{table_name}() do
+        local _disp = ""
+        pcall(function() _disp = string.lower(Locale.Lookup(_row.Name)) end)
+        if _disp == _want or string.lower(tostring(_row.{type_field})) == _want then item = _row; break end
+    end
+end
 if item == nil then {_bail(f"ERR:ITEM_NOT_FOUND|{item_name}")} end
+local _rtype = item.{type_field}
 local bq = pCity:GetBuildQueue()
 if not bq:CanProduce(item.Hash, true) then
     -- Diagnose why production is blocked
@@ -473,7 +487,7 @@ end
 end'''
     }
 -- Trader cap check: game silently rejects when count >= route capacity
-if "{item_name}" == "UNIT_TRADER" then
+if _rtype == "UNIT_TRADER" then
     local pTrade = Players[me]:GetTrade()
     local traderCount = 0
     for _, u in Players[me]:GetUnits():Members() do
@@ -501,7 +515,7 @@ tParams[CityOperationTypes.PARAM_INSERT_MODE] = CityOperationTypes.VALUE_EXCLUSI
 CityManager.RequestOperation(pCity, CityOperationTypes.BUILD, tParams)
 if canStart then
     local turnsLeft = bq:GetTurnsLeft(item.Hash)
-    print("OK:PRODUCING|{item_name}|" .. turnsLeft .. " turns")
+    print("OK:PRODUCING|" .. _rtype .. "|" .. turnsLeft .. " turns")
 else
     -- Check for pillaged districts to give actionable error
     local pillaged = {{}}
@@ -512,11 +526,9 @@ else
         end
     end
     if #pillaged > 0 then
-        print("MAYBE:PRODUCING|{
-        item_name
-    }|canStart=false|PILLAGED:" .. table.concat(pillaged, ","))
+        print("MAYBE:PRODUCING|" .. _rtype .. "|canStart=false|PILLAGED:" .. table.concat(pillaged, ","))
     else
-        print("MAYBE:PRODUCING|{item_name}|canStart=false")
+        print("MAYBE:PRODUCING|" .. _rtype .. "|canStart=false")
     end
 end
 print("{SENTINEL}")
@@ -535,8 +547,27 @@ local pCity = Players[me]:GetCities():FindID({city_id} % 65536)
 if pCity == nil then print("NOT_FOUND"); print("{SENTINEL}"); return end
 local bq = pCity:GetBuildQueue()
 local cur = bq:CurrentlyBuilding()
-if cur == "{item_name}" then
-    print("CONFIRMED|" .. bq:GetTurnsLeft() .. " turns")
+local matched = (cur == "{item_name}")
+if not matched and cur ~= nil then
+    -- {item_name} may be a friendly display name ("Scout"); cur is the canonical
+    -- type ("UNIT_SCOUT"). Resolve cur back to its localized name and compare.
+    local _want = string.lower("{item_name}")
+    for _, _tbl in ipairs({{"Units", "Buildings", "Districts", "Projects"}}) do
+        local _row = GameInfo[_tbl][cur]
+        if _row ~= nil then
+            local _disp = ""
+            pcall(function() _disp = string.lower(Locale.Lookup(_row.Name)) end)
+            if _disp == _want then matched = true end
+            break
+        end
+    end
+end
+if matched then
+    -- bq:GetTurnsLeft() (no-arg) is "Not Implemented" in the GameCore context;
+    -- guard it so a confirmed set still reports cleanly instead of raising.
+    local _tl = -1
+    pcall(function() _tl = bq:GetTurnsLeft() end)
+    print("CONFIRMED|" .. _tl .. " turns")
 else
     print("NOT_SET|current=" .. tostring(cur) .. "|expected={item_name}")
 end
