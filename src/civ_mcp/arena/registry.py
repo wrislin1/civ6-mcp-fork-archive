@@ -557,56 +557,14 @@ TIERS: dict[str, tuple[str, ...]] = {
         "alert_unit",
         "set_civic",
     ),
-    "full": (
-        "get_overview",
-        "get_units",
-        "get_cities",
-        "move_unit",
-        "found_city",
-        "set_city_production",
-        "set_research",
-        "fortify_unit",
-        "skip_unit",
-        "get_map_area",
-        "get_tech_civics",
-        "attack_unit",
-        "improve_tile",
-        "remove_feature",
-        "purchase_item",
-        "heal_unit",
-        "alert_unit",
-        "set_civic",
-        "get_settle_advisor",
-        "get_district_advisor",
-        "get_wonder_advisor",
-        "get_builder_tasks",
-        "get_diplomacy",
-        "get_city_states",
-        "get_great_people",
-        "get_empire_resources",
-        "get_victory_progress",
-        "get_pathing_estimate",
-        "send_envoy",
-        "get_policies",
-        "set_policies",
-        "appoint_governor",
-        "assign_governor",
-        "choose_pantheon",
-        "get_pantheon_status",
-        "upgrade_unit",
-        "promote_unit",
-        "get_unit_promotions",
-        "automate_explore",
-        "skip_remaining_units",
-        "purchase_tile",
-        "get_purchasable_tiles",
-        "set_city_focus",
-    ),
+    "full": tuple(TOOL_REGISTRY),
 }
 
 
 def resolve_tools(selector: str | Sequence[str]) -> tuple[str, ...]:
     if isinstance(selector, str):
+        if selector == "full":
+            return tuple(TOOL_REGISTRY)
         if selector in TIERS:
             return TIERS[selector]
         if selector in TOOL_REGISTRY:
@@ -642,36 +600,6 @@ def openai_tools(names: Sequence[str]) -> list[dict[str, Any]]:
     return tools
 
 
-def _apply_param_bounds(tool: ToolDef, args: dict[str, Any]) -> dict[str, Any]:
-    """Clamp integer args to their declared schema minimum/maximum.
-
-    Enforces the bounds declared via ``_int_param(minimum=, maximum=)`` for every
-    tool at the single dispatch choke point, so bounds are not a per-tool special
-    case. Non-integer or malformed values are left untouched for the tool (or its
-    own coercion, e.g. _clamp_map_radius) to handle.
-    """
-    bounded: dict[str, Any] | None = None
-    for pname, pspec in tool.params.items():
-        if pspec.get("type") != "integer":
-            continue
-        lo = pspec.get("minimum")
-        hi = pspec.get("maximum")
-        if (lo is None and hi is None) or pname not in args:
-            continue
-        try:
-            val = int(args[pname])
-        except (TypeError, ValueError):
-            continue
-        if lo is not None:
-            val = max(lo, val)
-        if hi is not None:
-            val = min(hi, val)
-        if bounded is None:
-            bounded = dict(args)
-        bounded[pname] = val
-    return bounded if bounded is not None else args
-
-
 async def dispatch(
     gs: Any,
     name: str,
@@ -681,7 +609,7 @@ async def dispatch(
     if allowed is not None and name not in allowed:
         raise KeyError(name)
     tool = TOOL_REGISTRY[name]
-    return await tool.call(gs, _apply_param_bounds(tool, args))
+    return await tool.call(gs, args)
 
 
 async def _narrate_overview(gs: Any, args: dict[str, Any]) -> str:

@@ -30,6 +30,31 @@ def test_tiers_nest():
     assert set(TIERS["minimal"]) < set(TIERS["standard"]) < set(TIERS["full"])
 
 
+def test_full_tier_initially_matches_registry_order():
+    assert TIERS["full"] == tuple(TOOL_REGISTRY)
+
+
+def test_resolve_tools_full_tracks_registry_additions(monkeypatch):
+    from civ_mcp.arena.registry import ToolDef
+
+    async def _noop(gs, args):
+        return ""
+
+    monkeypatch.setitem(
+        TOOL_REGISTRY,
+        "__probe_tool__",
+        ToolDef(
+            name="__probe_tool__",
+            description="probe",
+            params={},
+            required=(),
+            call=_noop,
+        ),
+    )
+
+    assert "__probe_tool__" in resolve_tools("full")
+
+
 def test_standard_adds_map_and_combat():
     extra = set(TIERS["standard"]) - set(TIERS["minimal"])
     assert {
@@ -208,27 +233,7 @@ async def test_get_map_area_radius_tolerates_null_and_non_numeric():
     assert calls == [2, 2, 2]
 
 
-def test_apply_param_bounds_clamps_any_declared_integer_param():
-    """Schema minimum/maximum is enforced generically at dispatch, not per-tool."""
-    from civ_mcp.arena.registry import _apply_param_bounds, ToolDef, _int_param
+def test_registry_has_no_generic_param_bounds_layer():
+    import civ_mcp.arena.registry as registry_mod
 
-    async def _noop(gs, args):
-        return ""
-
-    tool = ToolDef(
-        name="t",
-        description="",
-        params={
-            "depth": _int_param("bounded", minimum=1, maximum=3),
-            "free": _int_param("unbounded"),
-        },
-        required=(),
-        call=_noop,
-    )
-
-    # Bounded param clamps both ends; unbounded param is untouched.
-    assert _apply_param_bounds(tool, {"depth": 9, "free": 100}) == {"depth": 3, "free": 100}
-    assert _apply_param_bounds(tool, {"depth": -5})["depth"] == 1
-    # Malformed / absent values are left for the tool to handle.
-    assert _apply_param_bounds(tool, {"depth": None}) == {"depth": None}
-    assert _apply_param_bounds(tool, {}) == {}
+    assert not hasattr(registry_mod, "_apply_param_bounds")
