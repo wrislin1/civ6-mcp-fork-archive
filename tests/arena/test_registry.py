@@ -189,3 +189,46 @@ async def test_get_map_area_radius_clamped_before_game_state():
     await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2})
 
     assert calls == [(1, 2, 5), (1, 2, 0), (1, 2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_get_map_area_radius_tolerates_null_and_non_numeric():
+    """radius:null / non-numeric must fall back to the default, never raise."""
+    calls = []
+
+    class FakeGS:
+        async def get_map_area(self, x, y, radius):
+            calls.append(radius)
+            return []
+
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2, "radius": None})
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2, "radius": "far"})
+    await dispatch(FakeGS(), "get_map_area", {"x": 1, "y": 2, "radius": 2.9})
+
+    assert calls == [2, 2, 2]
+
+
+def test_apply_param_bounds_clamps_any_declared_integer_param():
+    """Schema minimum/maximum is enforced generically at dispatch, not per-tool."""
+    from civ_mcp.arena.registry import _apply_param_bounds, ToolDef, _int_param
+
+    async def _noop(gs, args):
+        return ""
+
+    tool = ToolDef(
+        name="t",
+        description="",
+        params={
+            "depth": _int_param("bounded", minimum=1, maximum=3),
+            "free": _int_param("unbounded"),
+        },
+        required=(),
+        call=_noop,
+    )
+
+    # Bounded param clamps both ends; unbounded param is untouched.
+    assert _apply_param_bounds(tool, {"depth": 9, "free": 100}) == {"depth": 3, "free": 100}
+    assert _apply_param_bounds(tool, {"depth": -5})["depth"] == 1
+    # Malformed / absent values are left for the tool to handle.
+    assert _apply_param_bounds(tool, {"depth": None}) == {"depth": None}
+    assert _apply_param_bounds(tool, {}) == {}

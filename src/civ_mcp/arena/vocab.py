@@ -6,6 +6,13 @@ from __future__ import annotations
 
 MCP_CIV6_PREFIX = "mcp__civ6__"
 
+# Maps a local tool name to its analysis verb. This is an offline-pure MIRROR of
+# the ``verb`` field on each action tool in ``arena.registry.TOOL_REGISTRY`` (the
+# single source of truth). It is duplicated here — rather than derived — so that
+# analyze.py can import it without pulling in the registry (and its narrate/game
+# imports). ``tests/arena/test_analyze.py`` asserts this dict stays in exact sync
+# with the registry, so a new action tool that forgets to update this table fails
+# the suite instead of silently dropping out of rubric coverage.
 LOCAL_TOOL_VERBS: dict[str, str] = {
     "move_unit": "move",
     "found_city": "found_city",

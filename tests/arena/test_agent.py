@@ -475,3 +475,20 @@ async def test_briefing_disabled_is_todays_message():
     await pol(None, 3, 7)
     user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
     assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
+
+
+def test_should_resolve_n_ctx_caps_default_retries():
+    """Re-probe while stuck on 'default', but stop after the cap so a backend with
+    no /props endpoint does not incur an HTTP round-trip every single turn."""
+    from civ_mcp.arena.agent import _should_resolve_n_ctx, _N_CTX_MAX_RESOLVES
+
+    # First resolve always happens (nothing resolved yet).
+    assert _should_resolve_n_ctx(None, "", "auto", 0) is True
+    # Auto budget + still 'default' + under the cap → keep retrying (warm-up).
+    assert _should_resolve_n_ctx(4096, "default", "auto", 1) is True
+    # Hit the cap → give up re-probing.
+    assert _should_resolve_n_ctx(4096, "default", "auto", _N_CTX_MAX_RESOLVES) is False
+    # A resolved upstream value stops retries immediately.
+    assert _should_resolve_n_ctx(131072, "upstream_props", "auto", 1) is False
+    # A fixed (non-auto) budget never re-probes.
+    assert _should_resolve_n_ctx(4096, "default", 8000, 1) is False

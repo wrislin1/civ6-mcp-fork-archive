@@ -35,10 +35,23 @@ SYSTEM = ("You are playing one civ in Civilization VI on its turn. Use tools to 
           "tool calls. Keep it brief.")
 
 
-def _should_resolve_n_ctx(current: int | None, source: str, context_budget: int | str) -> bool:
+# Cap how many times we re-probe /props when it keeps returning the default.
+# A cold llama-swap backend needs a couple of turns to warm up and expose a real
+# n_ctx; a backend with no /props at all never will, so stop after a few tries
+# instead of paying an HTTP round-trip every turn for the whole game.
+_N_CTX_MAX_RESOLVES = 3
+
+
+def _should_resolve_n_ctx(
+    current: int | None, source: str, context_budget: int | str, resolves: int
+) -> bool:
     if current is None:
         return True
-    return context_budget == "auto" and source == "default"
+    return (
+        context_budget == "auto"
+        and source == "default"
+        and resolves < _N_CTX_MAX_RESOLVES
+    )
 
 
 class LLMPolicy:
@@ -54,6 +67,7 @@ class LLMPolicy:
             self._system = SYSTEM + "\n\n" + load_playbook()
         self._n_ctx: int | None = None
         self._n_ctx_source = ""
+        self._n_ctx_resolves = 0
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
         briefing = Briefing()
@@ -62,12 +76,14 @@ class LLMPolicy:
                 self._n_ctx,
                 self._n_ctx_source,
                 self.options.context_budget,
+                self._n_ctx_resolves,
             ):
                 self._n_ctx, self._n_ctx_source = await resolve_n_ctx(
                     getattr(self.backend, "base_url", ""),
                     getattr(self.backend, "model", ""),
                     self.options.context_budget,
                 )
+                self._n_ctx_resolves += 1
             playbook_chars = len(self._system) - len(SYSTEM)
             tool_schema_chars = len(json.dumps(self._tools))
             budget = briefing_budget(

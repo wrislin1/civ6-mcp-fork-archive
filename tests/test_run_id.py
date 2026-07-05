@@ -153,3 +153,21 @@ def test_arena_default_run_id_no_model_id(monkeypatch, tmp_path):
         "generate_run_id must be called without model_id; "
         f"got kwargs={captured['kwargs']!r}"
     )
+
+
+def test_is_safe_run_id_accepts_normal_and_generated_ids():
+    from civ_mcp.run_id import generate_run_id, is_safe_run_id
+
+    assert is_safe_run_id("crimson-amber-falcon-47")
+    assert is_safe_run_id("hybrid-4civ-20260705T101112Z")
+    assert is_safe_run_id("run_1.2")
+    # Generated ids must always pass their own path-safety guard.
+    assert is_safe_run_id(generate_run_id("model", "scenario"))
+    assert is_safe_run_id(generate_run_id())
+
+
+def test_is_safe_run_id_rejects_traversal_and_junk():
+    from civ_mcp.run_id import is_safe_run_id
+
+    for bad in ["../../tmp/evil", "a/b", ".", "..", "", ".hidden", "has space", None, 5]:
+        assert not is_safe_run_id(bad), f"{bad!r} should be rejected"

@@ -284,3 +284,24 @@ def test_cli_preflight_raises_when_mcp_config_missing(monkeypatch, tmp_path):
 
     with pytest.raises(SystemExit, match=".mcp.json"):
         asyncio.run(_run(Args()))
+
+
+def test_run_rejects_path_traversal_run_id(tmp_path):
+    """A CLI --run-id must not escape the transcript dir (the YAML loader already
+    guards this; _run applies the same check at the single choke point)."""
+    class Args:
+        player = ["1:local:m"]
+        max_puppet_turns = 1
+        gateway_url = "http://localhost:11430/v1"
+        api_key_env = "LITELLM_OPENAI_API_KEY"
+        cost_path = str(tmp_path / "cost.jsonl")
+        max_agent_steps = 6
+        dry_run = True
+        run_id = "../../evil"
+        transcript_dir = str(tmp_path / "runs")
+        no_transcript = True
+
+    with pytest.raises(SystemExit, match="invalid run_id"):
+        asyncio.run(_run(Args()))
+    # Nothing should have been created outside the transcript dir.
+    assert not (tmp_path.parent / "evil").exists()

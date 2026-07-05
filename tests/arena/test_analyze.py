@@ -390,6 +390,32 @@ def test_config_summary_splits_same_player_when_fingerprint_changes() -> None:
     assert summary["3#2"]["turns"] == 1
 
 
+def test_config_summary_does_not_split_on_mid_run_n_ctx_change() -> None:
+    """Same model/options across turns stays ONE group even if n_ctx changes.
+
+    A cold llama-swap backend resolves DEFAULT_N_CTX on turn 1 then the real
+    context window once warm; keying the config fingerprint on n_ctx used to
+    fragment that single continuous player into 3#1/3#2 and corrupt the averages.
+    """
+    from civ_mcp.arena.analyze import config_summary
+
+    records = [
+        {"player_id": 3, "model": "m", "provider": "local",
+         "civ_options": {"tools": "minimal"}, "n_ctx": 4096,
+         "step_count": 2, "invalid_tool_calls": []},
+        {"player_id": 3, "model": "m", "provider": "local",
+         "civ_options": {"tools": "minimal"}, "n_ctx": 131072,
+         "step_count": 3, "invalid_tool_calls": []},
+    ]
+
+    summary = config_summary(records)
+
+    assert set(summary) == {"3"}
+    assert summary["3"]["turns"] == 2
+    # Report the largest resolved window, not the transient default.
+    assert summary["3"]["n_ctx"] == 131072
+
+
 def test_config_summary_keeps_plain_player_key_for_single_fingerprint() -> None:
     from civ_mcp.arena.analyze import config_summary
 
@@ -1187,37 +1213,27 @@ def test_local_tool_verbs_subset_of_registry():
     )
 
 
-def test_local_tool_verbs_cover_registry_action_tools() -> None:
+def test_local_tool_verbs_mirror_registry_verbs_exactly() -> None:
+    """LOCAL_TOOL_VERBS must be an exact mirror of the registry's ``verb`` fields.
+
+    The registry is the single source of truth: each action tool declares its
+    analysis verb via ``_tool(..., verb=...)``. vocab.LOCAL_TOOL_VERBS duplicates
+    that map so analyze.py stays import-light. This test fails if the two drift —
+    e.g. a new action tool declares a verb in the registry but nobody updates the
+    vocab mirror (which would silently drop it from rubric coverage), or vice
+    versa.
+    """
     from civ_mcp.arena.registry import TOOL_REGISTRY
     from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS
 
-    expected_actions = {
-        "move_unit",
-        "found_city",
-        "fortify_unit",
-        "skip_unit",
-        "attack_unit",
-        "improve_tile",
-        "remove_feature",
-        "purchase_item",
-        "heal_unit",
-        "alert_unit",
-        "set_civic",
-        "send_envoy",
-        "set_policies",
-        "appoint_governor",
-        "assign_governor",
-        "choose_pantheon",
-        "upgrade_unit",
-        "promote_unit",
-        "automate_explore",
-        "skip_remaining_units",
-        "purchase_tile",
-        "set_city_focus",
+    registry_verbs = {
+        name: tool.verb for name, tool in TOOL_REGISTRY.items() if tool.verb
     }
 
-    assert expected_actions <= set(TOOL_REGISTRY)
-    assert expected_actions <= set(LOCAL_TOOL_VERBS)
+    assert LOCAL_TOOL_VERBS == registry_verbs
+    # Sanity: the previously-missed exploration/skip actions are covered.
+    assert registry_verbs["automate_explore"] == "automate"
+    assert registry_verbs["skip_remaining_units"] == "skip"
 
 
 def test_rubric_counts_automate_explore_as_exploration() -> None:

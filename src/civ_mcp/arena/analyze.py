@@ -106,12 +106,24 @@ def _json_fingerprint(value: object) -> str:
 
 
 def _config_fingerprint(rec: dict) -> dict:
+    # n_ctx is deliberately NOT part of the fingerprint: it is a runtime-resolved
+    # value that can legitimately change mid-run (a cold llama-swap backend probes
+    # the default first, then the real context window once warm). Keying on it
+    # would split one continuous player's turns into separate config groups.
     return {
         "model": rec.get("model", ""),
         "provider": rec.get("provider", ""),
         "civ_options": rec.get("civ_options") or {},
-        "n_ctx": rec.get("n_ctx"),
     }
+
+
+def _representative_n_ctx(recs: list[dict]) -> int | None:
+    """Pick the n_ctx to report for a group: the largest resolved value.
+
+    Ignores None and prefers the warm/upstream value over a transient default.
+    """
+    values = [n for n in (rec.get("n_ctx") for rec in recs) if n is not None]
+    return max(values) if values else None
 
 
 def config_summary(records: list[dict]) -> dict:
@@ -157,7 +169,7 @@ def config_summary(records: list[dict]) -> dict:
                 "model": fingerprint.get("model", ""),
                 "provider": fingerprint.get("provider", ""),
                 "civ_options": fingerprint.get("civ_options") or {},
-                "n_ctx": fingerprint.get("n_ctx"),
+                "n_ctx": _representative_n_ctx(recs),
                 "turns": turns,
                 "avg_steps": total_steps / turns,
                 "invalid_call_rate": (total_invalid / total_steps) if total_steps else 0.0,

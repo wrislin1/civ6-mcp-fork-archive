@@ -52,7 +52,6 @@ config_owned_overrides=()
 players=()
 run_id=""
 dry_run_args=0
-run_id_supplied=0
 max_puppet_turns="$default_max_puppet_turns"
 idle_poll_limit="$default_idle_poll_limit"
 gateway_url="$default_gateway_url"
@@ -68,7 +67,6 @@ while [[ $# -gt 0 ]]; do
       players+=("$2"); shift 2 ;;
     --run-id)
       [[ $# -ge 2 ]] || { echo "error: --run-id requires an argument" >&2; exit 1; }
-      run_id_supplied=1
       run_id="$2"; shift 2 ;;
     --max-puppet-turns)
       [[ $# -ge 2 ]] || { echo "error: --max-puppet-turns requires an argument" >&2; exit 1; }
@@ -125,10 +123,12 @@ if [[ "$config_supplied" -eq 1 ]]; then
     "--config-default-max-puppet-turns" "$max_puppet_turns"
     "--config-default-idle-poll-limit" "$idle_poll_limit"
     "--config-default-gateway-url" "$gateway_url"
+    # Always forward the locally-computed run_id so the .arena-runs/ log files and
+    # the printed RUN_ID match the transcript dir civ-arena actually writes. A
+    # config whose YAML also sets run_id is an explicit error (civ-arena rejects
+    # --run-id + a YAML run_id) rather than a silent divergence.
+    "--run-id" "$run_id"
   )
-  if [[ "$run_id_supplied" -eq 1 ]]; then
-    arena_args+=("--run-id" "$run_id")
-  fi
 else
   for spec in "${players[@]}"; do
     arena_args+=("--player" "$spec")

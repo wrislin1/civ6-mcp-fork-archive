@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from numbers import Integral
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from civ_mcp.arena.config import (
     _VALID_PROVIDERS,
 )
 from civ_mcp.arena.registry import resolve_tools
+from civ_mcp.run_id import is_safe_run_id
 
 _LOCAL_KNOBS = (
     "tools",
@@ -31,7 +31,6 @@ _TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "ci
 _BRIEFING_DEFAULTS = BriefingOptions()
 _CIV_DEFAULTS = CivOptions()
 _ARENA_DEFAULTS = ArenaConfig(players=[])
-_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -96,7 +95,7 @@ def _non_blank_string(scope: str, field: str, value: object) -> str:
 
 def _run_id_string(scope: str, value: object) -> str:
     parsed = _non_blank_string(scope, "run_id", value)
-    if parsed in {".", ".."} or not _RUN_ID_RE.fullmatch(parsed):
+    if not is_safe_run_id(parsed):
         raise ValueError(
             f"experiment config: {scope}: run_id must contain only letters, numbers, '.', '_', or '-' "
             "and must not be '.' or '..'"

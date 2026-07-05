@@ -54,8 +54,9 @@ def build_args(argv=None):
     ap.add_argument("--config-default-gateway-url", default=None, help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
-def _arena_defaults() -> ArenaConfig:
-    return ArenaConfig(players=[])
+# Field defaults come from the ArenaConfig dataclass itself; one shared instance
+# avoids rebuilding it on every resolve_config call.
+_ARENA_DEFAULTS = ArenaConfig(players=[])
 
 def _value_or_default(value, default):
     return default if value is None else value
@@ -63,7 +64,10 @@ def _value_or_default(value, default):
 def resolve_config(args) -> ArenaConfig:
     from civ_mcp.arena.experiment import load_experiment
 
-    defaults = _arena_defaults()
+    defaults = _ARENA_DEFAULTS
+    # getattr fallbacks: resolve_config accepts partial argument namespaces (test
+    # stubs build a minimal Args that omits config-path attrs to exercise the
+    # player path), so these must default gracefully rather than AttributeError.
     config_path = getattr(args, "config", "")
     if config_path and args.player:
         raise SystemExit("--config and --player are mutually exclusive")
@@ -128,11 +132,18 @@ def resolve_config(args) -> ArenaConfig:
 
 async def _run(args):
     from pathlib import Path
-    from civ_mcp.run_id import generate_run_id
+    from civ_mcp.run_id import generate_run_id, is_safe_run_id
     from civ_mcp.arena.transcript import TranscriptSink, NullSink
     cfg = resolve_config(args)
     specs = cfg.players
     run_id = args.run_id or cfg.run_id or generate_run_id()
+    # Validate at the single choke point so the CLI --run-id path gets the same
+    # path-safety guard the YAML loader already applies (traversal-proof run_dir).
+    if not is_safe_run_id(run_id):
+        raise SystemExit(
+            f"invalid run_id {run_id!r}: must contain only letters, numbers, '.', '_', or '-' "
+            "and must not be '.' or '..'"
+        )
     run_dir = Path(args.transcript_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)            # BEFORE CostLog (cost.py opens path directly)
     cost_path = args.cost_path or str(run_dir / "arena_cost.jsonl")

@@ -239,6 +239,11 @@ def _append_block(
     return False
 
 
+def _block_header(name: str) -> str:
+    """Section header used for both the budget accounting and the rendered block."""
+    return f"== {name.upper()} ==\n"
+
+
 async def build_briefing(
     gs: Any, opts: BriefingOptions, budget_tokens: int
 ) -> Briefing:
@@ -260,7 +265,7 @@ async def build_briefing(
 
         try:
             if name == "map":
-                map_prefix_used = len(_join_with(parts, "== MAP ==\n"))
+                map_prefix_used = len(_join_with(parts, _block_header("map")))
                 text, radius = await _map(gs, ctx, opts, map_prefix_used, char_budget)
                 if not text:
                     continue
@@ -270,7 +275,7 @@ async def build_briefing(
             briefing.errors.append(f"{name}: {exc!r}")
             continue
 
-        block = f"== {name.upper()} ==\n{text}"
+        block = f"{_block_header(name)}{text}"
         keep_building = _append_block(briefing, parts, name, block, char_budget)
         if name == "map" and keep_building:
             briefing.radius = radius

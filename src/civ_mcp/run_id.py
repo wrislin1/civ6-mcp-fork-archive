@@ -11,8 +11,27 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 import socket as _socket
 import time as _time
+
+# Single source of truth for run-id path-safety. Both the experiment-config
+# (YAML) loader and the CLI/`_run` path validate against this so a run_id can
+# never escape the transcript directory (e.g. "../../evil").
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def is_safe_run_id(value: object) -> bool:
+    """True if ``value`` is a filename-safe run id (path-traversal proof).
+
+    Grammar: a leading alphanumeric then letters/digits/'.'/'_'/'-', and never
+    '.' or '..'. Generated ids and hand-authored YAML/CLI ids share this check.
+    """
+    return (
+        isinstance(value, str)
+        and value not in {".", ".."}
+        and _RUN_ID_RE.fullmatch(value) is not None
+    )
 
 _ADJECTIVES = (
     # A

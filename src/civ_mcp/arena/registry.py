@@ -13,6 +13,10 @@ class ToolDef:
     params: dict[str, dict[str, Any]]
     required: tuple[str, ...]
     call: Callable[[Any, dict[str, Any]], Awaitable[str]]
+    # Analysis verb for action tools (e.g. "move" for move_unit); "" for query
+    # tools. The registry is the single source of truth for the tool->verb map;
+    # arena.vocab.LOCAL_TOOL_VERBS mirrors it (test-enforced) to stay import-light.
+    verb: str = ""
 
 
 def _int_param(
@@ -89,6 +93,8 @@ def _tool(
     params: dict[str, dict[str, Any]] | None,
     required: Sequence[str],
     call: Callable[[Any, dict[str, Any]], Awaitable[str]],
+    *,
+    verb: str = "",
 ) -> ToolDef:
     return ToolDef(
         name=name,
@@ -96,6 +102,7 @@ def _tool(
         params=params or {},
         required=tuple(required),
         call=call,
+        verb=verb,
     )
 
 
@@ -115,7 +122,12 @@ _MAP_RADIUS_MAX = 5
 
 
 def _clamp_map_radius(value: Any) -> int:
-    radius = int(value)
+    # Models can emit radius:null or a non-numeric value; fall back to the default
+    # instead of raising (which would surface as an ERROR tool result upstream).
+    try:
+        radius = int(value)
+    except (TypeError, ValueError):
+        radius = _MAP_RADIUS_DEFAULT
     return max(_MAP_RADIUS_MIN, min(radius, _MAP_RADIUS_MAX))
 
 
@@ -151,6 +163,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("unit_index", "x", "y"),
         lambda gs, args: gs.move_unit(args["unit_index"], args["x"], args["y"]),
+        verb="move",
     ),
     "found_city": _tool(
         "found_city",
@@ -158,6 +171,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Settler unit_index from get_units.")},
         ("unit_index",),
         lambda gs, args: gs.found_city(args["unit_index"]),
+        verb="found_city",
     ),
     "set_city_production": _tool(
         "set_city_production",
@@ -191,6 +205,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
         lambda gs, args: gs.fortify_unit(args["unit_index"]),
+        verb="fortify",
     ),
     "skip_unit": _tool(
         "skip_unit",
@@ -198,6 +213,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
         lambda gs, args: gs.skip_unit(args["unit_index"]),
+        verb="skip",
     ),
     "get_map_area": _tool(
         "get_map_area",
@@ -206,7 +222,8 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "x": _int_param("Center X coordinate."),
             "y": _int_param("Center Y coordinate."),
             "radius": _int_param(
-                "Search radius; defaults to 2 and is clamped to 0..5.",
+                f"Search radius; defaults to {_MAP_RADIUS_DEFAULT} and is clamped "
+                f"to {_MAP_RADIUS_MIN}..{_MAP_RADIUS_MAX}.",
                 minimum=_MAP_RADIUS_MIN,
                 maximum=_MAP_RADIUS_MAX,
             ),
@@ -231,6 +248,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("unit_index", "x", "y"),
         lambda gs, args: gs.attack_unit(args["unit_index"], args["x"], args["y"]),
+        verb="attack",
     ),
     "improve_tile": _tool(
         "improve_tile",
@@ -241,6 +259,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("unit_index", "improvement_name"),
         lambda gs, args: gs.improve_tile(args["unit_index"], args["improvement_name"]),
+        verb="improve",
     ),
     "remove_feature": _tool(
         "remove_feature",
@@ -248,6 +267,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Builder unit index.")},
         ("unit_index",),
         lambda gs, args: gs.remove_feature(args["unit_index"]),
+        verb="remove_feature",
     ),
     "purchase_item": _tool(
         "purchase_item",
@@ -265,6 +285,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             args["item_name"],
             args.get("yield_type", "YIELD_GOLD"),
         ),
+        verb="purchase",
     ),
     "heal_unit": _tool(
         "heal_unit",
@@ -272,6 +293,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
         lambda gs, args: gs.heal_unit(args["unit_index"]),
+        verb="heal",
     ),
     "alert_unit": _tool(
         "alert_unit",
@@ -279,6 +301,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
         lambda gs, args: gs.alert_unit(args["unit_index"]),
+        verb="alert",
     ),
     "set_civic": _tool(
         "set_civic",
@@ -286,6 +309,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"civic_name": _str_param("Civic type, for example CIVIC_FOREIGN_TRADE.")},
         ("civic_name",),
         lambda gs, args: gs.set_civic(args["civic_name"]),
+        verb="set_civic",
     ),
     "get_settle_advisor": _tool(
         "get_settle_advisor",
@@ -373,6 +397,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"city_state_player_id": _int_param("City-state player ID.")},
         ("city_state_player_id",),
         lambda gs, args: gs.send_envoy(args["city_state_player_id"]),
+        verb="send_envoy",
     ),
     "get_policies": _tool(
         "get_policies",
@@ -389,6 +414,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         lambda gs, args: gs.set_policies(
             _coerce_policy_assignments(args["assignments"])
         ),
+        verb="set_policies",
     ),
     "appoint_governor": _tool(
         "appoint_governor",
@@ -396,6 +422,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"governor_type": _str_param("Governor type name.")},
         ("governor_type",),
         lambda gs, args: gs.appoint_governor(args["governor_type"]),
+        verb="appoint_governor",
     ),
     "assign_governor": _tool(
         "assign_governor",
@@ -406,6 +433,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("governor_type", "city_id"),
         lambda gs, args: gs.assign_governor(args["governor_type"], args["city_id"]),
+        verb="assign_governor",
     ),
     "choose_pantheon": _tool(
         "choose_pantheon",
@@ -413,6 +441,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"belief_type": _str_param("Pantheon belief type.")},
         ("belief_type",),
         lambda gs, args: gs.choose_pantheon(args["belief_type"]),
+        verb="choose_pantheon",
     ),
     "get_pantheon_status": _tool(
         "get_pantheon_status",
@@ -427,6 +456,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_id": _int_param("Composite unit ID from get_units.")},
         ("unit_id",),
         lambda gs, args: gs.upgrade_unit(args["unit_id"]),
+        verb="upgrade",
     ),
     "promote_unit": _tool(
         "promote_unit",
@@ -437,6 +467,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("unit_id", "promotion_type"),
         lambda gs, args: gs.promote_unit(args["unit_id"], args["promotion_type"]),
+        verb="promote",
     ),
     "get_unit_promotions": _tool(
         "get_unit_promotions",
@@ -451,6 +482,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         {"unit_index": _int_param("Scout unit index.")},
         ("unit_index",),
         lambda gs, args: gs.automate_explore(args["unit_index"]),
+        verb="automate",
     ),
     "skip_remaining_units": _tool(
         "skip_remaining_units",
@@ -458,6 +490,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         lambda gs, args: _skip_remaining_units(gs, args),
+        verb="skip",
     ),
     "purchase_tile": _tool(
         "purchase_tile",
@@ -469,6 +502,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("city_id", "x", "y"),
         lambda gs, args: gs.purchase_tile(args["city_id"], args["x"], args["y"]),
+        verb="purchase_tile",
     ),
     "get_purchasable_tiles": _tool(
         "get_purchasable_tiles",
@@ -486,6 +520,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("city_id", "focus"),
         lambda gs, args: gs.set_city_focus(args["city_id"], args["focus"]),
+        verb="set_city_focus",
     ),
 }
 
@@ -607,6 +642,36 @@ def openai_tools(names: Sequence[str]) -> list[dict[str, Any]]:
     return tools
 
 
+def _apply_param_bounds(tool: ToolDef, args: dict[str, Any]) -> dict[str, Any]:
+    """Clamp integer args to their declared schema minimum/maximum.
+
+    Enforces the bounds declared via ``_int_param(minimum=, maximum=)`` for every
+    tool at the single dispatch choke point, so bounds are not a per-tool special
+    case. Non-integer or malformed values are left untouched for the tool (or its
+    own coercion, e.g. _clamp_map_radius) to handle.
+    """
+    bounded: dict[str, Any] | None = None
+    for pname, pspec in tool.params.items():
+        if pspec.get("type") != "integer":
+            continue
+        lo = pspec.get("minimum")
+        hi = pspec.get("maximum")
+        if (lo is None and hi is None) or pname not in args:
+            continue
+        try:
+            val = int(args[pname])
+        except (TypeError, ValueError):
+            continue
+        if lo is not None:
+            val = max(lo, val)
+        if hi is not None:
+            val = min(hi, val)
+        if bounded is None:
+            bounded = dict(args)
+        bounded[pname] = val
+    return bounded if bounded is not None else args
+
+
 async def dispatch(
     gs: Any,
     name: str,
@@ -616,7 +681,7 @@ async def dispatch(
     if allowed is not None and name not in allowed:
         raise KeyError(name)
     tool = TOOL_REGISTRY[name]
-    return await tool.call(gs, args)
+    return await tool.call(gs, _apply_param_bounds(tool, args))
 
 
 async def _narrate_overview(gs: Any, args: dict[str, Any]) -> str:
