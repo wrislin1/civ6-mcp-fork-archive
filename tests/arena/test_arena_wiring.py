@@ -149,6 +149,18 @@ def test_build_policies_threads_options(tmp_path):
     assert any(t["function"]["name"] == "get_map_area" for t in pol._tools)
 
 
+def test_build_policies_uses_arena_max_agent_steps_for_default_local_options(tmp_path):
+    spec = parse_player_spec("3:local:m")
+    cfg = ArenaConfig(players=[spec], max_agent_steps=2)
+    cost = CostLog(str(tmp_path / "c.jsonl"))
+
+    policies, _backends = build_policies([spec], cost, cfg)
+    pol = policies[3]
+
+    assert pol.max_steps == 2
+    assert pol.options.max_steps == 2
+
+
 def test_player_shorthand_honors_max_agent_steps():
     cfg = resolve_config(build_args(["--player", "3:local:m", "--max-agent-steps", "12"]))
     assert cfg.players[0].options.max_steps == 12

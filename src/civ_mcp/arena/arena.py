@@ -6,6 +6,7 @@ from civ_mcp.connection import GameConnection
 from civ_mcp.game_state import GameState
 from civ_mcp.arena.config import (
     ArenaConfig,
+    CivOptions,
     CLI_PROVIDER_COMMANDS,
     parse_player_spec,
     DEFAULT_GATEWAY_URL,
@@ -28,8 +29,13 @@ def build_policies(specs, cost, cfg):
                 spec.gateway or cfg.gateway_url,   # per-civ gateway override, else the global default
                 os.environ.get(cfg.api_key_env, "x"), spec.model)
             local_backends.append(backend)
-            policies[spec.player_id] = LLMPolicy(
-                backend, cost, max_steps=cfg.max_agent_steps, options=spec.options)
+            options = spec.options
+            if (
+                cfg.max_agent_steps != _ARENA_DEFAULTS.max_agent_steps
+                and options.max_steps == CivOptions().max_steps
+            ):
+                options = replace(options, max_steps=cfg.max_agent_steps)
+            policies[spec.player_id] = LLMPolicy(backend, cost, options=options)
     return policies, local_backends
 
 def build_args(argv=None):
