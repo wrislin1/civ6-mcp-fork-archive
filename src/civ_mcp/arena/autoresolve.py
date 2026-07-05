@@ -8,6 +8,8 @@ the authoritative signal is a non-empty `get_unit_promotions(unit_id).promotions
 
 from __future__ import annotations
 
+from typing import Any
+
 from civ_mcp.lua import PromotionOption, UnitPromotionStatus
 
 # Ordered global preference of promotion *types*. The type identifies its own tree
@@ -42,3 +44,43 @@ def pick_promotion(status: UnitPromotionStatus) -> PromotionOption | None:
         if pref in by_type:
             return by_type[pref]
     return promos[0]
+
+
+async def sweep_promotions(gs: Any) -> list[dict]:
+    """Spend any pending promotion on every puppet unit. Best-effort: never raises.
+
+    Enumerates units, then for EACH unit checks `get_unit_promotions` (do not
+    pre-filter on `needs_promotion` -- it is always false). A non-empty
+    `status.promotions` means a promotion is pending; pick one and apply it.
+    """
+    swept: list[dict] = []
+    try:
+        units = await gs.get_units()
+    except Exception:
+        return swept
+    if isinstance(units, str):
+        return swept
+
+    for u in units:
+        try:
+            status = await gs.get_unit_promotions(u.unit_id)
+        except Exception:
+            continue  # e.g. civilians have no experience object
+        if not getattr(status, "promotions", None):
+            continue
+        pick = pick_promotion(status)
+        if pick is None:
+            continue
+        entry: dict = {
+            "unit_id": u.unit_id,
+            "unit_type": getattr(u, "unit_type", ""),
+            "promotion_type": pick.promotion_type,
+            "ok": False,
+        }
+        try:
+            result = await gs.promote_unit(u.unit_id, pick.promotion_type)
+            entry["ok"] = not (isinstance(result, str) and result.startswith("Error"))
+        except Exception as e:  # never let a single unit break the sweep
+            entry["error"] = repr(e)
+        swept.append(entry)
+    return swept
