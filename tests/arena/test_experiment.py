@@ -1,8 +1,13 @@
+from pathlib import Path
+
 import pytest
 
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.experiment import load_experiment
 
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SLICE1_GEMMA_STRATEGY_AB = REPO_ROOT / "experiments" / "gemma-strategy-ab-slice1.yaml"
 
 GOOD = """
 run_id: exp-1
@@ -30,6 +35,58 @@ def _write(tmp_path, text):
     p = tmp_path / "exp.yaml"
     p.write_text(text)
     return p
+
+
+def test_loads_gemma_strategy_ab_slice1_artifact():
+    cfg = load_experiment(SLICE1_GEMMA_STRATEGY_AB)
+
+    assert cfg.run_id == ""
+    assert cfg.max_puppet_turns == 140
+    assert cfg.idle_poll_limit == 3600
+    assert cfg.puppet_ids == [1, 2, 3, 4, 5, 6, 7]
+
+    by_player = {player.player_id: player for player in cfg.players}
+    assert set(by_player) == {1, 2, 3, 4, 5, 6, 7}
+
+    gateway = "http://192.168.20.196:11440/v1"
+    treatment_sections = (
+        "overview",
+        "units",
+        "cities",
+        "map",
+        "research",
+        "production_options",
+        "threats",
+        "rivals",
+        "empire_resources",
+    )
+
+    for player_id in (1, 3, 5, 7):
+        player = by_player[player_id]
+        assert player.provider == "local"
+        assert player.model == "gemma4-26b"
+        assert player.gateway == gateway
+        assert player.options.tools == "full"
+        assert player.options.result_char_cap == 6000
+        assert player.options.max_steps == 10
+        assert player.options.playbook == "condensed"
+        assert player.options.context_budget == "auto"
+        assert player.options.briefing.enabled is True
+        assert player.options.briefing.map_radius == 3
+        assert player.options.briefing.sections == treatment_sections
+        assert "victory" not in player.options.briefing.sections
+
+    for player_id in (2, 4, 6):
+        player = by_player[player_id]
+        assert player.provider == "local"
+        assert player.model == "gemma4-26b"
+        assert player.gateway == gateway
+        assert player.options.tools == "minimal"
+        assert player.options.result_char_cap == 1500
+        assert player.options.max_steps == 6
+        assert player.options.playbook == "none"
+        assert player.options.context_budget == "auto"
+        assert player.options.briefing.enabled is False
 
 
 def test_load_good(tmp_path):
