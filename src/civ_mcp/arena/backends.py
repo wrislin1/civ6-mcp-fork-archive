@@ -2,6 +2,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 
+# A turn-step is "reason, then emit one tool call". Observed legit treatment steps
+# reach ~1900 completion tokens, so cap with headroom above that. Without any cap a
+# degenerate/looping generation runs until it exhausts the 131K context, pegging the
+# GPU for minutes and stalling the whole game on one turn; 3072 bounds a runaway to
+# ~1-1.5 min while (almost) never truncating a valid step. The timeout is a backstop
+# against a hung upstream — with the token cap it should essentially never fire.
+MAX_COMPLETION_TOKENS = 3072
+REQUEST_TIMEOUT_S = 120.0
+
 @dataclass
 class Reply:
     text: str | None
@@ -16,7 +25,12 @@ class OpenAICompatBackend:
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
-        kw = dict(model=self.model, messages=messages)
+        kw = dict(
+            model=self.model,
+            messages=messages,
+            max_tokens=MAX_COMPLETION_TOKENS,
+            timeout=REQUEST_TIMEOUT_S,
+        )
         if tools:
             kw["tools"] = tools
             kw["tool_choice"] = "auto"
