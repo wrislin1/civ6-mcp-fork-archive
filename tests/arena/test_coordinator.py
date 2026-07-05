@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+from civ_mcp import lua as lq
+from civ_mcp.arena import autoresolve
 from civ_mcp.arena.coordinator import run_arena, ScriptedPolicy, _reconnect_with_retry
 from civ_mcp.arena.config import ArenaConfig, PlayerSpec
 
@@ -48,6 +50,40 @@ class FakeGS:
     async def get_game_overview(self): return "OV"
     async def get_units(self): return []
     async def skip_unit(self, i): self.ran += 1; return "SKIP"
+
+
+class _PromoUnit:
+    def __init__(self, unit_id):
+        self.unit_id = unit_id
+        self.unit_type = "UNIT_WARRIOR"
+
+
+class SweepGS(FakeGS):
+    def __init__(self):
+        super().__init__()
+        self.promoted = []
+
+    async def get_units(self):
+        return [_PromoUnit(1)]
+
+    async def get_unit_promotions(self, unit_id):
+        return lq.UnitPromotionStatus(
+            unit_id=unit_id,
+            unit_index=1,
+            unit_type="UNIT_WARRIOR",
+            promotions=[
+                lq.PromotionOption(
+                    promotion_type="PROMOTION_BATTLECRY",
+                    name="Battlecry",
+                    description="d",
+                )
+            ],
+        )
+
+    async def promote_unit(self, unit_id, promotion_type):
+        self.promoted.append((unit_id, promotion_type))
+        return f"Promoted {unit_id}"
+
 
 @pytest.mark.asyncio
 async def test_coordinator_runs_one_puppet_turn_and_restores():
@@ -252,6 +288,84 @@ async def test_coordinator_cancelled_in_finally_reraises_after_full_handback(mon
     assert any("SetLocalPlayerAndObserver(0)" in c for c in conn.read_calls)
 
 
+@pytest.mark.asyncio
+async def test_sweep_runs_and_is_logged():
+    conn, gs = FakeConn(), SweepGS()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=ScriptedPolicy())
+
+    assert conn.restored is True
+    assert gs.promoted == [(1, "PROMOTION_BATTLECRY")]
+    assert result["log"][0]["promotion_sweep"][0]["promotion_type"] == "PROMOTION_BATTLECRY"
+
+
+@pytest.mark.asyncio
+async def test_sweep_failure_does_not_block_handback(monkeypatch):
+    async def boom(_gs):
+        raise RuntimeError("sweep failed")
+
+    class NoopPolicy:
+        async def __call__(self, gs, player_id, turn):
+            return {"summary": "noop", "actions": []}
+
+    monkeypatch.setattr(autoresolve, "sweep_promotions", boom)
+    conn, gs = FakeConn(), FakeGS()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=NoopPolicy())
+
+    assert conn.restored is True
+    assert result["log"][0]["promotion_sweep"] == []
+
+
+@pytest.mark.asyncio
+async def test_policy_result_cannot_overwrite_promotion_sweep_log():
+    class ConflictingPolicy:
+        async def __call__(self, gs, player_id, turn):
+            return {
+                "summary": "conflict",
+                "actions": [],
+                "promotion_sweep": [{"promotion_type": "POLICY_VALUE"}],
+            }
+
+    conn, gs = FakeConn(), SweepGS()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=ConflictingPolicy())
+
+    assert result["log"][0]["promotion_sweep"][0]["promotion_type"] == "PROMOTION_BATTLECRY"
+
+
+@pytest.mark.asyncio
+async def test_exclusive_policy_reconnects_before_sweep(monkeypatch):
+    sweep_connected = []
+
+    async def recording_sweep(_gs):
+        sweep_connected.append(conn.is_connected)
+        return [{"promotion_type": "PROMOTION_BATTLECRY"}]
+
+    class ExclusivePolicy:
+        needs_exclusive_tuner = True
+
+        async def __call__(self, gs, player_id, turn):
+            assert conn.is_connected is False
+            return {"summary": "exclusive", "actions": []}
+
+    conn, gs = FakeConn(), FakeGS()
+    monkeypatch.setattr(autoresolve, "sweep_promotions", recording_sweep)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "cli-claude", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=ExclusivePolicy())
+
+    assert result["puppet_turns_played"] == 1
+    assert sweep_connected == [True]
+
+
 # ---------------------------------------------------------------------------
 # Task 4 — transcript instrumentation tests
 # ---------------------------------------------------------------------------
@@ -328,6 +442,20 @@ async def test_transcript_write_called_once_per_puppet_turn():
     assert rec["driver"] == "in_process"
     # payload keys merged in
     assert rec["final_answer"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_transcript_record_includes_promotion_sweep():
+    conn = FakeConnWithOverview()
+    gs = SweepGS()
+    gs.conn = conn
+    sink = FakeSink()
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1])
+
+    await run_arena(conn, gs, cfg, policy=TranscriptPolicy(), transcript=sink)
+
+    assert sink.records[0]["promotion_sweep"][0]["promotion_type"] == "PROMOTION_BATTLECRY"
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 from civ_mcp import lua as lq
-from civ_mcp.arena import hook
+from civ_mcp.arena import autoresolve, hook
 
 
 async def _reconnect_with_retry(conn, attempts=5, delay=0.5):
@@ -93,11 +93,25 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
                 result = await pol(gs, st.local, st.turn)
-                _log_entry = {k: v for k, v in result.items() if k != "transcript"}
-                log.append({"player": st.local, "turn": st.turn, **_log_entry})
                 if exclusive and not conn.is_connected:
                     await _reconnect_with_retry(conn)   # reclaim before we end the turn
+                try:
+                    swept = await autoresolve.sweep_promotions(gs)
+                except Exception as e:
+                    swept = []
+                    print(f"[arena] promotion sweep failed: {e!r}", file=sys.stderr)
                 state_after = await _overview_snapshot(gs) if _tx_on else None
+                _log_entry = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("transcript", "promotion_sweep")
+                }
+                log.append({
+                    "player": st.local,
+                    "turn": st.turn,
+                    **_log_entry,
+                    "promotion_sweep": swept,
+                })
                 if _tx_on and result.get("transcript"):
                     payload = result["transcript"]
                     steps = payload.get("steps", [])
@@ -124,6 +138,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         "state_before": state_before,
                         "state_after":  state_after,
                         "state_delta":  state_delta,
+                        "promotion_sweep": swept,
                     }
                     transcript.write(record)
                 # End this puppet's turn and hand control back toward the human.
