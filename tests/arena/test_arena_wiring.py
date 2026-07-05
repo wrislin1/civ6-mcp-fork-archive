@@ -205,6 +205,42 @@ def test_config_yaml_run_id_survives_when_cli_run_id_absent(tmp_path):
     assert cfg.run_id == "file-run"
 
 
+def test_config_rejects_unsafe_cli_run_id_at_resolve_boundary(tmp_path):
+    p = tmp_path / "e.yaml"
+    p.write_text("civs:\n  - {player: 3, provider: local, model: m}\n")
+
+    with pytest.raises(SystemExit, match="invalid run_id"):
+        resolve_config(build_args(["--config", str(p), "--run-id", "../../evil"]))
+
+
+def test_config_resolve_threads_runtime_fields_into_cfg(tmp_path):
+    p = tmp_path / "e.yaml"
+    cost_path = tmp_path / "cost.jsonl"
+    transcript_dir = tmp_path / "runs"
+    p.write_text("civs:\n  - {player: 3, provider: local, model: m}\n")
+
+    cfg = resolve_config(
+        build_args(
+            [
+                "--config",
+                str(p),
+                "--api-key-env",
+                "LOCAL_ARENA_KEY",
+                "--dry-run",
+                "--cost-path",
+                str(cost_path),
+                "--transcript-dir",
+                str(transcript_dir),
+            ]
+        )
+    )
+
+    assert cfg.api_key_env == "LOCAL_ARENA_KEY"
+    assert cfg.dry_run is True
+    assert cfg.cost_path == str(cost_path)
+    assert cfg.transcript_dir == str(transcript_dir)
+
+
 def test_config_rejects_cli_run_id_when_yaml_run_id_present(tmp_path):
     p = tmp_path / "e.yaml"
     p.write_text("run_id: file-run\ncivs:\n  - {player: 3, provider: local, model: m}\n")

@@ -61,6 +61,15 @@ _ARENA_DEFAULTS = ArenaConfig(players=[])
 def _value_or_default(value, default):
     return default if value is None else value
 
+def _require_safe_run_id(run_id: str) -> None:
+    from civ_mcp.run_id import is_safe_run_id
+
+    if not is_safe_run_id(run_id):
+        raise SystemExit(
+            f"invalid run_id {run_id!r}: must contain only letters, numbers, '.', '_', or '-' "
+            "and must not be '.' or '..'"
+        )
+
 def resolve_config(args) -> ArenaConfig:
     from civ_mcp.arena.experiment import load_experiment
 
@@ -107,9 +116,12 @@ def resolve_config(args) -> ArenaConfig:
         if args.run_id is not None and cfg.run_id:
             raise SystemExit("--config file run_id cannot be overridden by --run-id")
         if args.run_id:
+            _require_safe_run_id(args.run_id)
             cfg.run_id = args.run_id
         cfg.dry_run = args.dry_run
         cfg.api_key_env = args.api_key_env
+        cfg.cost_path = args.cost_path or defaults.cost_path
+        cfg.transcript_dir = args.transcript_dir
         return cfg
 
     specs = [parse_player_spec(s) for s in args.player]
@@ -132,18 +144,14 @@ def resolve_config(args) -> ArenaConfig:
 
 async def _run(args):
     from pathlib import Path
-    from civ_mcp.run_id import generate_run_id, is_safe_run_id
+    from civ_mcp.run_id import generate_run_id
     from civ_mcp.arena.transcript import TranscriptSink, NullSink
     cfg = resolve_config(args)
     specs = cfg.players
     run_id = args.run_id or cfg.run_id or generate_run_id()
     # Validate at the single choke point so the CLI --run-id path gets the same
     # path-safety guard the YAML loader already applies (traversal-proof run_dir).
-    if not is_safe_run_id(run_id):
-        raise SystemExit(
-            f"invalid run_id {run_id!r}: must contain only letters, numbers, '.', '_', or '-' "
-            "and must not be '.' or '..'"
-        )
+    _require_safe_run_id(run_id)
     run_dir = Path(args.transcript_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)            # BEFORE CostLog (cost.py opens path directly)
     cost_path = args.cost_path or str(run_dir / "arena_cost.jsonl")

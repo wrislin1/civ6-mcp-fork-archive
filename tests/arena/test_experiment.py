@@ -102,6 +102,48 @@ civs:
     assert cfg.gateway_url == "http://launcher.example/v1"
 
 
+def test_load_experiment_preserves_all_supplied_defaults_for_omitted_arena_fields(tmp_path):
+    from civ_mcp.arena.config import ArenaConfig
+
+    p = _write(
+        tmp_path,
+        """
+civs:
+  - player: 3
+    provider: local
+    model: gemma4-26b
+""",
+    )
+
+    cfg = load_experiment(
+        p,
+        defaults=ArenaConfig(
+            players=[],
+            max_puppet_turns=8,
+            gateway_url="http://launcher.example/v1",
+            api_key_env="LOCAL_ARENA_KEY",
+            dry_run=True,
+            max_agent_steps=3,
+            idle_poll_limit=3600,
+            cost_path="custom-cost.jsonl",
+            run_id="default-run",
+            transcript_dir="custom-runs",
+        ),
+    )
+
+    assert [p.player_id for p in cfg.players] == [3]
+    assert cfg.puppet_ids == [3]
+    assert cfg.max_puppet_turns == 8
+    assert cfg.gateway_url == "http://launcher.example/v1"
+    assert cfg.api_key_env == "LOCAL_ARENA_KEY"
+    assert cfg.dry_run is True
+    assert cfg.max_agent_steps == 3
+    assert cfg.idle_poll_limit == 3600
+    assert cfg.cost_path == "custom-cost.jsonl"
+    assert cfg.run_id == "default-run"
+    assert cfg.transcript_dir == "custom-runs"
+
+
 def test_load_experiment_yaml_values_override_supplied_defaults(tmp_path):
     from civ_mcp.arena.config import ArenaConfig
 

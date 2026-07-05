@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from numbers import Integral
 from pathlib import Path
 
@@ -245,7 +246,8 @@ def load_experiment(path: str | Path, defaults: ArenaConfig | None = None) -> Ar
     ids = [player.player_id for player in players]
     if len(ids) != len(set(ids)):
         raise ValueError(f"experiment config {config_path}: duplicate player ids {ids}")
-    return ArenaConfig(
+    return replace(
+        arena_defaults,
         players=players,
         max_puppet_turns=_top_int(
             config_path,
