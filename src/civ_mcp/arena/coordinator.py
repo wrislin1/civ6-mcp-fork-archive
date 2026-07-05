@@ -42,6 +42,36 @@ async def _overview_snapshot(gs):
         return None
 
 
+# When the human seat is idle, a first-meet greeting can get orphaned by the
+# puppet local-player switch and block the whole game. Sweep for open sessions on
+# the human's side roughly every this-many idle polls (~seconds) and close them.
+_HUMAN_SESSION_CLEAR_EVERY = 5
+
+
+async def _clear_stuck_human_sessions(conn) -> int:
+    """Best-effort: force-close any open diplomacy session for the current local
+    (human) player, so an orphaned first-meet greeting cannot block turn advance.
+    Runs only in the human-idle branch; never raises into the poll loop."""
+    try:
+        lines = await conn.execute_write(lq.build_diplomacy_session_query())
+    except Exception:
+        return 0
+    pids = []
+    for line in lines:
+        if line.startswith("SESSION|"):
+            parts = line.split("|")
+            if len(parts) > 2 and parts[2].lstrip("-").isdigit():
+                pids.append(int(parts[2]))
+    closed = 0
+    for pid in pids:
+        try:
+            await conn.execute_write(lq.build_diplomacy_respond(pid, "EXIT"))
+            closed += 1
+        except Exception:
+            pass
+    return closed
+
+
 class ScriptedPolicy:
     """Deterministic no-LLM policy for the dry-run gate: observe, then skip unit 0."""
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
@@ -65,6 +95,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
         deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
+        idle_since_clear = 0
         while remaining > 0 and deadline_polls > 0:
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
@@ -117,7 +148,15 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 await hook.restore_local(conn, 0)
                 played += 1
                 remaining -= 1
+                idle_since_clear = 0
             else:
+                # Human seat is idle. Periodically clear any orphaned first-meet
+                # greeting session so it cannot block turn progression.
+                if st.local not in puppet_ids and st.local >= 0:
+                    idle_since_clear += 1
+                    if idle_since_clear >= _HUMAN_SESSION_CLEAR_EVERY:
+                        idle_since_clear = 0
+                        await _clear_stuck_human_sessions(conn)
                 await asyncio.sleep(1.0)
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}
