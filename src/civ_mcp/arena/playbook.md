@@ -6,6 +6,8 @@
 3. get_cities — no city may have an empty production queue.
 4. If you have a settler: settle good land fast (see Expansion). If you have a builder:
    improve tiles (see Builders). If military: scout, escort, or clear barbarians.
+5. If the map shows a visible goody hut (`IMPROVEMENT_GOODY_HUT`), send any safe unit
+   onto it quickly. Huts are free rewards and first-come.
 
 ## Expansion (the strongest lever)
 - More cities = more science, gold, and production. Aim for a new city every ~10 turns
@@ -24,8 +26,17 @@
 - Early tech order that rarely fails: what your terrain needs (Mining for hills/woods,
   Animal Husbandry for pastures), then Pottery, Writing, Bronze Working (reveals Iron).
 - Set a civic every time one finishes: Code of Laws -> Foreign Trade -> Craftsmanship ->
-  Early Empire (boosts from settling/improving accelerate these).
+  Early Empire -> Political Philosophy. Tier-1 governments give 4 policy slots; do not
+  stay in the starting 2-slot government once a real government is available.
+- Eurekas and inspirations are half-cost accelerators. If a near-term unit, improvement,
+  kill, or civic action unlocks one, prefer it over blind beelining.
 - Anything flagged as completable in <= 2 turns is usually worth grabbing first.
+
+## Pantheon and city-states
+- Around turn 20, check whether you can choose a pantheon. Favor practical early beliefs
+  that improve growth, production, faith, or a nearby resource cluster.
+- Meeting city-states early matters. First-meet yields and envoy leverage compound; send
+  envoys when tokens are available and the city-state bonus fits your plan.
 
 ## Builders
 - 3 charges each. Improve bonus/luxury resources first (Plantation, Mine, Pasture,
@@ -40,11 +51,16 @@
   with melee. Fortified units get +4 and heal each turn.
 - Clear barbarian camps near your cities within a few turns of spotting them, or they
   will spawn endless raiders. One warrior + one slinger/archer clears an early camp.
+- A barbarian scout that sees your city can report back to its camp and trigger raids.
+  Intercept or kill it before it returns home.
 - Keep one military unit in or beside each city.
 
 ## Districts (unlock with population)
 - Campus (science) next to mountains; Commercial Hub (gold) on rivers; Holy Site
   (faith) next to mountains/forest. Place with set_city_production once available.
+- Specialize early cities instead of making every city generic. Focus the first districts
+  around your best adjacency and victory path, and preserve future district discount
+  opportunities by not overbuilding one district type everywhere.
 
 ## Using the map
 - The briefing shows tiles around your units and cities: terrain, resources, rivers,
