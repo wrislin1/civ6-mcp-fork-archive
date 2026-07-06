@@ -50,6 +50,7 @@ def test_loads_gemma_strategy_ab_slice1_artifact():
 
     gateway = "http://192.168.20.196:11440/v1"
     treatment_sections = (
+        "promotions",
         "overview",
         "units",
         "cities",
@@ -87,6 +88,14 @@ def test_loads_gemma_strategy_ab_slice1_artifact():
         assert player.options.playbook == "none"
         assert player.options.context_budget == "auto"
         assert player.options.briefing.enabled is False
+
+
+def test_playbook_covers_promotions_and_expansion_doctrine():
+    text = (REPO_ROOT / "src" / "civ_mcp" / "arena" / "playbook.md").read_text()
+
+    for header in ("## Unit promotions", "## Unit upgrades", "## Signals to watch"):
+        assert header in text
+    assert "NEEDS PROMOTION" in text
 
 
 def test_load_good(tmp_path):

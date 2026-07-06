@@ -12,9 +12,10 @@
 ## Expansion (the strongest lever)
 - More cities = more science, gold, and production. Aim for a new city every ~10 turns
   early; 4+ cities by turn 60.
-- Settle on flat land near fresh water (river/lake), 3+ tiles from another city, with
-  hills and resources nearby. Coastal is fine if the land is good.
-- A settler caught alone is captured: keep a warrior adjacent or ahead on the path.
+- Prefer fresh water (river/lake) and a flat or plains-hills city center, 3+ tiles
+  from another city, with hills and resources nearby. Coastal is fine if the land is good.
+- A settler caught alone is captured: escort settlers with a warrior adjacent or ahead
+  on the path.
 - Production priority in a new empire: Scout -> Settler -> Settler/Builder, adding a
   Warrior when barbarians threaten and a Monument when safe.
 
@@ -54,6 +55,8 @@
 - A barbarian scout that sees your city can report back to its camp and trigger raids.
   Intercept or kill it before it returns home.
 - Keep one military unit in or beside each city.
+- For war, position units while still at peace. The combat engine recognizes a newly
+  declared enemy only on the next turn, so attack after the declaration turn.
 
 ## Districts (unlock with population)
 - Campus (science) next to mountains; Commercial Hub (gold) on rivers; Holy Site
@@ -72,3 +75,21 @@
 1. Empty production queue -> fix it. 2. Idle unit -> use it. 3. Settler ready and a
 spot known -> settle. 4. Barbarian camp near a city -> clear it. 5. Otherwise: improve
 tiles, scout, and keep research/civics running.
+
+## Unit promotions
+Units earn XP by surviving combat; ranged units earn XP without taking damage. A unit
+with an unspent promotion earns NO more XP until you spend it -- always promote when
+NEEDS PROMOTION shows. Promoting also heals the unit; use it as mid-fight sustain.
+Strong early picks: melee -> Battlecry (+7 attacking); ranged -> Volley (+5 vs land);
+recon -> prefer a vision/mobility promotion when offered (Sentry, Spyglass, Ranger,
+Alpine). Use get_unit_promotions(unit_id) then promote_unit(unit_id, promotion_type).
+
+## Unit upgrades
+Upgrade obsolete units when you have the tech + resources + gold: Slinger->Archer with
+Archery, Warrior->Swordsman with Iron Working. Units fall behind rivals fast if not
+upgraded. Use upgrade_unit(unit_id).
+
+## Signals to watch
+Loyalty below 75 penalizes a city's yields -- assign a governor or fix amenities. Each
+new DISTINCT luxury = +1 amenity; duplicates are worthless, so save them to trade
+later. Watch era score against the Golden/Dark thresholds shown in the overview.

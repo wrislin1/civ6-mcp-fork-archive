@@ -22,7 +22,7 @@ civs:
     briefing:
       enabled: true
       map_radius: 3
-      sections: [overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
   - player: 2
     provider: local
     model: gemma4-26b
@@ -46,7 +46,7 @@ civs:
     briefing:
       enabled: true
       map_radius: 3
-      sections: [overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
   - player: 4
     provider: local
     model: gemma4-26b
@@ -70,7 +70,7 @@ civs:
     briefing:
       enabled: true
       map_radius: 3
-      sections: [overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
   - player: 6
     provider: local
     model: gemma4-26b
@@ -94,4 +94,4 @@ civs:
     briefing:
       enabled: true
       map_radius: 3
-      sections: [overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources]
