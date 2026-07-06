@@ -32,14 +32,12 @@ def _render(result: Any, renderer: Callable[..., str]) -> str:
 
 
 async def _promotions(gs: Any, ctx: dict[str, Any]) -> str:
-    units = ctx.get("units")
-    if units is None:
-        result = await gs.get_units()
-        units = [] if isinstance(result, str) else result
-        ctx["units"] = units
+    units = await _fetch_units(gs, ctx)
     if not units:
         return ""
 
+    # A future bulk promotable-unit query could replace this per-unit fan-out
+    # and the matching sweep_promotions probes with one GameCore round-trip.
     results = await asyncio.gather(
         *(gs.get_unit_promotions(u.unit_id) for u in units),
         return_exceptions=True,
@@ -72,12 +70,7 @@ async def _overview(gs: Any, ctx: dict[str, Any]) -> str:
 
 
 async def _units(gs: Any, ctx: dict[str, Any]) -> str:
-    units = ctx.get("units")
-    if units is not None:
-        return nr.narrate_units(units)
-
-    result = await gs.get_units()
-    ctx["units"] = [] if isinstance(result, str) else result
+    result = await _fetch_units_result(gs, ctx)
     return _render(result, nr.narrate_units)
 
 
@@ -196,18 +189,27 @@ _BUILDERS: dict[str, Callable[[Any, dict[str, Any]], Awaitable[str]]] = {
     "victory": _victory,
 }
 
+_HEADERS = {
+    "promotions": "== ACTION: PROMOTIONS AVAILABLE ==\n",
+}
+
 
 def _tile_count(radius: int) -> int:
     return 3 * radius * radius + 3 * radius + 1
 
 
-async def _fetch_units(gs: Any, ctx: dict[str, Any]) -> list[Any]:
+async def _fetch_units_result(gs: Any, ctx: dict[str, Any]) -> list[Any] | str:
     units = ctx.get("units")
-    if units is None:
-        result = await gs.get_units()
-        units = [] if isinstance(result, str) else result
-        ctx["units"] = units
-    return units
+    if units is not None:
+        return units
+    result = await gs.get_units()
+    ctx["units"] = [] if isinstance(result, str) else result
+    return result
+
+
+async def _fetch_units(gs: Any, ctx: dict[str, Any]) -> list[Any]:
+    result = await _fetch_units_result(gs, ctx)
+    return [] if isinstance(result, str) else result
 
 
 async def _fetch_cities(gs: Any, ctx: dict[str, Any]) -> list[Any]:
@@ -292,9 +294,7 @@ def _append_block(
 
 def _block_header(name: str) -> str:
     """Section header used for both the budget accounting and the rendered block."""
-    if name == "promotions":
-        return "== ACTION: PROMOTIONS AVAILABLE ==\n"
-    return f"== {name.upper()} ==\n"
+    return _HEADERS.get(name, f"== {name.upper()} ==\n")
 
 
 async def build_briefing(

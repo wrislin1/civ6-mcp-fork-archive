@@ -269,6 +269,20 @@ async def test_promotions_and_units_reuse_cached_units():
 
 
 @pytest.mark.asyncio
+async def test_units_preserves_string_result_while_caching_empty_units():
+    class StringUnitsGS:
+        async def get_units(self):
+            return "ERROR: units unavailable"
+
+    ctx = {}
+
+    text = await _briefing._units(StringUnitsGS(), ctx)
+
+    assert text == "ERROR: units unavailable"
+    assert ctx["units"] == []
+
+
+@pytest.mark.asyncio
 async def test_sections_in_priority_order_and_meta():
     gs = FakeGS()
 
