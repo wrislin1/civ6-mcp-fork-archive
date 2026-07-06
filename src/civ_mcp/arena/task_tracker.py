@@ -17,11 +17,12 @@ Storage: ``<transcript_dir>/<run_id>/tasks/player_<player_id>.json``
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from re import IGNORECASE, compile as re_compile
 from typing import Any, Sequence
+
+from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
 
@@ -75,9 +76,10 @@ def task_path(transcript_dir: str, run_id: str, player_id: int) -> Path:
 
 def load_task_state(transcript_dir: str, run_id: str, player_id: int) -> TaskState:
     """Load task state for a player. Returns an empty state if absent/malformed."""
-    path = task_path(transcript_dir, run_id, player_id)
+    data = read_json_file(task_path(transcript_dir, run_id, player_id))
+    if not isinstance(data, dict):
+        return _empty_state(run_id, player_id)
     try:
-        data = json.loads(path.read_text())
         tasks = tuple(_task_from_dict(t) for t in data["tasks"])
         return TaskState(
             schema_version=data["schema_version"],
@@ -85,7 +87,7 @@ def load_task_state(transcript_dir: str, run_id: str, player_id: int) -> TaskSta
             player_id=data["player_id"],
             tasks=tasks,
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         return _empty_state(run_id, player_id)
 
 
@@ -102,16 +104,13 @@ def save_task_state(
         schema_version=SCHEMA_VERSION, run_id=run_id, player_id=player_id, tasks=active
     )
     path = task_path(transcript_dir, run_id, player_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": state.schema_version,
         "run_id": state.run_id,
         "player_id": state.player_id,
         "tasks": [_task_to_dict(t) for t in state.tasks],
     }
-    tmp_path = path.with_name(path.name + ".tmp")
-    tmp_path.write_text(json.dumps(payload))
-    tmp_path.replace(path)
+    write_json_file_atomic(path, payload)
     return state
 
 

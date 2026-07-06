@@ -13,10 +13,11 @@ never leak across runs.
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
 
@@ -43,9 +44,10 @@ def memory_path(transcript_dir: str, run_id: str, player_id: int) -> Path:
 
 def load_memory(transcript_dir: str, run_id: str, player_id: int) -> StandingMemory | None:
     """Load standing memory for a player, or None if absent/unreadable/malformed."""
-    path = memory_path(transcript_dir, run_id, player_id)
+    data = read_json_file(memory_path(transcript_dir, run_id, player_id))
+    if not isinstance(data, dict):
+        return None
     try:
-        data = json.loads(path.read_text())
         return StandingMemory(
             schema_version=data["schema_version"],
             run_id=data["run_id"],
@@ -53,7 +55,7 @@ def load_memory(transcript_dir: str, run_id: str, player_id: int) -> StandingMem
             updated_turn=data["updated_turn"],
             text=data["text"],
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return None
 
 
@@ -78,7 +80,6 @@ def save_memory(
         text=_clamp(text, max_chars),
     )
     path = memory_path(transcript_dir, run_id, player_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": memory.schema_version,
         "run_id": memory.run_id,
@@ -86,9 +87,7 @@ def save_memory(
         "updated_turn": memory.updated_turn,
         "text": memory.text,
     }
-    tmp_path = path.with_name(path.name + ".tmp")
-    tmp_path.write_text(json.dumps(payload))
-    tmp_path.replace(path)
+    write_json_file_atomic(path, payload)
     return memory
 
 

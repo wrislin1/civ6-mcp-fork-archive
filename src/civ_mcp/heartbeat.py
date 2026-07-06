@@ -4,11 +4,12 @@ Writes ``~/.civ6-mcp/heartbeat.json`` atomically so the orchestrator
 can read phase and turn via SSH without process-detection hacks.
 """
 
-import json
 import logging
 import os
 import time
 from pathlib import Path
+
+from civ_mcp.json_io import write_json_file_atomic
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,6 @@ def bind_eval(model_id: str, scenario_id: str) -> None:
 def write(phase: str, turn: int = 0) -> None:
     """Write heartbeat.json atomically (tmp + rename)."""
     try:
-        HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "phase": phase,
             "turn": turn,
@@ -57,8 +57,6 @@ def write(phase: str, turn: int = 0) -> None:
             "model_id": _model_id,
             "scenario_id": _scenario_id,
         }
-        tmp = HEARTBEAT_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data))
-        tmp.replace(HEARTBEAT_PATH)
+        write_json_file_atomic(HEARTBEAT_PATH, data)
     except Exception:
         log.debug("Failed to write heartbeat", exc_info=True)
