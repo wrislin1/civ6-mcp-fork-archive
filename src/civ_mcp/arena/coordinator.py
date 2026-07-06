@@ -4,6 +4,9 @@ import sys
 from datetime import datetime, timezone
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
+from civ_mcp.arena.agent import load_playbook
+from civ_mcp.arena.briefing import build_briefing
+from civ_mcp.arena.budget import DEFAULT_N_CTX, briefing_budget
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.memory import (
     extract_standing_plan,
@@ -139,11 +142,19 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         max_tasks=opts.task_tracker.max_tasks,
                     )
 
+                policy_kwargs = {"memory_block": memory_block, "task_block": task_block}
+                if exclusive and opts.briefing.enabled:
+                    playbook_chars = (
+                        len(load_playbook()) if opts.playbook == "condensed" else 0
+                    )
+                    budget = briefing_budget(DEFAULT_N_CTX, opts, playbook_chars, 0)
+                    policy_kwargs["briefing"] = await build_briefing(
+                        gs, opts.briefing, budget
+                    )
+
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
-                result = await pol(
-                    gs, st.local, st.turn, memory_block=memory_block, task_block=task_block
-                )
+                result = await pol(gs, st.local, st.turn, **policy_kwargs)
                 if exclusive and not conn.is_connected:
                     await _reconnect_with_retry(conn)   # reclaim before we end the turn
                 try:

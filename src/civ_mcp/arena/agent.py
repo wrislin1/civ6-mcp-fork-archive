@@ -78,9 +78,11 @@ class LLMPolicy:
         *,
         memory_block: str = "",
         task_block: str = "",
+        briefing: Briefing | None = None,
     ) -> dict:
-        briefing = Briefing()
-        if self.options.briefing.enabled:
+        briefing_was_supplied = briefing is not None
+        briefing = briefing or Briefing()
+        if self.options.briefing.enabled and not briefing_was_supplied:
             if _should_resolve_n_ctx(
                 self._n_ctx,
                 self._n_ctx_source,
@@ -102,9 +104,7 @@ class LLMPolicy:
                 tool_schema_chars,
             )
             briefing = await build_briefing(gs, self.options.briefing, budget)
-        include_standing_plan_instruction = (
-            self.options.memory.enabled or self.options.task_tracker.enabled
-        )
+        include_standing_plan_instruction = self.options.standing_plan_enabled
         opening = build_opening_prompt(
             player_id=player_id,
             turn=turn,

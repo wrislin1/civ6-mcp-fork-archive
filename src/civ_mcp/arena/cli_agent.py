@@ -428,12 +428,12 @@ class CLIAgentPolicy:
         *,
         memory_block: str = "",
         task_block: str = "",
+        briefing: Briefing | None = None,
     ) -> dict:
-        include_standing_plan_instruction = (
-            self.options.memory.enabled or self.options.task_tracker.enabled
-        )
-        briefing = Briefing()
-        if self.options.briefing.enabled:
+        include_standing_plan_instruction = self.options.standing_plan_enabled
+        briefing_was_supplied = briefing is not None
+        briefing = briefing or Briefing()
+        if self.options.briefing.enabled and not briefing_was_supplied:
             playbook_chars = len(self._system_prefix)
             budget = briefing_budget(DEFAULT_N_CTX, self.options, playbook_chars, 0)
             briefing = await build_briefing(gs, self.options.briefing, budget)
@@ -461,7 +461,7 @@ class CLIAgentPolicy:
         # block survives truncation for later extraction (extract_standing_plan).
         max_summary_chars = 500
         if include_standing_plan_instruction:
-            max_summary_chars = min(4000, max(1200, self.options.memory.max_chars))
+            max_summary_chars = max(1200, self.options.standing_plan_capture_chars)
         argv = self._build_argv(prompt)
         # Layer-4 lockdown: disable run_lua/lifecycle tools server-side. Claude relays this
         # through .mcp.json; Codex receives the same values through inline mcp_servers.civ6.env.
@@ -496,6 +496,10 @@ class CLIAgentPolicy:
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "prompt_injections": prompt_injections,
+                "briefing_tokens": briefing.tokens,
+                "briefing_sections": briefing.sections,
+                "briefing_radius": briefing.radius,
+                "briefing_errors": briefing.errors,
             }
             return result
         except BaseException:
@@ -544,5 +548,9 @@ class CLIAgentPolicy:
             "prompt_tokens": pt,
             "completion_tokens": ct,
             "prompt_injections": prompt_injections,
+            "briefing_tokens": briefing.tokens,
+            "briefing_sections": briefing.sections,
+            "briefing_radius": briefing.radius,
+            "briefing_errors": briefing.errors,
         }
         return result

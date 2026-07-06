@@ -836,3 +836,86 @@ async def test_exclusive_cli_policy_still_receives_memory_and_task_blocks(tmp_pa
     assert conn.restored is True  # reconnect + handback still happened
     assert "scout north next." in pol.calls[0]["memory_block"]
     assert pol.calls[0]["memory_block"].startswith("== STANDING PLAN (captured turn 1, 1 turn old) ==")
+
+
+@pytest.mark.asyncio
+async def test_exclusive_cli_briefing_built_before_disconnect(monkeypatch):
+    from civ_mcp.arena.briefing import Briefing
+    from civ_mcp.arena.config import BriefingOptions
+    import civ_mcp.arena.coordinator as coord_mod
+
+    built_connected = []
+
+    async def fake_build_briefing(gs, opts, budget):
+        built_connected.append(conn.is_connected)
+        return Briefing(text="PREBUILT BRIEFING", tokens=4, sections=["overview"])
+
+    class ExclusiveBriefingPolicy(RecordingPolicy):
+        needs_exclusive_tuner = True
+
+        async def __call__(self, gs, player_id, turn, **kwargs):
+            assert conn.is_connected is False
+            assert kwargs["briefing"].text == "PREBUILT BRIEFING"
+            return await super().__call__(gs, player_id, turn, **kwargs)
+
+    monkeypatch.setattr(coord_mod, "build_briefing", fake_build_briefing)
+    conn = FakeConn()
+    gs = FakeGS()
+    opts = CivOptions(briefing=BriefingOptions(enabled=True))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(7, "cli-claude", "")],
+        max_puppet_turns=1,
+        puppet_ids=[7],
+    )
+    conn._polls = iter([[ "LOCAL|7", "TURN|2", "ACTIVE|true", "LAST|1" ]])
+    pol = ExclusiveBriefingPolicy({"summary": "cli ran"}, options=opts, needs_exclusive_tuner=True)
+
+    result = await run_arena(conn, gs, cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1
+    assert built_connected == [True]
+
+
+@pytest.mark.asyncio
+async def test_nonexclusive_policy_without_briefing_kwarg_runs():
+    class NarrowPolicy:
+        options = CivOptions()
+
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(
+            self,
+            gs,
+            player_id,
+            turn,
+            *,
+            memory_block="",
+            task_block="",
+        ):
+            self.calls.append(
+                {
+                    "player_id": player_id,
+                    "turn": turn,
+                    "memory_block": memory_block,
+                    "task_block": task_block,
+                }
+            )
+            return {"summary": "narrow policy ran", "actions": []}
+
+    conn = FakeConn()
+    gs = FakeGS()
+    cfg = ArenaConfig(
+        players=[PlayerSpec(7, "local", "")],
+        max_puppet_turns=1,
+        puppet_ids=[7],
+    )
+    conn._polls = iter([[ "LOCAL|7", "TURN|2", "ACTIVE|true", "LAST|1" ]])
+    pol = NarrowPolicy()
+
+    result = await run_arena(conn, gs, cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1
+    assert pol.calls == [
+        {"player_id": 7, "turn": 2, "memory_block": "", "task_block": ""}
+    ]

@@ -404,6 +404,35 @@ async def test_briefing_prepended_and_telemetry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_policy_uses_supplied_empty_briefing_without_rebuilding(monkeypatch):
+    from civ_mcp.arena import agent as agent_mod
+    from civ_mcp.arena.briefing import Briefing
+
+    async def forbidden_build(gs, opts, budget):
+        raise AssertionError("LLM policy must not rebuild a supplied briefing")
+
+    monkeypatch.setattr(agent_mod, "build_briefing", forbidden_build)
+
+    be = SpyBackend([_no_tool_reply()])
+    pol = LLMPolicy(
+        be,
+        FakeCost(),
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+
+    out = await pol(
+        None,
+        3,
+        7,
+        briefing=Briefing(text="", tokens=0, sections=[], errors=["empty prebuild"]),
+    )
+
+    user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
+    assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
+    assert out["transcript"]["briefing_errors"] == ["empty prebuild"]
+
+
+@pytest.mark.asyncio
 async def test_n_ctx_resolved_once_across_turns(monkeypatch):
     from civ_mcp.arena import agent as agent_mod
     from civ_mcp.arena.briefing import Briefing

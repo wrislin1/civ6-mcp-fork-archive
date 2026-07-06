@@ -950,3 +950,101 @@ def test_call_prepends_condensed_playbook_when_enabled(monkeypatch):
     assert load_playbook() in joined
     # playbook text must precede the core turn instruction
     assert joined.index(load_playbook()) < joined.index("Do NOT end the turn")
+
+
+def test_call_uses_prebuilt_briefing_without_building_from_gs(monkeypatch):
+    from civ_mcp.arena import cli_agent as cli_mod
+    from civ_mcp.arena.briefing import Briefing
+    from civ_mcp.arena.config import BriefingOptions
+
+    captured = {}
+
+    async def forbidden_build(gs, opts, budget):
+        raise AssertionError("CLI policy must not build briefing when one is supplied")
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(cli_mod, "build_briefing", forbidden_build)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude",
+        FakeCost(),
+        project_dir="/x",
+        timeout_s=5,
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+
+    result = asyncio.run(
+        pol(
+            None,
+            player_id=3,
+            turn=9,
+            briefing=Briefing(text="PREBUILT BRIEFING", tokens=4, sections=["overview"]),
+        )
+    )
+
+    assert result["summary"] == "ok"
+    assert "PREBUILT BRIEFING" in " ".join(captured["argv"])
+    assert result["transcript"]["briefing_tokens"] == 4
+    assert result["transcript"]["briefing_sections"] == ["overview"]
+
+
+def test_call_uses_supplied_empty_briefing_without_rebuilding(monkeypatch):
+    from civ_mcp.arena import cli_agent as cli_mod
+    from civ_mcp.arena.briefing import Briefing
+    from civ_mcp.arena.config import BriefingOptions
+
+    async def forbidden_build(gs, opts, budget):
+        raise AssertionError("CLI policy must not rebuild a supplied briefing")
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(cli_mod, "build_briefing", forbidden_build)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude",
+        FakeCost(),
+        project_dir="/x",
+        timeout_s=5,
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+
+    result = asyncio.run(
+        pol(
+            None,
+            player_id=3,
+            turn=9,
+            briefing=Briefing(
+                text="",
+                tokens=0,
+                sections=[],
+                errors=["empty prebuild"],
+            ),
+        )
+    )
+
+    assert result["summary"] == "ok"
+    assert result["transcript"]["briefing_errors"] == ["empty prebuild"]
