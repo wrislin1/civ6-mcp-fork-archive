@@ -158,6 +158,368 @@ async def test_dispatch_rejects_out_of_allowed():
         )
 
 
+DIPLOMACY_TOOL_NAMES = {
+    "get_pending_diplomacy",
+    "respond_to_diplomacy",
+    "get_pending_trades",
+    "respond_to_trade",
+    "get_trade_options",
+    "propose_trade",
+    "propose_peace",
+    "send_diplomatic_action",
+    "form_alliance",
+}
+
+
+def test_diplomacy_tools_registered_full_only():
+    assert DIPLOMACY_TOOL_NAMES <= set(TOOL_REGISTRY)
+    assert DIPLOMACY_TOOL_NAMES <= set(resolve_tools("full"))
+    assert DIPLOMACY_TOOL_NAMES.isdisjoint(set(resolve_tools("minimal")))
+    assert DIPLOMACY_TOOL_NAMES.isdisjoint(set(resolve_tools("standard")))
+
+    for internal_name in (
+        "diplomacy_respond",
+        "get_deal_options",
+        "get_pending_deals",
+        "respond_to_deal",
+    ):
+        assert internal_name not in TOOL_REGISTRY
+
+
+def test_diplomacy_tool_schema_shape():
+    by_name = {tool["function"]["name"]: tool["function"] for tool in openai_tools(sorted(DIPLOMACY_TOOL_NAMES))}
+
+    assert by_name["respond_to_trade"]["parameters"]["properties"]["accept"]["type"] == "boolean"
+    assert set(by_name["respond_to_trade"]["parameters"]["required"]) == {"other_player_id", "accept"}
+    assert set(by_name["get_trade_options"]["parameters"]["required"]) == {"other_player_id"}
+    assert set(by_name["respond_to_diplomacy"]["parameters"]["required"]) == {"other_player_id", "response"}
+    assert by_name["propose_trade"]["parameters"]["properties"]["mode"]["type"] == "string"
+    assert by_name["form_alliance"]["parameters"]["properties"]["alliance_type"]["type"] == "string"
+
+    action_desc = by_name["send_diplomatic_action"]["parameters"]["properties"]["action"]["description"]
+    for token in (
+        "DIPLOMATIC_DELEGATION",
+        "DECLARE_FRIENDSHIP",
+        "DENOUNCE",
+        "RESIDENT_EMBASSY",
+        "OPEN_BORDERS",
+        "DECLARE_SURPRISE_WAR",
+        "DECLARE_FORMAL_WAR",
+        "DECLARE_HOLY_WAR",
+        "DECLARE_LIBERATION_WAR",
+        "DECLARE_RECONQUEST_WAR",
+        "DECLARE_PROTECTORATE_WAR",
+        "DECLARE_COLONIAL_WAR",
+        "DECLARE_TERRITORIAL_WAR",
+    ):
+        assert token in action_desc
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_diplomacy_and_trades_are_narrated():
+    class FakeGS:
+        async def get_diplomacy_sessions(self):
+            from civ_mcp import lua as lq
+
+            return [
+                lq.DiplomacySession(
+                    session_id=12,
+                    other_player_id=3,
+                    other_civ_name="Rome",
+                    other_leader_name="Trajan",
+                    choices=[],
+                    dialogue_text="Welcome.",
+                    buttons="POSITIVE;NEGATIVE",
+                )
+            ]
+
+        async def get_pending_deals(self):
+            from civ_mcp import lua as lq
+
+            return [
+                lq.PendingDeal(
+                    other_player_id=4,
+                    other_player_name="Egypt",
+                    other_leader_name="Cleopatra",
+                    items_from_them=[
+                        lq.DealItem(
+                            from_player_id=4,
+                            from_player_name="Egypt",
+                            item_type="GOLD",
+                            name="Gold",
+                            amount=50,
+                            duration=0,
+                            is_from_us=False,
+                        )
+                    ],
+                    items_from_us=[],
+                )
+            ]
+
+    diplo = await dispatch(FakeGS(), "get_pending_diplomacy", {})
+    deals = await dispatch(FakeGS(), "get_pending_trades", {})
+
+    assert "Rome" in diplo and "Respond with: POSITIVE" in diplo
+    assert "Egypt" in deals and "respond_to_trade(other_player_id=4" in deals
+
+
+@pytest.mark.asyncio
+async def test_dispatch_trade_options_are_narrated():
+    class FakeGS:
+        async def get_deal_options(self, other_player_id):
+            from civ_mcp import lua as lq
+
+            assert other_player_id == 3
+            return lq.DealOptions(
+                other_player_id=3,
+                other_civ_name="Rome",
+                our_gold=120,
+                our_gpt=8,
+                their_gold=40,
+                their_gpt=3,
+                our_luxuries=["Silk x2"],
+                alliance_eligible=True,
+            )
+
+    text = await dispatch(FakeGS(), "get_trade_options", {"other_player_id": 3})
+
+    assert "Trade options with Rome (player 3)" in text
+    assert "Silk x2" in text
+    assert "Alliance: eligible" in text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reactive_action_tools_call_gamestate_methods():
+    calls = []
+
+    class FakeGS:
+        async def diplomacy_respond(self, other_player_id, response):
+            calls.append(("diplomacy_respond", other_player_id, response))
+            return "OK:RESPONDED|POSITIVE|SESSION_CLOSED"
+
+        async def respond_to_deal(self, other_player_id, accept):
+            calls.append(("respond_to_deal", other_player_id, accept))
+            return "OK:DEAL_ACCEPTED|Rome"
+
+    diplo = await dispatch(
+        FakeGS(),
+        "respond_to_diplomacy",
+        {"other_player_id": 3, "response": "POSITIVE"},
+    )
+    trade = await dispatch(
+        FakeGS(),
+        "respond_to_trade",
+        {"other_player_id": 4, "accept": True},
+    )
+
+    assert diplo == "OK:RESPONDED|POSITIVE|SESSION_CLOSED"
+    assert trade == "OK:DEAL_ACCEPTED|Rome"
+    assert calls == [
+        ("diplomacy_respond", 3, "POSITIVE"),
+        ("respond_to_deal", 4, True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_respond_to_trade_rejects_non_boolean_accept():
+    class FakeGS:
+        async def respond_to_deal(self, other_player_id, accept):
+            raise AssertionError("malformed accept must not reach GameState")
+
+    text = await dispatch(
+        FakeGS(),
+        "respond_to_trade",
+        {"other_player_id": 4, "accept": "false"},
+    )
+
+    assert text == "Error: accept must be boolean"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proactive_diplomacy_tools_call_gamestate_methods():
+    calls = []
+
+    class FakeGS:
+        async def propose_peace(self, other_player_id):
+            calls.append(("propose_peace", other_player_id))
+            return "ACCEPTED|Peace established with Rome"
+
+        async def send_diplomatic_action(self, other_player_id, action):
+            calls.append(("send_diplomatic_action", other_player_id, action))
+            return "OK:DIPLOMATIC_DELEGATION|Rome"
+
+        async def form_alliance(self, other_player_id, alliance_type):
+            calls.append(("form_alliance", other_player_id, alliance_type))
+            return "OK:ALLIANCE_FORMED|Rome|RESEARCH"
+
+    peace = await dispatch(FakeGS(), "propose_peace", {"other_player_id": 3})
+    delegation = await dispatch(
+        FakeGS(),
+        "send_diplomatic_action",
+        {"other_player_id": 3, "action": "diplomatic_delegation"},
+    )
+    alliance = await dispatch(
+        FakeGS(),
+        "form_alliance",
+        {"other_player_id": 3, "alliance_type": "research"},
+    )
+
+    assert peace.startswith("ACCEPTED|")
+    assert delegation.startswith("OK:DIPLOMATIC_DELEGATION")
+    assert alliance.startswith("OK:ALLIANCE_FORMED")
+    assert calls == [
+        ("propose_peace", 3),
+        ("send_diplomatic_action", 3, "DIPLOMATIC_DELEGATION"),
+        ("form_alliance", 3, "RESEARCH"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propose_trade_builds_items_for_send_and_test_modes():
+    calls = []
+
+    class FakeGS:
+        async def test_trade(self, other_player_id, offer_items, request_items):
+            calls.append(("test_trade", other_player_id, offer_items, request_items))
+            return "AI counter-offer: Rome will accept"
+
+        async def propose_trade(self, other_player_id, offer_items, request_items):
+            calls.append(("propose_trade", other_player_id, offer_items, request_items))
+            return "OK:ACCEPTED|Trade accepted with Rome"
+
+    test_text = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {
+            "other_player_id": 3,
+            "offer_resources": "RESOURCE_SILK, RESOURCE_TEA",
+            "request_gold_per_turn": 5,
+            "request_open_borders": True,
+            "mode": "test",
+        },
+    )
+    send_text = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {
+            "other_player_id": 3,
+            "offer_favor": 20,
+            "request_gold": 80,
+            "mode": "send",
+        },
+    )
+
+    assert test_text.startswith("AI counter-offer")
+    assert send_text.startswith("OK:ACCEPTED")
+    assert calls[0] == (
+        "test_trade",
+        3,
+        [
+            {"type": "RESOURCE", "name": "RESOURCE_SILK", "amount": 1, "duration": 30},
+            {"type": "RESOURCE", "name": "RESOURCE_TEA", "amount": 1, "duration": 30},
+        ],
+        [
+            {"type": "GOLD", "amount": 5, "duration": 30},
+            {"type": "AGREEMENT", "subtype": "OPEN_BORDERS"},
+        ],
+    )
+    assert calls[1] == (
+        "propose_trade",
+        3,
+        [{"type": "FAVOR", "amount": 20}],
+        [{"type": "GOLD", "amount": 80, "duration": 0}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propose_trade_defaults_missing_mode_to_test():
+    calls = []
+
+    class FakeGS:
+        async def test_trade(self, other_player_id, offer_items, request_items):
+            calls.append(("test_trade", other_player_id, offer_items, request_items))
+            return "AI counter-offer: Rome will accept"
+
+        async def propose_trade(self, other_player_id, offer_items, request_items):
+            raise AssertionError("missing mode must not commit a trade")
+
+    text = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {"other_player_id": 3, "offer_gold": 10},
+    )
+
+    assert text.startswith("AI counter-offer")
+    assert calls == [
+        (
+            "test_trade",
+            3,
+            [{"type": "GOLD", "amount": 10, "duration": 0}],
+            [],
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propose_trade_rejects_non_boolean_open_borders_flags():
+    class FakeGS:
+        async def test_trade(self, other_player_id, offer_items, request_items):
+            raise AssertionError("malformed open-borders flag must not reach GameState")
+
+        async def propose_trade(self, other_player_id, offer_items, request_items):
+            raise AssertionError("malformed open-borders flag must not reach GameState")
+
+    offer_text = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {
+            "other_player_id": 3,
+            "offer_gold": 10,
+            "offer_open_borders": "false",
+            "mode": "test",
+        },
+    )
+    request_text = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {
+            "other_player_id": 3,
+            "request_gold": 10,
+            "request_open_borders": "false",
+            "mode": "test",
+        },
+    )
+
+    assert offer_text == "Error: offer_open_borders must be boolean"
+    assert request_text == "Error: request_open_borders must be boolean"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propose_trade_rejects_empty_or_bad_mode():
+    class FakeGS:
+        async def test_trade(self, other_player_id, offer_items, request_items):
+            raise AssertionError("invalid trade must not reach GameState")
+
+        async def propose_trade(self, other_player_id, offer_items, request_items):
+            raise AssertionError("invalid trade must not reach GameState")
+
+    empty = await dispatch(FakeGS(), "propose_trade", {"other_player_id": 3})
+    bool_gold = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {"other_player_id": 3, "offer_gold": True, "mode": "test"},
+    )
+    bad_mode = await dispatch(
+        FakeGS(),
+        "propose_trade",
+        {"other_player_id": 3, "offer_gold": 10, "mode": "preview"},
+    )
+
+    assert empty == "Error: must specify at least one offer or request item"
+    assert bool_gold == "Error: must specify at least one offer or request item"
+    assert bad_mode == 'Error: mode must be "test" or "send"'
+
+
 @pytest.mark.asyncio
 async def test_read_tools_narrate_not_repr():
     from civ_mcp import lua as lq

@@ -37,6 +37,10 @@ def _str_param(description: str) -> dict[str, str]:
     return {"type": "string", "description": description}
 
 
+def _bool_param(description: str) -> dict[str, str]:
+    return {"type": "boolean", "description": description}
+
+
 def _object_param(description: str) -> dict[str, Any]:
     return {
         "type": "object",
@@ -61,6 +65,23 @@ async def _builder_tasks_text(gs: Any, args: dict[str, Any]) -> str:
     del args
     tasks, builders = await gs.get_builder_tasks()
     return nr.narrate_builder_tasks(tasks, builders)
+
+
+async def _pending_diplomacy_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_diplomacy_sessions(), nr.narrate_diplomacy_sessions)
+
+
+async def _pending_trades_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_pending_deals(), nr.narrate_pending_deals)
+
+
+async def _trade_options_text(gs: Any, args: dict[str, Any]) -> str:
+    return _render(
+        await gs.get_deal_options(args["other_player_id"]),
+        nr.narrate_deal_options,
+    )
 
 
 async def _district_advisor_text(gs: Any, args: dict[str, Any]) -> str:
@@ -114,6 +135,114 @@ def _render(data: Any, narrator: Callable[[Any], str]) -> str:
 
 def _coerce_policy_assignments(assignments: dict[Any, str]) -> dict[int, str]:
     return {int(slot): policy for slot, policy in assignments.items()}
+
+
+def _strict_bool(value: Any, name: str) -> tuple[bool, str | None]:
+    if isinstance(value, bool):
+        return value, None
+    return False, f"Error: {name} must be boolean"
+
+
+async def _respond_to_trade_text(gs: Any, args: dict[str, Any]) -> str:
+    accept, error = _strict_bool(args["accept"], "accept")
+    if error:
+        return error
+    return await gs.respond_to_deal(args["other_player_id"], accept)
+
+
+def _positive_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
+
+
+def _resource_items(raw: Any) -> list[dict[str, Any]]:
+    if raw is None:
+        return []
+    return [
+        {"type": "RESOURCE", "name": res, "amount": 1, "duration": 30}
+        for res in (part.strip() for part in str(raw).split(","))
+        if res
+    ]
+
+
+def _optional_bool_arg(args: dict[str, Any], name: str) -> tuple[bool, str | None]:
+    if name not in args:
+        return False, None
+    return _strict_bool(args[name], name)
+
+
+def _build_trade_items(
+    args: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+    offer_items: list[dict[str, Any]] = []
+    request_items: list[dict[str, Any]] = []
+
+    offer_gold = _positive_int(args.get("offer_gold", 0))
+    if offer_gold:
+        offer_items.append({"type": "GOLD", "amount": offer_gold, "duration": 0})
+
+    offer_gpt = _positive_int(args.get("offer_gold_per_turn", 0))
+    if offer_gpt:
+        offer_items.append({"type": "GOLD", "amount": offer_gpt, "duration": 30})
+
+    offer_items.extend(_resource_items(args.get("offer_resources", "")))
+
+    offer_favor = _positive_int(args.get("offer_favor", 0))
+    if offer_favor:
+        offer_items.append({"type": "FAVOR", "amount": offer_favor})
+
+    offer_open_borders, error = _optional_bool_arg(args, "offer_open_borders")
+    if error:
+        return [], [], error
+    if offer_open_borders:
+        offer_items.append({"type": "AGREEMENT", "subtype": "OPEN_BORDERS"})
+
+    request_gold = _positive_int(args.get("request_gold", 0))
+    if request_gold:
+        request_items.append({"type": "GOLD", "amount": request_gold, "duration": 0})
+
+    request_gpt = _positive_int(args.get("request_gold_per_turn", 0))
+    if request_gpt:
+        request_items.append({"type": "GOLD", "amount": request_gpt, "duration": 30})
+
+    request_items.extend(_resource_items(args.get("request_resources", "")))
+
+    request_favor = _positive_int(args.get("request_favor", 0))
+    if request_favor:
+        request_items.append({"type": "FAVOR", "amount": request_favor})
+
+    request_open_borders, error = _optional_bool_arg(args, "request_open_borders")
+    if error:
+        return [], [], error
+    if request_open_borders:
+        request_items.append({"type": "AGREEMENT", "subtype": "OPEN_BORDERS"})
+
+    if _positive_int(args.get("joint_war_target", 0)):
+        offer_items.append({"type": "AGREEMENT", "subtype": "JOINT_WAR"})
+        request_items.append({"type": "AGREEMENT", "subtype": "JOINT_WAR"})
+
+    return offer_items, request_items, None
+
+
+async def _propose_trade_text(gs: Any, args: dict[str, Any]) -> str:
+    offer_items, request_items, error = _build_trade_items(args)
+    if error:
+        return error
+    if not offer_items and not request_items:
+        return "Error: must specify at least one offer or request item"
+
+    mode = str(args.get("mode", "test")).lower()
+    if mode == "test":
+        return await gs.test_trade(args["other_player_id"], offer_items, request_items)
+    if mode == "send":
+        return await gs.propose_trade(args["other_player_id"], offer_items, request_items)
+    # Hardening over the MCP wrapper: typos must not accidentally commit a deal.
+    return 'Error: mode must be "test" or "send"'
 
 
 _MAP_RADIUS_DEFAULT = 2
@@ -352,6 +481,27 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         (),
         lambda gs, args: _narrate_diplomacy(gs, args),
     ),
+    "get_pending_diplomacy": _tool(
+        "get_pending_diplomacy",
+        "Check for pending diplomacy encounters that can block turn progression.",
+        None,
+        (),
+        _pending_diplomacy_text,
+    ),
+    "get_pending_trades": _tool(
+        "get_pending_trades",
+        "Check for pending incoming trade deal offers.",
+        None,
+        (),
+        _pending_trades_text,
+    ),
+    "get_trade_options": _tool(
+        "get_trade_options",
+        "See what both sides can trade with another civilization.",
+        {"other_player_id": _int_param("Player ID from get_diplomacy.")},
+        ("other_player_id",),
+        _trade_options_text,
+    ),
     "get_city_states": _tool(
         "get_city_states",
         "Show city-state envoy and suzerainty status.",
@@ -521,6 +671,87 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("city_id", "focus"),
         lambda gs, args: gs.set_city_focus(args["city_id"], args["focus"]),
         verb="set_city_focus",
+    ),
+    "respond_to_diplomacy": _tool(
+        "respond_to_diplomacy",
+        "Respond to a pending diplomacy encounter with POSITIVE or NEGATIVE.",
+        {
+            "other_player_id": _int_param("Player ID from get_pending_diplomacy."),
+            "response": _str_param("POSITIVE or NEGATIVE."),
+        },
+        ("other_player_id", "response"),
+        lambda gs, args: gs.diplomacy_respond(args["other_player_id"], args["response"]),
+        verb="respond_to_diplomacy",
+    ),
+    "respond_to_trade": _tool(
+        "respond_to_trade",
+        "Accept or reject a pending incoming trade deal.",
+        {
+            "other_player_id": _int_param("Player ID from get_pending_trades."),
+            "accept": _bool_param("True to accept; false to reject."),
+        },
+        ("other_player_id", "accept"),
+        _respond_to_trade_text,
+        verb="respond_to_trade",
+    ),
+    "propose_trade": _tool(
+        "propose_trade",
+        "Propose or preview a trade deal with another civilization.",
+        {
+            "other_player_id": _int_param("Player ID from get_diplomacy."),
+            "offer_gold": _int_param("Lump-sum gold to offer."),
+            "offer_gold_per_turn": _int_param("Gold per turn to offer for 30 turns."),
+            "offer_resources": _str_param("Comma-separated resource types to offer, for example RESOURCE_SILK."),
+            "offer_favor": _int_param("Diplomatic Favor to offer."),
+            "offer_open_borders": _bool_param("Offer our open borders."),
+            "request_gold": _int_param("Lump-sum gold to request."),
+            "request_gold_per_turn": _int_param("Gold per turn to request for 30 turns."),
+            "request_resources": _str_param("Comma-separated resource types to request."),
+            "request_favor": _int_param("Diplomatic Favor to request."),
+            "request_open_borders": _bool_param("Request their open borders."),
+            "joint_war_target": _int_param("Third-party player ID for joint war; 0 for none."),
+            "mode": _str_param('"test" previews AI counter-offer; "send" commits the deal.'),
+        },
+        ("other_player_id",),
+        _propose_trade_text,
+        verb="propose_trade",
+    ),
+    "propose_peace": _tool(
+        "propose_peace",
+        "Propose white peace to a civilization you are at war with.",
+        {"other_player_id": _int_param("Player ID from get_diplomacy.")},
+        ("other_player_id",),
+        lambda gs, args: gs.propose_peace(args["other_player_id"]),
+        verb="propose_peace",
+    ),
+    "send_diplomatic_action": _tool(
+        "send_diplomatic_action",
+        "Send a proactive diplomatic action such as delegation, friendship, embassy, denouncement, open borders, or war declaration.",
+        {
+            "other_player_id": _int_param("Player ID from get_diplomacy."),
+            "action": _str_param(
+                "One of: DIPLOMATIC_DELEGATION, DECLARE_FRIENDSHIP, DENOUNCE, "
+                "RESIDENT_EMBASSY, OPEN_BORDERS, DECLARE_SURPRISE_WAR, "
+                "DECLARE_FORMAL_WAR, DECLARE_HOLY_WAR, DECLARE_LIBERATION_WAR, "
+                "DECLARE_RECONQUEST_WAR, DECLARE_PROTECTORATE_WAR, "
+                "DECLARE_COLONIAL_WAR, DECLARE_TERRITORIAL_WAR. "
+                "OPEN_BORDERS is routed through the trade API as mutual open borders."
+            ),
+        },
+        ("other_player_id", "action"),
+        lambda gs, args: gs.send_diplomatic_action(args["other_player_id"], args["action"].upper()),
+        verb="send_diplomatic_action",
+    ),
+    "form_alliance": _tool(
+        "form_alliance",
+        "Form an alliance with another civilization after friendship and Diplomatic Service.",
+        {
+            "other_player_id": _int_param("Player ID from get_diplomacy."),
+            "alliance_type": _str_param("MILITARY, RESEARCH, CULTURAL, ECONOMIC, or RELIGIOUS."),
+        },
+        ("other_player_id", "alliance_type"),
+        lambda gs, args: gs.form_alliance(args["other_player_id"], args["alliance_type"].upper()),
+        verb="form_alliance",
     ),
 }
 
