@@ -67,13 +67,23 @@ def test_standard_adds_map_and_combat():
 
 
 def test_forbidden_tools_never_defined():
+    # NOTE: queue_wc_votes was forbidden pre-Task-7 (no validated wrapper existed).
+    # Task 7 adds it as a discrete tool with JSON/list validation (see
+    # test_queue_wc_votes_* below), so it is intentionally absent from this list.
     for name in (
         "end_turn",
         "execute_lua",
         "load_game_save",
         "kill_game",
-        "queue_wc_votes",
         "diplomacy_respond",
+        # Raw/lifecycle tools that must remain absent (Task 7 constraint).
+        "unit_action",
+        "city_action",
+        "run_lua",
+        "load_save",
+        "restart_and_load",
+        "launch_game",
+        "list_saves",
     ):
         assert name not in TOOL_REGISTRY
 
@@ -599,3 +609,398 @@ def test_registry_has_no_generic_param_bounds_layer():
     import civ_mcp.arena.registry as registry_mod
 
     assert not hasattr(registry_mod, "_apply_param_bounds")
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — behavior-critical tools (Great People, trade routes, religion,
+# World Congress, city ranged attack/capture, governor/dedication, global
+# settling, city production).
+# ---------------------------------------------------------------------------
+
+BEHAVIOR_CRITICAL_TOOL_NAMES = {
+    "get_city_production",
+    "get_global_settle_advisor",
+    "get_governors",
+    "get_dedications",
+    "get_religion_beliefs",
+    "get_religion_spread",
+    "get_trade_routes",
+    "get_trade_destinations",
+    "get_gp_advisor",
+    "get_world_congress",
+    "promote_governor",
+    "choose_dedication",
+    "found_religion",
+    "recruit_great_person",
+    "patronize_great_person",
+    "reject_great_person",
+    "start_trade_route",
+    "teleport_trader",
+    "queue_wc_votes",
+    "city_attack",
+    "resolve_city_capture",
+}
+
+BEHAVIOR_CRITICAL_ACTION_VERBS = (
+    "promote_governor",
+    "choose_dedication",
+    "found_religion",
+    "recruit_great_person",
+    "patronize_great_person",
+    "reject_great_person",
+    "start_trade_route",
+    "teleport_trader",
+    "queue_wc_votes",
+    "city_attack",
+    "resolve_city_capture",
+)
+
+
+def test_behavior_critical_tools_registered_full_only():
+    assert BEHAVIOR_CRITICAL_TOOL_NAMES <= set(TOOL_REGISTRY)
+    assert BEHAVIOR_CRITICAL_TOOL_NAMES <= set(resolve_tools("full"))
+    assert BEHAVIOR_CRITICAL_TOOL_NAMES.isdisjoint(set(resolve_tools("minimal")))
+    assert BEHAVIOR_CRITICAL_TOOL_NAMES.isdisjoint(set(resolve_tools("standard")))
+
+
+def test_behavior_critical_raw_and_lifecycle_tools_absent():
+    for name in (
+        "unit_action",
+        "city_action",
+        "run_lua",
+        "load_game_save",
+        "load_save",
+        "restart_and_load",
+        "kill_game",
+        "launch_game",
+        "list_saves",
+        "end_turn",
+    ):
+        assert name not in TOOL_REGISTRY
+
+
+def test_behavior_critical_action_verbs_set():
+    for name in BEHAVIOR_CRITICAL_ACTION_VERBS:
+        assert TOOL_REGISTRY[name].verb == name
+
+
+@pytest.mark.asyncio
+async def test_dispatch_behavior_critical_read_tools_are_narrated():
+    from civ_mcp import lua as lq
+
+    class FakeGS:
+        async def list_city_production(self, city_id):
+            assert city_id == 7
+            return [
+                lq.ProductionOption(
+                    category="UNIT",
+                    item_name="UNIT_WARRIOR",
+                    cost=100,
+                    turns=2,
+                )
+            ]
+
+        async def get_global_settle_scan(self):
+            return []
+
+        async def get_governors(self):
+            return lq.GovernorStatus(
+                points_available=0,
+                points_spent=0,
+                can_appoint=False,
+                appointed=[],
+                available_to_appoint=[],
+            )
+
+        async def get_dedications(self):
+            return lq.DedicationStatus(
+                age_type="Normal",
+                era=1,
+                era_score=0,
+                dark_threshold=0,
+                golden_threshold=0,
+                selections_allowed=1,
+                active=[],
+                choices=[],
+            )
+
+        async def get_religion_founding_status(self):
+            return lq.ReligionFoundingStatus(
+                has_religion=False,
+                religion_type=None,
+                religion_name=None,
+                pantheon_index=-1,
+                faith_balance=0.0,
+                available_religions=[],
+                beliefs_by_class={},
+            )
+
+        async def get_religion_status(self):
+            return lq.ReligionStatus(cities=[], summary=[])
+
+        async def get_trade_routes(self):
+            return lq.TradeRouteStatus(capacity=1, active_count=0, traders=[])
+
+        async def get_world_congress(self):
+            return lq.WorldCongressStatus(
+                is_in_session=False,
+                turns_until_next=0,
+                favor=0,
+                max_votes=0,
+                favor_costs=[],
+                resolutions=[],
+                proposals=[],
+            )
+
+    production = await dispatch(FakeGS(), "get_city_production", {"city_id": 7})
+    settle = await dispatch(FakeGS(), "get_global_settle_advisor", {})
+    governors = await dispatch(FakeGS(), "get_governors", {})
+    dedications = await dispatch(FakeGS(), "get_dedications", {})
+    beliefs = await dispatch(FakeGS(), "get_religion_beliefs", {})
+    spread = await dispatch(FakeGS(), "get_religion_spread", {})
+    routes = await dispatch(FakeGS(), "get_trade_routes", {})
+    congress = await dispatch(FakeGS(), "get_world_congress", {})
+
+    for text in (production, settle, governors, dedications, beliefs, spread, routes, congress):
+        assert isinstance(text, str)
+        assert "ProductionOption(" not in text
+        assert "GovernorStatus(" not in text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gp_advisor_returns_error_string_on_none():
+    class FakeGS:
+        async def get_gp_advisor(self, unit_index):
+            assert unit_index == 5
+            return None
+
+    text = await dispatch(FakeGS(), "get_gp_advisor", {"unit_id": 5})
+    assert text.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gp_advisor_narrates_result():
+    from civ_mcp import lua as lq
+
+    class FakeGS:
+        async def get_gp_advisor(self, unit_index):
+            assert unit_index == 5
+            return lq.GPAdvisorResult(
+                gp_name="Confucius",
+                gp_class="GREAT_PERSON_CLASS_GREAT_PROPHET",
+                target_district="DISTRICT_HOLY_SITE",
+                gp_x=0,
+                gp_y=0,
+                charges=1,
+                cities=[],
+            )
+
+    text = await dispatch(FakeGS(), "get_gp_advisor", {"unit_id": 5})
+    assert "Confucius" in text
+    assert "GPAdvisorResult(" not in text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unit_id_tools_resolve_to_unit_index():
+    """unit_id (composite) -> unit_index (unit_id % 65536) for the four affected tools."""
+    calls = []
+
+    class FakeGS:
+        async def get_trade_destinations(self, unit_index):
+            calls.append(("get_trade_destinations", unit_index))
+            return []
+
+        async def get_gp_advisor(self, unit_index):
+            calls.append(("get_gp_advisor", unit_index))
+            return None
+
+        async def make_trade_route(self, unit_index, target_x, target_y):
+            calls.append(("make_trade_route", unit_index, target_x, target_y))
+            return "OK:ROUTE_STARTED"
+
+        async def teleport_to_city(self, unit_index, target_x, target_y):
+            calls.append(("teleport_to_city", unit_index, target_x, target_y))
+            return "OK:TELEPORTED"
+
+    composite_unit_id = 3 * 65536 + 42  # unit_index 42, distinct composite prefix
+
+    await dispatch(FakeGS(), "get_trade_destinations", {"unit_id": composite_unit_id})
+    await dispatch(FakeGS(), "get_gp_advisor", {"unit_id": composite_unit_id})
+    await dispatch(
+        FakeGS(),
+        "start_trade_route",
+        {"unit_id": composite_unit_id, "target_x": 10, "target_y": 11},
+    )
+    await dispatch(
+        FakeGS(),
+        "teleport_trader",
+        {"unit_id": composite_unit_id, "target_x": 10, "target_y": 11},
+    )
+
+    assert calls == [
+        ("get_trade_destinations", 42),
+        ("get_gp_advisor", 42),
+        ("make_trade_route", 42, 10, 11),
+        ("teleport_to_city", 42, 10, 11),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gp_and_trade_action_tools_call_gamestate_methods():
+    calls = []
+
+    class FakeGS:
+        async def promote_governor(self, governor_type, promotion_type):
+            calls.append(("promote_governor", governor_type, promotion_type))
+            return "OK:PROMOTED"
+
+        async def choose_dedication(self, dedication_index):
+            calls.append(("choose_dedication", dedication_index))
+            return "OK:DEDICATION_CHOSEN"
+
+        async def found_religion(self, religion_type, follower_belief, founder_belief):
+            calls.append(("found_religion", religion_type, follower_belief, founder_belief))
+            return "OK:RELIGION_FOUNDED"
+
+        async def recruit_great_person(self, individual_id):
+            calls.append(("recruit_great_person", individual_id))
+            return "OK:RECRUITED"
+
+        async def patronize_great_person(self, individual_id, yield_type):
+            calls.append(("patronize_great_person", individual_id, yield_type))
+            return "OK:PATRONIZED"
+
+        async def reject_great_person(self, individual_id):
+            calls.append(("reject_great_person", individual_id))
+            return "OK:REJECTED"
+
+        async def city_attack(self, city_id, target_x, target_y):
+            calls.append(("city_attack", city_id, target_x, target_y))
+            return "CITY_RANGE_ATTACK|..."
+
+    assert (
+        await dispatch(
+            FakeGS(),
+            "promote_governor",
+            {"governor_type": "GOVERNOR_AMANI", "promotion_type": "PROMOTION_AFFLUENCE"},
+        )
+        == "OK:PROMOTED"
+    )
+    assert await dispatch(FakeGS(), "choose_dedication", {"dedication_index": 1}) == "OK:DEDICATION_CHOSEN"
+    assert (
+        await dispatch(
+            FakeGS(),
+            "found_religion",
+            {
+                "religion_name": "RELIGION_BUDDHISM",
+                "follower_belief": "BELIEF_FOLLOWER",
+                "founder_belief": "BELIEF_FOUNDER",
+            },
+        )
+        == "OK:RELIGION_FOUNDED"
+    )
+    assert await dispatch(FakeGS(), "recruit_great_person", {"individual_id": 9}) == "OK:RECRUITED"
+    assert (
+        await dispatch(
+            FakeGS(),
+            "patronize_great_person",
+            {"individual_id": 9},
+        )
+        == "OK:PATRONIZED"
+    )
+    assert await dispatch(FakeGS(), "reject_great_person", {"individual_id": 9}) == "OK:REJECTED"
+    assert (
+        await dispatch(
+            FakeGS(),
+            "city_attack",
+            {"city_id": 1, "target_x": 3, "target_y": 4},
+        )
+        == "CITY_RANGE_ATTACK|..."
+    )
+
+    assert calls == [
+        ("promote_governor", "GOVERNOR_AMANI", "PROMOTION_AFFLUENCE"),
+        ("choose_dedication", 1),
+        ("found_religion", "RELIGION_BUDDHISM", "BELIEF_FOLLOWER", "BELIEF_FOUNDER"),
+        ("recruit_great_person", 9),
+        ("patronize_great_person", 9, "YIELD_GOLD"),
+        ("reject_great_person", 9),
+        ("city_attack", 1, 3, 4),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_wc_votes_accepts_json_string_and_list():
+    calls = []
+
+    class FakeGS:
+        async def queue_wc_votes(self, votes):
+            calls.append(votes)
+            return "OK:VOTES_QUEUED"
+
+    from_json_str = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": '[{"hash": 123, "option": 1, "target": 0, "votes": 5}]'},
+    )
+    from_list = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": [{"hash": 456, "option": 2, "target": 1, "votes": 3}]},
+    )
+
+    assert from_json_str == "OK:VOTES_QUEUED"
+    assert from_list == "OK:VOTES_QUEUED"
+    assert calls == [
+        [{"hash": 123, "option": 1, "target": 0, "votes": 5}],
+        [{"hash": 456, "option": 2, "target": 1, "votes": 3}],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_wc_votes_rejects_malformed_json():
+    class FakeGS:
+        async def queue_wc_votes(self, votes):
+            raise AssertionError("malformed votes must not reach GameState")
+
+    text = await dispatch(FakeGS(), "queue_wc_votes", {"votes": "not json"})
+    assert text.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_wc_votes_rejects_non_list_payload():
+    class FakeGS:
+        async def queue_wc_votes(self, votes):
+            raise AssertionError("non-list votes must not reach GameState")
+
+    dict_payload = await dispatch(FakeGS(), "queue_wc_votes", {"votes": '{"hash": 1}'})
+    non_dict_items = await dispatch(FakeGS(), "queue_wc_votes", {"votes": "[1, 2, 3]"})
+
+    assert dict_payload.startswith("Error:")
+    assert non_dict_items.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolve_city_capture_accepts_valid_actions():
+    calls = []
+
+    class FakeGS:
+        async def resolve_city_capture(self, action):
+            calls.append(action)
+            return f"OK:{action.upper()}"
+
+    for action in ("keep", "raze", "liberate_founder", "liberate_previous"):
+        text = await dispatch(FakeGS(), "resolve_city_capture", {"action": action})
+        assert text == f"OK:{action.upper()}"
+
+    assert calls == ["keep", "raze", "liberate_founder", "liberate_previous"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolve_city_capture_rejects_unknown_action():
+    class FakeGS:
+        async def resolve_city_capture(self, action):
+            raise AssertionError("unknown action must not reach GameState")
+
+    text = await dispatch(FakeGS(), "resolve_city_capture", {"action": "destroy"})
+    assert text.startswith("Error:")

@@ -1271,6 +1271,18 @@ def test_local_tool_verbs_mirror_registry_verbs_exactly() -> None:
     assert registry_verbs["propose_peace"] == "propose_peace"
     assert registry_verbs["send_diplomatic_action"] == "send_diplomatic_action"
     assert registry_verbs["form_alliance"] == "form_alliance"
+    # Task 7 — behavior-critical action tools.
+    assert registry_verbs["promote_governor"] == "promote_governor"
+    assert registry_verbs["choose_dedication"] == "choose_dedication"
+    assert registry_verbs["found_religion"] == "found_religion"
+    assert registry_verbs["recruit_great_person"] == "recruit_great_person"
+    assert registry_verbs["patronize_great_person"] == "patronize_great_person"
+    assert registry_verbs["reject_great_person"] == "reject_great_person"
+    assert registry_verbs["start_trade_route"] == "start_trade_route"
+    assert registry_verbs["teleport_trader"] == "teleport_trader"
+    assert registry_verbs["queue_wc_votes"] == "queue_wc_votes"
+    assert registry_verbs["city_attack"] == "city_attack"
+    assert registry_verbs["resolve_city_capture"] == "resolve_city_capture"
 
 
 def test_rubric_counts_automate_explore_as_exploration() -> None:
@@ -1321,3 +1333,8 @@ def test_step_verb_covers_all_shared_vocab_entries():
                               "tool_args": {"action": "automate"}})
     assert base == "unit_action"
     assert verb == "automate"
+
+    # MCP-prefixed variant of a Task 7 behavior-critical action tool.
+    base, verb = _step_verb({"tool_name": MCP_CIV6_PREFIX + "city_attack", "tool_args": {}})
+    assert base == "city_attack"
+    assert verb == "city_attack"

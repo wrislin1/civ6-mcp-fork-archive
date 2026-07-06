@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Sequence
 
@@ -106,6 +107,108 @@ async def _wonder_advisor_text(gs: Any, args: dict[str, Any]) -> str:
         setattr(gs, "_advisor_budget_warning", None)
         return f"!! {warning}\n\n{narrated}"
     return narrated
+
+
+async def _city_production_text(gs: Any, args: dict[str, Any]) -> str:
+    return _render(
+        await gs.list_city_production(args["city_id"]),
+        nr.narrate_city_production,
+    )
+
+
+async def _global_settle_advisor_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_global_settle_scan(), nr.narrate_settle_candidates)
+
+
+async def _governors_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_governors(), nr.narrate_governors)
+
+
+async def _dedications_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_dedications(), nr.narrate_dedications)
+
+
+async def _religion_founding_status_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(
+        await gs.get_religion_founding_status(),
+        nr.narrate_religion_founding_status,
+    )
+
+
+async def _religion_status_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_religion_status(), nr.narrate_religion_status)
+
+
+async def _trade_routes_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_trade_routes(), nr.narrate_trade_routes)
+
+
+def _unit_index(unit_id: Any) -> int:
+    """Composite unit_id -> unit_index, mirroring GameState's own convention."""
+    return int(unit_id) % 65536
+
+
+async def _trade_destinations_text(gs: Any, args: dict[str, Any]) -> str:
+    unit_index = _unit_index(args["unit_id"])
+    return _render(
+        await gs.get_trade_destinations(unit_index),
+        nr.narrate_trade_destinations,
+    )
+
+
+async def _gp_advisor_text(gs: Any, args: dict[str, Any]) -> str:
+    unit_index = _unit_index(args["unit_id"])
+    result = await gs.get_gp_advisor(unit_index)
+    if result is None:
+        return "Error: no Great Person advisor data for that unit."
+    if isinstance(result, str):
+        return result
+    return nr.narrate_gp_advisor(result)
+
+
+async def _world_congress_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_world_congress(), nr.narrate_world_congress)
+
+
+async def _start_trade_route_text(gs: Any, args: dict[str, Any]) -> str:
+    unit_index = _unit_index(args["unit_id"])
+    return await gs.make_trade_route(unit_index, args["target_x"], args["target_y"])
+
+
+async def _teleport_trader_text(gs: Any, args: dict[str, Any]) -> str:
+    unit_index = _unit_index(args["unit_id"])
+    return await gs.teleport_to_city(unit_index, args["target_x"], args["target_y"])
+
+
+async def _queue_wc_votes_text(gs: Any, args: dict[str, Any]) -> str:
+    raw = args["votes"]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return "Error: votes must be valid JSON."
+    else:
+        parsed = raw
+    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        return 'Error: votes must be a JSON list of vote objects, e.g. [{"hash": H, "option": 1, "target": 0, "votes": N}].'
+    return await gs.queue_wc_votes(parsed)
+
+
+_CITY_CAPTURE_ACTIONS = ("keep", "raze", "liberate_founder", "liberate_previous")
+
+
+async def _resolve_city_capture_text(gs: Any, args: dict[str, Any]) -> str:
+    action = str(args["action"]).lower()
+    if action not in _CITY_CAPTURE_ACTIONS:
+        return f"Error: action must be one of {', '.join(_CITY_CAPTURE_ACTIONS)}."
+    return await gs.resolve_city_capture(action)
 
 
 def _tool(
@@ -752,6 +855,194 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("other_player_id", "alliance_type"),
         lambda gs, args: gs.form_alliance(args["other_player_id"], args["alliance_type"].upper()),
         verb="form_alliance",
+    ),
+    "get_city_production": _tool(
+        "get_city_production",
+        "List producible units, buildings, districts, and projects for a city.",
+        {"city_id": _int_param("City ID from get_cities.")},
+        ("city_id",),
+        _city_production_text,
+    ),
+    "get_global_settle_advisor": _tool(
+        "get_global_settle_advisor",
+        "Recommend the best remaining settle locations across the revealed map.",
+        None,
+        (),
+        _global_settle_advisor_text,
+    ),
+    "get_governors": _tool(
+        "get_governors",
+        "Show governor appointment, assignment, and promotion status.",
+        None,
+        (),
+        _governors_text,
+    ),
+    "get_dedications": _tool(
+        "get_dedications",
+        "Show available era dedications.",
+        None,
+        (),
+        _dedications_text,
+    ),
+    "get_religion_beliefs": _tool(
+        "get_religion_beliefs",
+        "Show religion founding status and available beliefs.",
+        None,
+        (),
+        _religion_founding_status_text,
+    ),
+    "get_religion_spread": _tool(
+        "get_religion_spread",
+        "Show religion spread and majority status across civilizations.",
+        None,
+        (),
+        _religion_status_text,
+    ),
+    "get_trade_routes": _tool(
+        "get_trade_routes",
+        "Show active trade routes and idle traders.",
+        None,
+        (),
+        _trade_routes_text,
+    ),
+    "get_trade_destinations": _tool(
+        "get_trade_destinations",
+        "Show available trade route destinations for a trader unit.",
+        {"unit_id": _int_param("Composite unit ID from get_units.")},
+        ("unit_id",),
+        _trade_destinations_text,
+    ),
+    "get_gp_advisor": _tool(
+        "get_gp_advisor",
+        "Rank cities to activate a recruited Great Person unit.",
+        {"unit_id": _int_param("Composite unit ID from get_units.")},
+        ("unit_id",),
+        _gp_advisor_text,
+    ),
+    "get_world_congress": _tool(
+        "get_world_congress",
+        "Show pending World Congress resolutions and voting status.",
+        None,
+        (),
+        _world_congress_text,
+    ),
+    "promote_governor": _tool(
+        "promote_governor",
+        "Apply a promotion to an appointed governor.",
+        {
+            "governor_type": _str_param("Governor type name."),
+            "promotion_type": _str_param("Promotion type name."),
+        },
+        ("governor_type", "promotion_type"),
+        lambda gs, args: gs.promote_governor(args["governor_type"], args["promotion_type"]),
+        verb="promote_governor",
+    ),
+    "choose_dedication": _tool(
+        "choose_dedication",
+        "Choose an era dedication.",
+        {"dedication_index": _int_param("Dedication index from get_dedications.")},
+        ("dedication_index",),
+        lambda gs, args: gs.choose_dedication(args["dedication_index"]),
+        verb="choose_dedication",
+    ),
+    "found_religion": _tool(
+        "found_religion",
+        "Found a religion with a follower and founder belief.",
+        {
+            "religion_name": _str_param("Religion type, for example RELIGION_BUDDHISM."),
+            "follower_belief": _str_param("Follower belief type."),
+            "founder_belief": _str_param("Founder belief type."),
+        },
+        ("religion_name", "follower_belief", "founder_belief"),
+        lambda gs, args: gs.found_religion(
+            args["religion_name"], args["follower_belief"], args["founder_belief"]
+        ),
+        verb="found_religion",
+    ),
+    "recruit_great_person": _tool(
+        "recruit_great_person",
+        "Recruit a Great Person candidate using accumulated points.",
+        {"individual_id": _int_param("Great Person individual ID from get_great_people.")},
+        ("individual_id",),
+        lambda gs, args: gs.recruit_great_person(args["individual_id"]),
+        verb="recruit_great_person",
+    ),
+    "patronize_great_person": _tool(
+        "patronize_great_person",
+        "Instantly buy a Great Person with gold or faith.",
+        {
+            "individual_id": _int_param("Great Person individual ID from get_great_people."),
+            "yield_type": _str_param("YIELD_GOLD or YIELD_FAITH."),
+        },
+        ("individual_id",),
+        lambda gs, args: gs.patronize_great_person(
+            args["individual_id"], args.get("yield_type", "YIELD_GOLD")
+        ),
+        verb="patronize_great_person",
+    ),
+    "reject_great_person": _tool(
+        "reject_great_person",
+        "Pass on a Great Person candidate, advancing to the next in that class.",
+        {"individual_id": _int_param("Great Person individual ID from get_great_people.")},
+        ("individual_id",),
+        lambda gs, args: gs.reject_great_person(args["individual_id"]),
+        verb="reject_great_person",
+    ),
+    "start_trade_route": _tool(
+        "start_trade_route",
+        "Start a trade route from a trader to a destination city.",
+        {
+            "unit_id": _int_param("Composite trader unit ID from get_units."),
+            "target_x": _int_param("Destination city X coordinate."),
+            "target_y": _int_param("Destination city Y coordinate."),
+        },
+        ("unit_id", "target_x", "target_y"),
+        _start_trade_route_text,
+        verb="start_trade_route",
+    ),
+    "teleport_trader": _tool(
+        "teleport_trader",
+        "Teleport an idle trader to a city.",
+        {
+            "unit_id": _int_param("Composite trader unit ID from get_units."),
+            "target_x": _int_param("Destination city X coordinate."),
+            "target_y": _int_param("Destination city Y coordinate."),
+        },
+        ("unit_id", "target_x", "target_y"),
+        _teleport_trader_text,
+        verb="teleport_trader",
+    ),
+    "queue_wc_votes": _tool(
+        "queue_wc_votes",
+        "Register World Congress vote preferences before ending the turn the Congress fires.",
+        {
+            "votes": _str_param(
+                'JSON array of vote objects: [{"hash": H, "option": 1, "target": 0, "votes": N}].'
+            )
+        },
+        ("votes",),
+        _queue_wc_votes_text,
+        verb="queue_wc_votes",
+    ),
+    "city_attack": _tool(
+        "city_attack",
+        "Attack a target tile with a city's ranged attack.",
+        {
+            "city_id": _int_param("City ID from get_cities."),
+            "target_x": _int_param("Target X coordinate."),
+            "target_y": _int_param("Target Y coordinate."),
+        },
+        ("city_id", "target_x", "target_y"),
+        lambda gs, args: gs.city_attack(args["city_id"], args["target_x"], args["target_y"]),
+        verb="city_attack",
+    ),
+    "resolve_city_capture": _tool(
+        "resolve_city_capture",
+        "Resolve a captured or disloyal city: keep, raze, or liberate.",
+        {"action": _str_param("One of: keep, raze, liberate_founder, liberate_previous.")},
+        ("action",),
+        _resolve_city_capture_text,
+        verb="resolve_city_capture",
     ),
 }
 
