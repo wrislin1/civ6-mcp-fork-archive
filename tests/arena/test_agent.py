@@ -509,6 +509,47 @@ async def test_briefing_disabled_is_todays_message():
     assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
 
 
+@pytest.mark.asyncio
+async def test_policy_skips_tool_schema_serialization_when_briefing_disabled(monkeypatch):
+    def fail_dumps(value):
+        raise AssertionError("tool schema should not be serialized when briefing is disabled")
+
+    monkeypatch.setattr(agent.json, "dumps", fail_dumps)
+    be = SpyBackend([_no_tool_reply()])
+    pol = LLMPolicy(be, FakeCost(), options=CivOptions(briefing=BriefingOptions(enabled=False)))
+
+    await pol(None, 3, 7)
+
+    user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
+    assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
+
+
+@pytest.mark.asyncio
+async def test_policy_skips_tool_schema_serialization_when_briefing_supplied(monkeypatch):
+    from civ_mcp.arena.briefing import Briefing
+
+    def fail_dumps(value):
+        raise AssertionError("tool schema should not be serialized for supplied briefing")
+
+    monkeypatch.setattr(agent.json, "dumps", fail_dumps)
+    be = SpyBackend([_no_tool_reply()])
+    pol = LLMPolicy(
+        be,
+        FakeCost(),
+        options=CivOptions(briefing=BriefingOptions(enabled=True)),
+    )
+
+    out = await pol(
+        None,
+        3,
+        7,
+        briefing=Briefing(text="PREBUILT", tokens=1, sections=["overview"]),
+    )
+
+    assert out["transcript"]["briefing_tokens"] == 1
+    assert out["transcript"]["briefing_sections"] == ["overview"]
+
+
 def test_should_resolve_n_ctx_caps_default_retries():
     """Re-probe while stuck on 'default', but stop after the cap so a backend with
     no /props endpoint does not incur an HTTP round-trip every single turn."""

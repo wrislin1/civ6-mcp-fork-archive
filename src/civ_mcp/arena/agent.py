@@ -99,8 +99,11 @@ class LLMPolicy:
                 self.options.context_budget,
             )
             self._n_ctx_resolves += 1
-        playbook_chars = len(self._system) - len(SYSTEM)
-        tool_schema_chars = len(json.dumps(self._tools))
+        playbook_chars = 0
+        tool_schema_chars = 0
+        if self.options.briefing.enabled and not briefing_was_supplied:
+            playbook_chars = len(self._system) - len(SYSTEM)
+            tool_schema_chars = len(json.dumps(self._tools))
         n_ctx = self._n_ctx if self._n_ctx is not None else DEFAULT_N_CTX
         briefing = await maybe_build_briefing(
             gs,
