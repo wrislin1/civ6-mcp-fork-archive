@@ -78,11 +78,12 @@ tiles, scout, and keep research/civics running.
 
 ## Unit promotions
 Units earn XP by surviving combat; ranged units earn XP without taking damage. A unit
-with an unspent promotion earns NO more XP until you spend it -- always promote when
-NEEDS PROMOTION shows. Promoting also heals the unit; use it as mid-fight sustain.
+with an unspent promotion earns NO more XP until you spend it. When the promotions briefing appears,
+or when get_unit_promotions(unit_id).promotions is non-empty, promote immediately.
+Promoting also heals the unit; use it as mid-fight sustain.
 Strong early picks: melee -> Battlecry (+7 attacking); ranged -> Volley (+5 vs land);
 recon -> prefer a vision/mobility promotion when offered (Sentry, Spyglass, Ranger,
-Alpine). Use get_unit_promotions(unit_id) then promote_unit(unit_id, promotion_type).
+Alpine). Use promote_unit(unit_id, promotion_type).
 
 ## Unit upgrades
 Upgrade obsolete units when you have the tech + resources + gold: Slinger->Archer with

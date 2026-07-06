@@ -95,7 +95,8 @@ def test_playbook_covers_promotions_and_expansion_doctrine():
 
     for header in ("## Unit promotions", "## Unit upgrades", "## Signals to watch"):
         assert header in text
-    assert "NEEDS PROMOTION" in text
+    assert "promotions briefing appears" in text
+    assert "get_unit_promotions(unit_id).promotions" in text
 
 
 def test_load_good(tmp_path):
