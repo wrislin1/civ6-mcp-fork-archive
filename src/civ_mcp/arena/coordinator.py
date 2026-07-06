@@ -147,7 +147,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         t for t in task_state.tasks if t.status == "active"
                     )
                     updated_tasks, task_results = await run_pre_model_tasks(
-                        gs, active_tasks_before
+                        gs, active_tasks_before, turn=st.turn
                     )
                     pre_model_state = save_task_state(
                         transcript_dir, run_id, st.local, updated_tasks

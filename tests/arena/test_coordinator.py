@@ -693,13 +693,27 @@ class FakeGSWithUnit(FakeGS):
             max_moves=2.0, health=100, max_health=100, valid_improvements=[],
         )
         self.found_city_calls = []
+        self.move_unit_calls = []
 
     async def get_units(self):
         return [self._unit]
 
+    async def get_diplomacy(self):
+        return []
+
+    async def get_threat_scan(self):
+        return []
+
+    async def get_map_area(self, x, y, radius=2):
+        return []
+
     async def found_city(self, unit_index):
         self.found_city_calls.append(unit_index)
         return "FOUNDED|5,5"
+
+    async def move_unit(self, unit_index, target_x, target_y):
+        self.move_unit_calls.append((unit_index, target_x, target_y))
+        return f"MOVING_TO|{target_x},{target_y}"
 
 
 @pytest.mark.asyncio
@@ -864,6 +878,45 @@ async def test_pre_model_task_results_appear_in_log_and_transcript(tmp_path):
     assert log_entry["task_tracker"]["active_before"] == 1
     assert log_entry["task_tracker"]["pre_model_results"][0]["action"] == "found_city"
     assert log_entry["task_tracker"]["pre_model_results"][0]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_pre_model_task_execution_refreshes_updated_turn(tmp_path):
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    run_id, player_id = "task-refresh", 6
+    existing_task = UnitTask(
+        task_id="settle:65537",
+        kind="settle",
+        unit_id=65537,
+        target_x=10,
+        target_y=10,
+        created_turn=2,
+        updated_turn=2,
+    )
+    save_task_state(str(tmp_path), run_id, player_id, [existing_task])
+    cfg = ArenaConfig(
+        players=[PlayerSpec(player_id, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[player_id],
+        run_id=run_id,
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {"summary": "no new task", "transcript": {"final_summary": "TACTICAL: none"}},
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        [f"LOCAL|{player_id}", "TURN|9", "ACTIVE|true", "LAST|1"],
+    ])
+    gs = FakeGSWithUnit(unit_id=65537, unit_index=1, x=1, y=1)
+
+    await run_arena(conn, gs, cfg, policy=pol)
+
+    saved = task_path(str(tmp_path), run_id, player_id).read_text()
+    assert '"updated_turn": 9' in saved
 
 
 @pytest.mark.asyncio

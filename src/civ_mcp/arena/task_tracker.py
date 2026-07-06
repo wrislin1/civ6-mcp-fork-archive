@@ -209,6 +209,10 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
     return parsed
 
 
+def _task_unit_ids_equivalent(left: int, right: int) -> bool:
+    return left == right or left % 65536 == right % 65536
+
+
 def merge_tasks(
     existing: Sequence[UnitTask], updates: Sequence[UnitTask], max_tasks: int
 ) -> tuple[UnitTask, ...]:
@@ -227,13 +231,20 @@ def merge_tasks(
 
     for update in updates:
         if update.status == "cancelled":
-            match_id = next(
-                (tid for tid, task in merged.items() if task.unit_id == update.unit_id),
-                None,
-            )
-            if match_id is not None:
-                del merged[match_id]
+            for task_id in [
+                tid
+                for tid, task in merged.items()
+                if _task_unit_ids_equivalent(task.unit_id, update.unit_id)
+            ]:
+                del merged[task_id]
             continue
+        for task_id in [
+            tid
+            for tid, task in merged.items()
+            if task.kind == update.kind
+            and _task_unit_ids_equivalent(task.unit_id, update.unit_id)
+        ]:
+            del merged[task_id]
         merged[update.task_id] = update
 
     # Cap ACTIVE tasks only: a freshly completed/lost task (which
@@ -368,13 +379,36 @@ async def _visible_hostile_nearby(
     )
 
 
+def _touch_task(task: UnitTask, turn: int | None) -> UnitTask:
+    if turn is None:
+        return task
+    return replace(task, updated_turn=turn)
+
+
+def _unit_lookup_maps(units: Sequence[Any]) -> tuple[dict[int, Any], dict[int, Any]]:
+    by_id = {unit.unit_id: unit for unit in units}
+    by_index: dict[int, Any] = {}
+    for unit in units:
+        by_index.setdefault(unit.unit_index, unit)
+        by_index.setdefault(unit.unit_id % 65536, unit)
+    return by_id, by_index
+
+
+def _resolve_task_unit(
+    task: UnitTask, units_by_id: dict[int, Any], units_by_index: dict[int, Any]
+) -> Any | None:
+    return units_by_id.get(task.unit_id) or units_by_index.get(task.unit_id)
+
+
 async def _run_single_task(
     gs: Any,
     task: UnitTask,
     units_by_id: dict[int, Any],
+    units_by_index: dict[int, Any],
     owner_context: _HostileOwnerContext,
+    turn: int | None,
 ) -> tuple[UnitTask, dict[str, Any]]:
-    unit = units_by_id.get(task.unit_id)
+    unit = _resolve_task_unit(task, units_by_id, units_by_index)
     if unit is None:
         new_task = replace(task, status="lost", last_result="unit_missing")
         return new_task, _result_dict(
@@ -382,7 +416,7 @@ async def _run_single_task(
         )
 
     if unit.moves_remaining <= 0:
-        new_task = replace(task, last_result="skipped_no_moves")
+        new_task = _touch_task(replace(task, last_result="skipped_no_moves"), turn)
         return new_task, _result_dict(
             task, status="active", action="skip", result="skipped_no_moves"
         )
@@ -405,13 +439,15 @@ async def _run_single_task(
         if await _visible_hostile_nearby(
             gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
         ):
-            new_task = replace(task, last_result="blocked_visible_hostile")
+            new_task = _touch_task(
+                replace(task, last_result="blocked_visible_hostile"), turn
+            )
             return new_task, _result_dict(
                 task, status="active", action="block", result="blocked_visible_hostile"
             )
 
         result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
-        new_task = replace(task, last_result=result_str)
+        new_task = _touch_task(replace(task, last_result=result_str), turn)
         return new_task, _result_dict(task, status="active", action="move", result=result_str)
 
     # task.kind == "builder_improve"
@@ -419,7 +455,7 @@ async def _run_single_task(
         if task.improvement in unit.valid_improvements:
             result_str = await gs.improve_tile(unit.unit_index, task.improvement)
             if result_str.startswith("Error:"):
-                new_task = replace(task, last_result=result_str)
+                new_task = _touch_task(replace(task, last_result=result_str), turn)
                 return new_task, _result_dict(
                     task, status="active", action="improve", result=result_str
                 )
@@ -441,7 +477,9 @@ async def _run_single_task(
                 result="blocked_improvement_not_valid_retry_limit",
             )
 
-        new_task = replace(task, last_result="blocked_improvement_not_valid")
+        new_task = _touch_task(
+            replace(task, last_result="blocked_improvement_not_valid"), turn
+        )
         return new_task, _result_dict(
             task,
             status="active",
@@ -452,13 +490,13 @@ async def _run_single_task(
     if await _visible_hostile_nearby(
         gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
     ):
-        new_task = replace(task, last_result="blocked_visible_hostile")
+        new_task = _touch_task(replace(task, last_result="blocked_visible_hostile"), turn)
         return new_task, _result_dict(
             task, status="active", action="block", result="blocked_visible_hostile"
         )
 
     result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
-    new_task = replace(task, last_result=result_str)
+    new_task = _touch_task(replace(task, last_result=result_str), turn)
     return new_task, _result_dict(task, status="active", action="move", result=result_str)
 
 
@@ -478,7 +516,7 @@ def _task_needs_hostile_context(task: UnitTask, unit: Any | None) -> bool:
 
 
 async def run_pre_model_tasks(
-    gs: Any, tasks: Sequence[UnitTask]
+    gs: Any, tasks: Sequence[UnitTask], *, turn: int | None = None
 ) -> tuple[tuple[UnitTask, ...], list[dict[str, Any]]]:
     """Execute active, low-risk tasks before the model turn.
 
@@ -498,9 +536,11 @@ async def run_pre_model_tasks(
         units = await gs.get_units()
     except Exception:  # pragma: no cover - defensive, mirrors per-task guard
         units = []
-    units_by_id = {unit.unit_id: unit for unit in units}
+    units_by_id, units_by_index = _unit_lookup_maps(units)
     if any(
-        _task_needs_hostile_context(task, units_by_id.get(task.unit_id))
+        _task_needs_hostile_context(
+            task, _resolve_task_unit(task, units_by_id, units_by_index)
+        )
         for task in executable
     ):
         owner_context = await _hostile_owner_context(gs)
@@ -517,7 +557,7 @@ async def run_pre_model_tasks(
 
         try:
             new_task, result = await _run_single_task(
-                gs, task, units_by_id, owner_context
+                gs, task, units_by_id, units_by_index, owner_context, turn
             )
         except Exception as exc:
             error_msg = f"error:{exc!r}"

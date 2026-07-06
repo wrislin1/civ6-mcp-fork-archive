@@ -297,6 +297,29 @@ def test_merge_replaces_by_task_id():
     assert merged == (update,)
 
 
+def test_merge_tasks_replaces_existing_composite_task_with_unit_index_alias():
+    existing = _task(
+        task_id="settle:65537",
+        unit_id=65537,
+        target_x=10,
+        target_y=10,
+        created_turn=2,
+        updated_turn=2,
+    )
+    update = _task(
+        task_id="settle:1",
+        unit_id=1,
+        target_x=12,
+        target_y=13,
+        created_turn=9,
+        updated_turn=9,
+    )
+
+    merged = merge_tasks([existing], [update], max_tasks=8)
+
+    assert merged == (update,)
+
+
 def test_merge_cancel_removes_matching_unit_id_task():
     existing = (_task(task_id="settle:1", unit_id=1),)
     cancel = _task(task_id="cancel:1", kind="cancel", unit_id=1, status="cancelled")
@@ -304,6 +327,30 @@ def test_merge_cancel_removes_matching_unit_id_task():
     merged = merge_tasks(existing, [cancel], max_tasks=10)
 
     assert merged == ()
+
+
+def test_merge_tasks_cancel_matches_unit_index_alias():
+    existing = _task(
+        task_id="settle:65537",
+        unit_id=65537,
+        target_x=10,
+        target_y=10,
+        created_turn=2,
+        updated_turn=2,
+    )
+    cancel = UnitTask(
+        task_id="cancel:1",
+        kind="cancel",
+        unit_id=1,
+        target_x=0,
+        target_y=0,
+        status="cancelled",
+        created_turn=9,
+        updated_turn=9,
+        last_result="cancelled",
+    )
+
+    assert merge_tasks([existing], [cancel], max_tasks=8) == ()
 
 
 def test_merge_respects_max_tasks_keeping_newest():
@@ -376,6 +423,39 @@ async def test_settle_moves_toward_target_when_not_there_yet():
     assert gs.found_city_calls == []
     assert updated[0].status == "active"
     assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
+async def test_run_pre_model_tasks_bumps_updated_turn_for_active_followthrough():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit])
+    task = _task(
+        task_id="settle:65537",
+        unit_id=65537,
+        target_x=18,
+        target_y=24,
+        created_turn=5,
+        updated_turn=5,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=12)
+
+    assert updated[0].status == "active"
+    assert updated[0].updated_turn == 12
+    assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
+async def test_run_pre_model_tasks_resolves_unit_index_alias_from_plan():
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = FakeGS(units=[unit])
+    task = _task(task_id="settle:1", unit_id=1, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.found_city_calls == [1]
+    assert updated[0].status == "complete"
+    assert results[0]["action"] == "found_city"
 
 
 @pytest.mark.asyncio
