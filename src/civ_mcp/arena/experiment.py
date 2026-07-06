@@ -13,7 +13,9 @@ from civ_mcp.arena.config import (
     ArenaConfig,
     BriefingOptions,
     CivOptions,
+    MemoryOptions,
     PlayerSpec,
+    TaskTrackerOptions,
     _VALID_PROVIDERS,
 )
 from civ_mcp.arena.registry import resolve_tools
@@ -23,13 +25,19 @@ _LOCAL_KNOBS = (
     "tools",
     "result_char_cap",
     "max_steps",
+)
+_SHARED_KNOBS = (
     "playbook",
     "context_budget",
     "briefing",
+    "memory",
+    "task_tracker",
 )
-_CIV_KEYS = {"player", "provider", "model", "gateway", *_LOCAL_KNOBS}
+_CIV_KEYS = {"player", "provider", "model", "gateway", *_LOCAL_KNOBS, *_SHARED_KNOBS}
 _TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "civs"}
 _BRIEFING_DEFAULTS = BriefingOptions()
+_MEMORY_DEFAULTS = MemoryOptions()
+_TASK_TRACKER_DEFAULTS = TaskTrackerOptions()
 _CIV_DEFAULTS = CivOptions()
 _ARENA_DEFAULTS = ArenaConfig(players=[])
 
@@ -145,6 +153,30 @@ def _parse_briefing(civ_label: str, raw: object) -> BriefingOptions:
     )
 
 
+def _parse_memory(civ_label: str, raw: object) -> MemoryOptions:
+    if not isinstance(raw, dict):
+        raise _err(civ_label, f"memory must be a mapping, got {raw!r}")
+    _validate_mapping_keys(civ_label, raw, {"enabled", "max_chars"}, "memory")
+    enabled = raw.get("enabled", _MEMORY_DEFAULTS.enabled)
+    if not isinstance(enabled, bool):
+        raise _err(civ_label, f"memory.enabled must be a boolean, got {enabled!r}")
+    max_chars = _positive_int(civ_label, "memory.max_chars", raw.get("max_chars", _MEMORY_DEFAULTS.max_chars))
+    return MemoryOptions(enabled=enabled, max_chars=max_chars)
+
+
+def _parse_task_tracker(civ_label: str, raw: object) -> TaskTrackerOptions:
+    if not isinstance(raw, dict):
+        raise _err(civ_label, f"task_tracker must be a mapping, got {raw!r}")
+    _validate_mapping_keys(civ_label, raw, {"enabled", "max_tasks"}, "task_tracker")
+    enabled = raw.get("enabled", _TASK_TRACKER_DEFAULTS.enabled)
+    if not isinstance(enabled, bool):
+        raise _err(civ_label, f"task_tracker.enabled must be a boolean, got {enabled!r}")
+    max_tasks = _positive_int(
+        civ_label, "task_tracker.max_tasks", raw.get("max_tasks", _TASK_TRACKER_DEFAULTS.max_tasks)
+    )
+    return TaskTrackerOptions(enabled=enabled, max_tasks=max_tasks)
+
+
 def _parse_tools(civ_label: str, raw: object) -> str | tuple[str, ...]:
     if isinstance(raw, str):
         selector: str | tuple[str, ...] = raw
@@ -176,18 +208,39 @@ def _parse_civ(raw: dict[object, object]) -> PlayerSpec:
         present = [key for key in (*_LOCAL_KNOBS, "gateway") if key in raw]
         if present:
             raise _err(label, f"knob(s) {present} only apply to local civs, not {provider}")
-        return PlayerSpec(player_id, provider, model, gateway)
-    if not model.strip():
-        raise _err(label, "model must be a non-empty string for local civs")
-    if model != model.strip():
-        raise _err(label, "model must not have leading or trailing whitespace")
-    tools = _parse_tools(label, raw.get("tools", _CIV_DEFAULTS.tools))
+    else:
+        if not model.strip():
+            raise _err(label, "model must be a non-empty string for local civs")
+        if model != model.strip():
+            raise _err(label, "model must not have leading or trailing whitespace")
+
+    # Shared behavior knobs apply to local and CLI civs alike.
     playbook = raw.get("playbook", _CIV_DEFAULTS.playbook)
     if playbook not in VALID_PLAYBOOKS:
         raise _err(label, f"unknown playbook {playbook!r}; want {VALID_PLAYBOOKS}")
     budget = raw.get("context_budget", _CIV_DEFAULTS.context_budget)
     if budget != "auto":
         budget = _positive_int(label, "context_budget", budget)
+    briefing = _BRIEFING_DEFAULTS if "briefing" not in raw else _parse_briefing(label, raw["briefing"])
+    memory = _MEMORY_DEFAULTS if "memory" not in raw else _parse_memory(label, raw["memory"])
+    task_tracker = (
+        _TASK_TRACKER_DEFAULTS
+        if "task_tracker" not in raw
+        else _parse_task_tracker(label, raw["task_tracker"])
+    )
+
+    if provider != "local":
+        opts = CivOptions(
+            playbook=playbook,
+            context_budget=budget,
+            briefing=briefing,
+            memory=memory,
+            task_tracker=task_tracker,
+        )
+        return PlayerSpec(player_id, provider, model, gateway, opts)
+
+    # Local-only knobs: defaulted above for CLI providers, parsed here for local.
+    tools = _parse_tools(label, raw.get("tools", _CIV_DEFAULTS.tools))
     cap = _positive_int(label, "result_char_cap", raw.get("result_char_cap", _CIV_DEFAULTS.result_char_cap))
     steps = _positive_int(label, "max_steps", raw.get("max_steps", _CIV_DEFAULTS.max_steps))
     opts = CivOptions(
@@ -196,11 +249,9 @@ def _parse_civ(raw: dict[object, object]) -> PlayerSpec:
         max_steps=steps,
         playbook=playbook,
         context_budget=budget,
-        briefing=(
-            _BRIEFING_DEFAULTS
-            if "briefing" not in raw
-            else _parse_briefing(label, raw["briefing"])
-        ),
+        briefing=briefing,
+        memory=memory,
+        task_tracker=task_tracker,
     )
     return PlayerSpec(player_id, provider, model, gateway, opts)
 

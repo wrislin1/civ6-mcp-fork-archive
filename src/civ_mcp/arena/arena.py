@@ -23,7 +23,7 @@ def build_policies(specs, cost, cfg):
     for spec in specs:
         if spec.driver_kind() == "cli":
             policies[spec.player_id] = CLIAgentPolicy(
-                spec.provider, cost, project_dir=os.getcwd(), model=spec.model)
+                spec.provider, cost, project_dir=os.getcwd(), model=spec.model, options=spec.options)
         else:  # in_process local
             backend = OpenAICompatBackend(
                 spec.gateway or cfg.gateway_url,   # per-civ gateway override, else the global default

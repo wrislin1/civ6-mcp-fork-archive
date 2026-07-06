@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.config import CivOptions, MemoryOptions, TaskTrackerOptions
 from civ_mcp.arena.experiment import load_experiment
 from civ_mcp.arena.registry import resolve_tools
 
@@ -708,3 +708,90 @@ civs:
     assert cfg.players[0].gateway == ""
     assert cfg.run_id == ""
     assert cfg.gateway_url == "http://192.168.20.196:11444/v1"
+
+
+def test_local_civ_parses_memory_and_task_tracker(tmp_path):
+    text = GOOD.replace(
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}\n"
+        "    memory: {enabled: true, max_chars: 800}\n"
+        "    task_tracker: {enabled: true, max_tasks: 5}",
+    )
+    cfg = load_experiment(_write(tmp_path, text))
+    local = cfg.players[0]
+    assert local.options.memory == MemoryOptions(enabled=True, max_chars=800)
+    assert local.options.task_tracker == TaskTrackerOptions(enabled=True, max_tasks=5)
+
+
+def test_cli_civ_parses_shared_behavior_knobs(tmp_path):
+    text = """
+civs:
+  - player: 1
+    provider: cli-claude
+    playbook: condensed
+    briefing: {enabled: true, map_radius: 2, sections: [overview, units]}
+    memory: {enabled: true, max_chars: 900}
+    task_tracker: {enabled: true, max_tasks: 4}
+"""
+    cfg = load_experiment(_write(tmp_path, text))
+    cli = cfg.players[0]
+    assert cli.provider == "cli-claude"
+    assert cli.options.playbook == "condensed"
+    assert cli.options.briefing.enabled is True
+    assert cli.options.briefing.map_radius == 2
+    assert cli.options.briefing.sections == ("overview", "units")
+    assert cli.options.memory == MemoryOptions(enabled=True, max_chars=900)
+    assert cli.options.task_tracker == TaskTrackerOptions(enabled=True, max_tasks=4)
+    # local-only knobs stay at defaults for CLI providers
+    assert cli.options.tools == CivOptions().tools
+    assert cli.options.result_char_cap == CivOptions().result_char_cap
+    assert cli.options.max_steps == CivOptions().max_steps
+
+
+@pytest.mark.parametrize(
+    "knob_line",
+    [
+        "    tools: standard\n",
+        "    result_char_cap: 6000\n",
+        "    max_steps: 10\n",
+        "    gateway: http://gw:11441/v1\n",
+    ],
+)
+def test_cli_civ_still_rejects_local_only_knobs_and_gateway(tmp_path, knob_line):
+    text = (
+        "civs:\n"
+        "  - player: 1\n"
+        "    provider: cli-claude\n"
+        + knob_line
+    )
+    with pytest.raises(ValueError, match=r"player 1.*cli-claude"):
+        load_experiment(_write(tmp_path, text))
+
+
+def test_rejects_non_boolean_memory_enabled(tmp_path):
+    bad = GOOD.replace(
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}\n"
+        '    memory: {enabled: "true"}',
+    )
+    with pytest.raises(ValueError, match=r"player 3.*memory\.enabled"):
+        load_experiment(_write(tmp_path, bad))
+
+
+def test_rejects_non_positive_task_tracker_max_tasks(tmp_path):
+    bad = GOOD.replace(
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
+        "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}\n"
+        "    task_tracker: {enabled: true, max_tasks: 0}",
+    )
+    with pytest.raises(ValueError, match=r"player 3.*task_tracker\.max_tasks must be positive"):
+        load_experiment(_write(tmp_path, bad))
+
+
+def test_civ_options_fingerprint_contains_memory_and_task_tracker():
+    fp = CivOptions(
+        memory=MemoryOptions(enabled=True, max_chars=900),
+        task_tracker=TaskTrackerOptions(enabled=True, max_tasks=4),
+    ).fingerprint()
+    assert fp["memory"] == {"enabled": True, "max_chars": 900}
+    assert fp["task_tracker"] == {"enabled": True, "max_tasks": 4}

@@ -32,6 +32,17 @@ class BriefingOptions:
     sections: tuple[str, ...] = ("overview", "units", "cities", "map", "research", "production_options")
 
 @dataclass(frozen=True)
+class MemoryOptions:
+    enabled: bool = False
+    max_chars: int = 1200
+
+
+@dataclass(frozen=True)
+class TaskTrackerOptions:
+    enabled: bool = False
+    max_tasks: int = 8
+
+@dataclass(frozen=True)
 class CivOptions:
     tools: str | tuple = "minimal"
     result_char_cap: int = 1500
@@ -39,6 +50,8 @@ class CivOptions:
     playbook: str = "none"
     context_budget: int | str = "auto"
     briefing: BriefingOptions = field(default_factory=BriefingOptions)
+    memory: MemoryOptions = field(default_factory=MemoryOptions)
+    task_tracker: TaskTrackerOptions = field(default_factory=TaskTrackerOptions)
 
     def fingerprint(self) -> dict:
         return {
@@ -52,6 +65,8 @@ class CivOptions:
                 "map_radius": self.briefing.map_radius,
                 "sections": list(self.briefing.sections),
             },
+            "memory": {"enabled": self.memory.enabled, "max_chars": self.memory.max_chars},
+            "task_tracker": {"enabled": self.task_tracker.enabled, "max_tasks": self.task_tracker.max_tasks},
         }
 
 @dataclass(frozen=True)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio, json, os, signal, time
 
+from civ_mcp.arena.config import CivOptions
+
 # Four-layer lockdown for CLI civ security:
 # 1. --setting-sources project,local keeps project .mcp.json auto-discovery (the only headless
 #    `claude -p` path observed to expose civ6 stdio tools) while excluding user-scope MCP
@@ -79,9 +81,10 @@ _PROMPT = (
 class CLIAgentPolicy:
     needs_exclusive_tuner = True   # the CLI's civ6 MCP needs the single tuner slot
 
-    def __init__(self, provider, cost, project_dir, model="", timeout_s=900, max_turns=40):
+    def __init__(self, provider, cost, project_dir, model="", timeout_s=900, max_turns=40, options=None):
         self.provider, self.cost, self.project_dir = provider, cost, project_dir
         self.model, self.timeout_s, self.max_turns = model, timeout_s, max_turns
+        self.options = options if options is not None else CivOptions()
 
     def _build_argv(self, player_id: int, turn: int) -> list[str]:
         prompt = _PROMPT.format(pid=player_id, turn=turn)
