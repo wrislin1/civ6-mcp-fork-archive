@@ -1416,6 +1416,31 @@ def _behavior_cli_rec() -> dict:
     }
 
 
+def _behavior_stale_loaded_memory_rec() -> dict:
+    """standing memory file existed, but TTL omitted it from prompt injection."""
+    return {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "ts": "2026-07-06T00:02:00Z",
+        "player_id": 3,
+        "turn": 3,
+        "provider": "local",
+        "model": "model-c",
+        "driver": "in_process",
+        "steps": [],
+        "invalid_tool_calls": [],
+        "standing_memory": {"loaded": True, "injected_chars": 0, "captured_chars": 0},
+        "task_tracker": {
+            "active_before": 0,
+            "pre_model_results": [],
+            "active_after": 0,
+        },
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+
+
 def test_behavior_top_level_aggregate() -> None:
     from civ_mcp.arena.analyze import analyze
 
@@ -1431,6 +1456,19 @@ def test_behavior_top_level_aggregate() -> None:
     assert behavior["task_lost"] == 1
     assert behavior["drivers"] == {"in_process": 1, "cli": 1}
     assert behavior["puppeted_players"] == [1, 2]
+
+
+def test_behavior_stale_loaded_memory_is_not_counted_as_injected() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([_behavior_stale_loaded_memory_rec()], [])
+    behavior = report["behavior"]
+    player_behavior = report["by_player"][3]["behavior"]
+
+    assert behavior["standing_memory_turns"] == 0
+    assert behavior["standing_memory_captured_turns"] == 0
+    assert player_behavior["standing_memory_injected_turns"] == 0
+    assert player_behavior["standing_memory_captured_turns"] == 0
 
 
 def test_behavior_per_player_local_puppet() -> None:

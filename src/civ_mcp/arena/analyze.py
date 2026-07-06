@@ -116,9 +116,15 @@ def _count_tool_calls(steps: list[dict], tool_bases: "frozenset[str]") -> int:
     return count
 
 
-def _standing_memory_loaded(rec: dict) -> bool:
+def _standing_memory_injected(rec: dict) -> bool:
     sm = rec.get("standing_memory")
-    return bool(isinstance(sm, dict) and sm.get("loaded"))
+    if not isinstance(sm, dict):
+        return False
+    if "injected" in sm:
+        return bool(sm.get("injected"))
+    # Older Slice 3 records already included injected_chars; loaded alone only
+    # proves a file existed, not that TTL allowed prompt injection.
+    return bool((sm.get("injected_chars") or 0) > 0)
 
 
 def _standing_memory_captured(rec: dict) -> bool:
@@ -163,7 +169,7 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
         else:
             drivers["cli"] += 1
 
-        if _standing_memory_loaded(rec):
+        if _standing_memory_injected(rec):
             standing_memory_turns += 1
         if _standing_memory_captured(rec):
             standing_memory_captured_turns += 1
@@ -557,7 +563,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                         truncated_count += 1
 
             # Slice 3 — standing memory / task tracker / behavior-critical tool calls
-            if _standing_memory_loaded(rec):
+            if _standing_memory_injected(rec):
                 mem_injected_turns += 1
             if _standing_memory_captured(rec):
                 mem_captured_turns += 1

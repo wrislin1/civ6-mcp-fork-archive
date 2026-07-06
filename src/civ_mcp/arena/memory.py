@@ -196,9 +196,9 @@ def _is_section_header(line: str) -> bool:
     bullet = _BULLET_PREFIX_RE.match(stripped)
     candidate = _strip_bullet(stripped) if bullet else stripped
     body = candidate[:-1].strip()
-    if not body or not body.isupper():
+    if not body:
         return False
 
     if bullet:
-        return body in _BULLETED_SECTION_HEADERS
-    return True
+        return body.upper() in _BULLETED_SECTION_HEADERS
+    return body.isupper()

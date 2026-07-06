@@ -190,6 +190,40 @@ def test_extract_standing_plan_stops_at_bulleted_reflection_header():
     )
 
 
+def test_extract_standing_plan_stops_at_titlecase_bulleted_reflection_header():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Keep settler 123 marching to (18,24).\n"
+        "- TASK settle unit_id=123 target=18,24\n"
+        "- Tactical:\n"
+        "- Settler moved one tile this turn.\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == (
+        "Keep settler 123 marching to (18,24).\n"
+        "TASK settle unit_id=123 target=18,24"
+    )
+
+
+def test_extract_standing_plan_stops_at_lowercase_bulleted_reflection_header():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Keep settler 123 marching to (18,24).\n"
+        "- TASK settle unit_id=123 target=18,24\n"
+        "- tactical:\n"
+        "- Settler moved one tile this turn.\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == (
+        "Keep settler 123 marching to (18,24).\n"
+        "TASK settle unit_id=123 target=18,24"
+    )
+
+
 def test_format_memory_block_exact_heading():
     memory = StandingMemory(
         schema_version=1,

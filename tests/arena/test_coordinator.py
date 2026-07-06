@@ -11,7 +11,7 @@ from civ_mcp.arena.config import (
     PlayerSpec,
     TaskTrackerOptions,
 )
-from civ_mcp.arena.memory import memory_path
+from civ_mcp.arena.memory import memory_path, save_memory
 from civ_mcp.arena.task_tracker import UnitTask, save_task_state, task_path
 
 class FakeConn:
@@ -726,6 +726,54 @@ async def test_memory_from_turn_n_injected_on_turn_n_plus_1(tmp_path):
     await run_arena(FakeConn(), FakeGS(), cfg, policy=pol2)
     assert pol2.calls[0]["memory_block"].startswith("== STANDING PLAN (captured turn 2")
     assert "march settler to (18,24)" in pol2.calls[0]["memory_block"]
+
+
+@pytest.mark.asyncio
+async def test_stale_memory_loaded_but_not_reported_as_injected(tmp_path):
+    run_id, player_id = "stale-memtest", 9
+    save_memory(
+        str(tmp_path),
+        run_id,
+        player_id,
+        turn=1,
+        text="keep settling east",
+        max_chars=1200,
+    )
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200, max_age_turns=1))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(player_id, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[player_id],
+        run_id=run_id,
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {
+            "summary": "no plan this time",
+            "transcript": {"final_summary": "TACTICAL: no standing plan"},
+        },
+        options=opts,
+    )
+    conn = FakeConnWithOverview()
+    conn._polls = iter([
+        [f"LOCAL|{player_id}", "TURN|3", "ACTIVE|true", "LAST|1"],
+    ])
+    gs = FakeGSWithConn(conn)
+    sink = FakeSink()
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls[0]["memory_block"] == ""
+    log_memory = result["log"][0]["standing_memory"]
+    assert log_memory["loaded"] is True
+    assert log_memory["injected"] is False
+    assert log_memory["injected_chars"] == 0
+
+    transcript_memory = sink.records[0]["standing_memory"]
+    assert transcript_memory["loaded"] is True
+    assert transcript_memory["injected"] is False
+    assert transcript_memory["injected_chars"] == 0
 
 
 @pytest.mark.asyncio

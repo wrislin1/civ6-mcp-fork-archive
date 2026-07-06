@@ -219,6 +219,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 }
                 _standing_memory_fields = {
                     "loaded": bool(memory),
+                    "injected": bool(memory_block),
                     "injected_chars": len(memory_block),
                     "captured_chars": len(captured_plan),
                 }
