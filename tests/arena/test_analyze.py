@@ -1338,3 +1338,176 @@ def test_step_verb_covers_all_shared_vocab_entries():
     base, verb = _step_verb({"tool_name": MCP_CIV6_PREFIX + "city_attack", "tool_args": {}})
     assert base == "city_attack"
     assert verb == "city_attack"
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — Neutral Behavior and Performance Analysis (Slice 3)
+#
+# Slice 3 is behavior testing over N puppets, not treatment-vs-control — the new
+# "behavior" section must be framed via player_id / driver / provider / model only.
+# ---------------------------------------------------------------------------
+
+def _behavior_local_rec() -> dict:
+    """in_process puppet: standing memory loaded+captured, 2 task actions
+    (1 complete, 1 blocked_visible_hostile), 2 GP tool calls, 1 trade tool call."""
+    return {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "ts": "2026-07-06T00:00:00Z",
+        "player_id": 1,
+        "turn": 1,
+        "provider": "local",
+        "model": "model-a",
+        "driver": "in_process",
+        "steps": [
+            {"tool_name": "get_great_people", "tool_args": {}, "tool_result_full": "[]"},
+            {"tool_name": "recruit_great_person", "tool_args": {"individual_id": 1},
+             "tool_result_full": "OK"},
+            {"tool_name": "get_trade_routes", "tool_args": {}, "tool_result_full": "[]"},
+        ],
+        "invalid_tool_calls": [],
+        "standing_memory": {"loaded": True, "injected_chars": 500, "captured_chars": 200},
+        "task_tracker": {
+            "active_before": 2,
+            "pre_model_results": [
+                {"task_id": "t1", "kind": "improve", "unit_id": 5, "target": [1, 1],
+                 "status": "complete", "action": "improve", "result": "ok"},
+                {"task_id": "t2", "kind": "move", "unit_id": 6, "target": [2, 2],
+                 "status": "active", "action": "move", "result": "blocked_visible_hostile"},
+            ],
+            "active_after": 1,
+        },
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+
+
+def _behavior_cli_rec() -> dict:
+    """cli puppet: standing memory absent, 1 task action (lost), 3 religion/WC tool calls."""
+    return {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "ts": "2026-07-06T00:01:00Z",
+        "player_id": 2,
+        "turn": 1,
+        "provider": "anthropic",
+        "model": "model-b",
+        "driver": "cli",
+        "steps": [
+            {"tool_name": "mcp__civ6__get_world_congress", "tool_result_full": "{}"},
+            {"tool_name": "mcp__civ6__queue_wc_votes", "tool_args": {"votes": "[]"},
+             "tool_result_full": "OK"},
+            {"tool_name": "mcp__civ6__get_religion_beliefs", "tool_result_full": "{}"},
+        ],
+        "invalid_tool_calls": [],
+        "standing_memory": {"loaded": False, "injected_chars": 0, "captured_chars": 0},
+        "task_tracker": {
+            "active_before": 1,
+            "pre_model_results": [
+                {"task_id": "t3", "kind": "attack", "unit_id": 9, "target": [3, 3],
+                 "status": "lost", "action": "attack", "result": "unit_lost"},
+            ],
+            "active_after": 0,
+        },
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+
+
+def test_behavior_top_level_aggregate() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([_behavior_local_rec(), _behavior_cli_rec()], [])
+    behavior = report["behavior"]
+
+    assert behavior["standing_memory_turns"] == 1
+    assert behavior["standing_memory_captured_turns"] == 1
+    assert behavior["task_tracker_turns"] == 2
+    assert behavior["task_pre_model_actions"] == 3
+    assert behavior["task_completed"] == 1
+    assert behavior["task_blocked_visible_hostile"] == 1
+    assert behavior["task_lost"] == 1
+    assert behavior["drivers"] == {"in_process": 1, "cli": 1}
+    assert behavior["puppeted_players"] == [1, 2]
+
+
+def test_behavior_per_player_local_puppet() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([_behavior_local_rec(), _behavior_cli_rec()], [])
+    pb = report["by_player"][1]["behavior"]
+
+    assert pb["driver"] == "in_process"
+    assert pb["provider"] == "local"
+    assert pb["model"] == "model-a"
+    assert pb["standing_memory_injected_turns"] == 1
+    assert pb["standing_memory_captured_turns"] == 1
+    assert pb["task_follow_through_attempts"] == 2
+    assert pb["task_completions"] == 1
+    assert pb["task_blocked"] == 1
+    assert pb["task_lost"] == 0
+    assert pb["great_people_tool_calls"] == 2
+    assert pb["trade_route_tool_calls"] == 1
+    assert pb["religion_wc_tool_calls"] == 0
+
+
+def test_behavior_per_player_cli_puppet() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([_behavior_local_rec(), _behavior_cli_rec()], [])
+    pb = report["by_player"][2]["behavior"]
+
+    assert pb["driver"] == "cli"
+    assert pb["provider"] == "anthropic"
+    assert pb["model"] == "model-b"
+    assert pb["standing_memory_injected_turns"] == 0
+    assert pb["standing_memory_captured_turns"] == 0
+    assert pb["task_follow_through_attempts"] == 1
+    assert pb["task_completions"] == 0
+    assert pb["task_blocked"] == 0
+    assert pb["task_lost"] == 1
+    assert pb["great_people_tool_calls"] == 0
+    assert pb["trade_route_tool_calls"] == 0
+    assert pb["religion_wc_tool_calls"] == 3
+
+
+def test_behavior_markdown_has_section_and_no_treatment_control_wording() -> None:
+    from civ_mcp.arena.analyze import analyze, render_markdown
+
+    report = analyze([_behavior_local_rec(), _behavior_cli_rec()], [])
+    md = render_markdown(report)
+
+    assert "## Behavior Metrics" in md
+    # Neutral framing only — no legacy A/B treatment/control wording anywhere.
+    assert "treatment" not in md.lower()
+    assert "control" not in md.lower()
+    # Uses player_id / driver / provider / model framing instead.
+    assert "driver" in md.lower()
+    assert "in_process" in md
+    assert "cli" in md
+
+    # Behavior Metrics section appears before the per-player model rubric headings.
+    behavior_idx = md.index("## Behavior Metrics")
+    player_heading_idx = md.index("## Player")
+    assert behavior_idx < player_heading_idx
+
+
+def test_behavior_empty_run_all_zero() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    report = analyze([], [])
+    behavior = report["behavior"]
+
+    assert behavior == {
+        "standing_memory_turns": 0,
+        "standing_memory_captured_turns": 0,
+        "task_tracker_turns": 0,
+        "task_pre_model_actions": 0,
+        "task_completed": 0,
+        "task_blocked_visible_hostile": 0,
+        "task_lost": 0,
+        "drivers": {"in_process": 0, "cli": 0},
+        "puppeted_players": [],
+    }

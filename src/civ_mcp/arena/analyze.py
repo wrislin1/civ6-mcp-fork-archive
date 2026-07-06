@@ -87,6 +87,113 @@ def _is_local_driver(rec: dict) -> bool:
     return rec.get("driver", "in_process") == "in_process"
 
 
+# ---------------------------------------------------------------------------
+# Slice 3 — standing memory / task tracker / behavior-critical tool helpers
+# ---------------------------------------------------------------------------
+
+# Tool-name sets (post _step_verb tool_base, i.e. MCP_CIV6_PREFIX already stripped)
+# used to count per-system tool calls for the neutral behavior/performance metrics.
+_GREAT_PEOPLE_TOOLS: frozenset[str] = frozenset({
+    "recruit_great_person", "patronize_great_person", "reject_great_person",
+    "get_great_people", "get_gp_advisor",
+})
+_TRADE_ROUTE_TOOLS: frozenset[str] = frozenset({
+    "get_trade_routes", "get_trade_destinations", "start_trade_route", "teleport_trader",
+})
+_RELIGION_WC_TOOLS: frozenset[str] = frozenset({
+    "found_religion", "get_religion_beliefs", "get_religion_spread",
+    "queue_wc_votes", "get_world_congress",
+})
+
+
+def _count_tool_calls(steps: list[dict], tool_bases: "frozenset[str]") -> int:
+    """Count steps whose normalized tool_base (via _step_verb) is in tool_bases."""
+    count = 0
+    for step in steps:
+        tool_base, _ = _step_verb(step)
+        if tool_base in tool_bases:
+            count += 1
+    return count
+
+
+def _standing_memory_loaded(rec: dict) -> bool:
+    sm = rec.get("standing_memory")
+    return bool(isinstance(sm, dict) and sm.get("loaded"))
+
+
+def _standing_memory_captured(rec: dict) -> bool:
+    sm = rec.get("standing_memory")
+    return bool(isinstance(sm, dict) and (sm.get("captured_chars") or 0) > 0)
+
+
+def _task_tracker_pre_model_results(rec: dict) -> list[dict]:
+    tt = rec.get("task_tracker")
+    if not isinstance(tt, dict):
+        return []
+    results = tt.get("pre_model_results")
+    if not isinstance(results, list):
+        return []
+    return [r for r in results if isinstance(r, dict)]
+
+
+def behavior_metrics(transcript_records: list[dict]) -> dict:
+    """Aggregate NEUTRAL behavior/performance metrics across all transcript records.
+
+    Populated from the Task 5 ``standing_memory`` / ``task_tracker`` transcript
+    fields plus driver/tool-call counts. This is Slice 3 behavior testing over
+    N puppets — deliberately NOT framed as an A/B treatment/control comparison.
+    """
+    standing_memory_turns = 0
+    standing_memory_captured_turns = 0
+    task_tracker_turns = 0
+    task_pre_model_actions = 0
+    task_completed = 0
+    task_blocked_visible_hostile = 0
+    task_lost = 0
+    drivers = {"in_process": 0, "cli": 0}
+    puppeted_players: set = set()
+
+    for rec in transcript_records:
+        pid = rec.get("player_id")
+        if pid is not None:
+            puppeted_players.add(pid)
+
+        if _is_local_driver(rec):
+            drivers["in_process"] += 1
+        else:
+            drivers["cli"] += 1
+
+        if _standing_memory_loaded(rec):
+            standing_memory_turns += 1
+        if _standing_memory_captured(rec):
+            standing_memory_captured_turns += 1
+
+        if rec.get("task_tracker") is not None:
+            task_tracker_turns += 1
+
+        for entry in _task_tracker_pre_model_results(rec):
+            task_pre_model_actions += 1
+            status = entry.get("status")
+            if status == "complete":
+                task_completed += 1
+            elif status == "lost":
+                task_lost += 1
+            if entry.get("result") == "blocked_visible_hostile":
+                task_blocked_visible_hostile += 1
+
+    return {
+        "standing_memory_turns": standing_memory_turns,
+        "standing_memory_captured_turns": standing_memory_captured_turns,
+        "task_tracker_turns": task_tracker_turns,
+        "task_pre_model_actions": task_pre_model_actions,
+        "task_completed": task_completed,
+        "task_blocked_visible_hostile": task_blocked_visible_hostile,
+        "task_lost": task_lost,
+        "drivers": drivers,
+        "puppeted_players": sorted(puppeted_players),
+    }
+
+
 def _config_summary_group_key(rec: dict) -> str:
     pid = rec.get("player_id")
     if pid is not None:
@@ -399,6 +506,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                 "player_id": pid,
                 "model": rec.get("model") or "",
                 "provider": rec.get("provider"),
+                "driver": rec.get("driver", "in_process"),
             }
 
     # Sort each group's records by turn
@@ -413,6 +521,17 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
         total_steps = 0
         truncated_count = 0
         total_local_steps = 0
+
+        # Slice 3 — per-player behavior/performance accumulators
+        mem_injected_turns = 0
+        mem_captured_turns = 0
+        task_attempts = 0
+        task_completions = 0
+        task_blocked = 0
+        task_lost_count = 0
+        gp_calls = 0
+        trade_calls = 0
+        religion_wc_calls = 0
 
         for rec in records:
             turn: int = rec.get("turn", 0)
@@ -436,6 +555,24 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                     total_local_steps += 1
                     if step.get("truncated", False):
                         truncated_count += 1
+
+            # Slice 3 — standing memory / task tracker / behavior-critical tool calls
+            if _standing_memory_loaded(rec):
+                mem_injected_turns += 1
+            if _standing_memory_captured(rec):
+                mem_captured_turns += 1
+            for entry in _task_tracker_pre_model_results(rec):
+                task_attempts += 1
+                status = entry.get("status")
+                if status == "complete":
+                    task_completions += 1
+                elif status == "lost":
+                    task_lost_count += 1
+                if entry.get("result") == "blocked_visible_hostile":
+                    task_blocked += 1
+            gp_calls += _count_tool_calls(steps, _GREAT_PEOPLE_TOOLS)
+            trade_calls += _count_tool_calls(steps, _TRADE_ROUTE_TOOLS)
+            religion_wc_calls += _count_tool_calls(steps, _RELIGION_WC_TOOLS)
 
             series.append({
                 "turn": turn,
@@ -468,11 +605,26 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                 "truncation_incident_rate": trunc_rate,
             },
             "rubric": _rubric_for_model(records),
+            "behavior": {
+                "driver": labels["driver"],
+                "provider": labels["provider"],
+                "model": labels["model"],
+                "standing_memory_injected_turns": mem_injected_turns,
+                "standing_memory_captured_turns": mem_captured_turns,
+                "task_follow_through_attempts": task_attempts,
+                "task_completions": task_completions,
+                "task_blocked": task_blocked,
+                "task_lost": task_lost_count,
+                "great_people_tool_calls": gp_calls,
+                "trade_route_tool_calls": trade_calls,
+                "religion_wc_tool_calls": religion_wc_calls,
+            },
         }
 
     return {
         "by_player": result,
         "config_summary": config_summary(transcript_records),
+        "behavior": behavior_metrics(transcript_records),
     }
 
 
@@ -515,6 +667,53 @@ def render_markdown(report: dict) -> str:
                 f"| {pid} | {model} | {tools} | {max_steps} | {'' if n_ctx is None else n_ctx} | "
                 f"{avg_briefing:.1f} | {avg_steps:.1f} | {invalid_rate:.1%} | "
                 f"{avg_score_delta:.1f} |"
+            )
+        lines.append("")
+
+    behavior: dict = report.get("behavior", {})
+    if behavior:
+        lines.append("## Behavior Metrics\n")
+        drivers = behavior.get("drivers", {})
+        puppeted = behavior.get("puppeted_players", [])
+        lines.append(
+            f"- **Standing memory injected turns**: {behavior.get('standing_memory_turns', 0)}"
+        )
+        lines.append(
+            f"- **Standing memory captured turns**: {behavior.get('standing_memory_captured_turns', 0)}"
+        )
+        lines.append(f"- **Task tracker active turns**: {behavior.get('task_tracker_turns', 0)}")
+        lines.append(f"- **Task pre-model actions**: {behavior.get('task_pre_model_actions', 0)}")
+        lines.append(f"- **Task completions**: {behavior.get('task_completed', 0)}")
+        lines.append(
+            f"- **Task blocked (visible hostile)**: {behavior.get('task_blocked_visible_hostile', 0)}"
+        )
+        lines.append(f"- **Task lost**: {behavior.get('task_lost', 0)}")
+        lines.append(
+            f"- **Driver mix**: in_process={drivers.get('in_process', 0)}, cli={drivers.get('cli', 0)}"
+        )
+        lines.append(
+            f"- **Puppeted players**: {', '.join(str(p) for p in puppeted) if puppeted else 'none'}\n"
+        )
+
+        lines.append(
+            "| player_id | driver | provider | model | mem injected | mem captured | "
+            "task attempts | task complete | task blocked | task lost | GP calls | trade calls | religion/WC calls |"
+        )
+        lines.append(
+            "|-----------|--------|----------|-------|---------------|--------------|"
+            "---------------|----------------|--------------|-----------|----------|-------------|-------------------|"
+        )
+        for _seat, data in sorted(by_player.items(), key=lambda item: _config_summary_sort_key(item[0])):
+            pb = data.get("behavior") or {}
+            pid = data.get("player_id")
+            pid_str = str(pid) if pid is not None else str(_seat)
+            lines.append(
+                f"| {pid_str} | {pb.get('driver', '')} | {pb.get('provider', '') or ''} | "
+                f"{pb.get('model', '') or ''} | {pb.get('standing_memory_injected_turns', 0)} | "
+                f"{pb.get('standing_memory_captured_turns', 0)} | {pb.get('task_follow_through_attempts', 0)} | "
+                f"{pb.get('task_completions', 0)} | {pb.get('task_blocked', 0)} | {pb.get('task_lost', 0)} | "
+                f"{pb.get('great_people_tool_calls', 0)} | {pb.get('trade_route_tool_calls', 0)} | "
+                f"{pb.get('religion_wc_tool_calls', 0)} |"
             )
         lines.append("")
 
