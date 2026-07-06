@@ -831,7 +831,7 @@ def test_call_claude_summary_still_clamped_when_memory_disabled(monkeypatch):
     assert result["transcript"]["prompt_injections"]["standing_plan_instruction"] is False
 
 
-def test_call_claude_summary_caps_large_memory_capture_at_cli_bound(monkeypatch):
+def test_call_claude_summary_caps_large_memory_capture_at_configured_budget(monkeypatch):
     class FakeProc:
         pid = 1
         returncode = 0
@@ -840,7 +840,7 @@ def test_call_claude_summary_caps_large_memory_capture_at_cli_bound(monkeypatch)
             blob = json.dumps({
                 "type": "result",
                 "subtype": "success",
-                "result": "x" * 4500,
+                "result": "x" * 6500,
                 "usage": {"input_tokens": 10, "output_tokens": 5},
                 "total_cost_usd": 0.0,
             })
@@ -862,8 +862,8 @@ def test_call_claude_summary_caps_large_memory_capture_at_cli_bound(monkeypatch)
     )
     result = asyncio.run(pol(None, player_id=1, turn=1))
 
-    assert len(result["summary"]) == 4000
-    assert len(result["transcript"]["final_summary"]) == 4000
+    assert len(result["summary"]) == 6000
+    assert len(result["transcript"]["final_summary"]) == 6000
 
 
 def test_call_codex_standing_plan_survives_clamp_when_task_tracker_enabled(monkeypatch):
