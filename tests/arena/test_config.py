@@ -129,10 +129,14 @@ def test_civ_options_standing_plan_capture_chars():
     ).standing_plan_capture_chars == 4480
 
 
-def test_civ_options_standing_plan_summary_chars_is_bounded_for_cli():
+def test_civ_options_standing_plan_summary_chars_matches_enabled_capture_budget():
     assert CivOptions().standing_plan_summary_chars == 500
-    assert CivOptions(memory=MemoryOptions(enabled=True, max_chars=900)).standing_plan_summary_chars == 1200
-    assert CivOptions(memory=MemoryOptions(enabled=True, max_chars=6000)).standing_plan_summary_chars == 4000
+    assert CivOptions(
+        memory=MemoryOptions(enabled=True, max_chars=900),
+    ).standing_plan_summary_chars == 1200
+    assert CivOptions(
+        memory=MemoryOptions(enabled=True, max_chars=6000),
+    ).standing_plan_summary_chars == 6000
     assert CivOptions(task_tracker=TaskTrackerOptions(enabled=True)).standing_plan_summary_chars == 4000
     assert CivOptions(
         task_tracker=TaskTrackerOptions(enabled=True, max_tasks=12),
@@ -140,4 +144,4 @@ def test_civ_options_standing_plan_summary_chars_is_bounded_for_cli():
     assert CivOptions(
         memory=MemoryOptions(enabled=True, max_chars=6000),
         task_tracker=TaskTrackerOptions(enabled=True, max_tasks=12),
-    ).standing_plan_summary_chars == 4480
+    ).standing_plan_summary_chars == 6000

@@ -105,12 +105,7 @@ class CivOptions:
     def standing_plan_summary_chars(self) -> int:
         if not self.standing_plan_enabled:
             return 500
-        desired_chars = max(1200, self.standing_plan_capture_chars)
-        summary_cap = max(
-            STANDING_PLAN_CAPTURE_CHARS,
-            self._standing_plan_task_capture_chars,
-        )
-        return min(desired_chars, summary_cap)
+        return max(1200, self.standing_plan_capture_chars)
 
 @dataclass(frozen=True)
 class PlayerSpec:
