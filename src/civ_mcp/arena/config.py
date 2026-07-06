@@ -22,6 +22,8 @@ VALID_SECTIONS = (
 
 VALID_PLAYBOOKS = ("none", "condensed")
 
+STANDING_PLAN_CAPTURE_CHARS = 4000
+
 CLI_PROVIDER_COMMANDS = {"cli-claude": "claude", "cli-codex": "codex"}
 _CLI_PROVIDERS = set(CLI_PROVIDER_COMMANDS)
 _VALID_PROVIDERS = {"local"} | _CLI_PROVIDERS
@@ -69,6 +71,19 @@ class CivOptions:
             "memory": {"enabled": self.memory.enabled, "max_chars": self.memory.max_chars},
             "task_tracker": {"enabled": self.task_tracker.enabled, "max_tasks": self.task_tracker.max_tasks},
         }
+
+    @property
+    def standing_plan_enabled(self) -> bool:
+        return self.memory.enabled or self.task_tracker.enabled
+
+    @property
+    def standing_plan_capture_chars(self) -> int:
+        if not self.standing_plan_enabled:
+            return 0
+        capture_chars = self.memory.max_chars if self.memory.enabled else 0
+        if self.task_tracker.enabled:
+            capture_chars = max(capture_chars, STANDING_PLAN_CAPTURE_CHARS)
+        return capture_chars
 
 @dataclass(frozen=True)
 class PlayerSpec:

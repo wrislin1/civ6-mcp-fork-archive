@@ -3,7 +3,9 @@ from civ_mcp.arena.config import (
     ArenaConfig,
     BriefingOptions,
     CivOptions,
+    MemoryOptions,
     PlayerSpec,
+    TaskTrackerOptions,
     parse_player_spec,
 )
 
@@ -84,3 +86,27 @@ def test_civ_options_fingerprint_is_json_safe():
     assert json.dumps(fp)
     assert fp["tools"] == ["get_units", "move_unit"]
     assert fp["briefing"]["enabled"] is True
+
+
+def test_civ_options_standing_plan_enabled_property():
+    assert CivOptions().standing_plan_enabled is False
+    assert CivOptions(memory=MemoryOptions(enabled=True)).standing_plan_enabled is True
+    assert CivOptions(task_tracker=TaskTrackerOptions(enabled=True)).standing_plan_enabled is True
+    assert CivOptions(
+        memory=MemoryOptions(enabled=True),
+        task_tracker=TaskTrackerOptions(enabled=True),
+    ).standing_plan_enabled is True
+
+
+def test_civ_options_standing_plan_capture_chars():
+    assert CivOptions().standing_plan_capture_chars == 0
+    assert CivOptions(memory=MemoryOptions(enabled=True, max_chars=900)).standing_plan_capture_chars == 900
+    assert CivOptions(task_tracker=TaskTrackerOptions(enabled=True)).standing_plan_capture_chars == 4000
+    assert CivOptions(
+        memory=MemoryOptions(enabled=True, max_chars=1200),
+        task_tracker=TaskTrackerOptions(enabled=True),
+    ).standing_plan_capture_chars == 4000
+    assert CivOptions(
+        memory=MemoryOptions(enabled=True, max_chars=6000),
+        task_tracker=TaskTrackerOptions(enabled=True),
+    ).standing_plan_capture_chars == 6000
