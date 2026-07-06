@@ -133,7 +133,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         transcript_dir, run_id, st.local, updated_tasks
                     )
                     active_tasks_after = pre_model_state.tasks
-                    task_block = format_task_block(updated_tasks, task_results)
+                    task_block = format_task_block(
+                        updated_tasks,
+                        task_results,
+                        max_tasks=opts.task_tracker.max_tasks,
+                    )
 
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI

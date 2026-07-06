@@ -17,6 +17,7 @@ Storage: ``<transcript_dir>/<run_id>/tasks/player_<player_id>.json``
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 from re import IGNORECASE, compile as re_compile
@@ -58,6 +59,13 @@ class TaskState:
     run_id: str
     player_id: int
     tasks: tuple[UnitTask, ...]
+
+
+@dataclass(frozen=True)
+class _HostileOwnerContext:
+    hostile_prefixes: tuple[str, ...]
+    peaceful_prefixes: tuple[str, ...]
+    block_unknown: bool
 
 
 def _empty_state(run_id: str, player_id: int) -> TaskState:
@@ -252,18 +260,97 @@ def _result_dict(task: UnitTask, *, status: str, action: str, result: str) -> di
     }
 
 
+def _sorted_prefixes(names: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(names, key=len, reverse=True))
+
+
+async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
+    hostile = {"Barbarian"}
+    peaceful: set[str] = set()
+    try:
+        civs = await gs.get_diplomacy()
+    except Exception:
+        return _HostileOwnerContext(
+            hostile_prefixes=_sorted_prefixes(hostile),
+            peaceful_prefixes=(),
+            block_unknown=True,
+        )
+
+    for civ in civs:
+        name = str(getattr(civ, "civ_name", "") or "").strip()
+        if not name:
+            continue
+        if getattr(civ, "is_at_war", False):
+            hostile.add(name)
+        else:
+            peaceful.add(name)
+
+    try:
+        threats = await gs.get_threat_scan()
+    except Exception:
+        return _HostileOwnerContext(
+            hostile_prefixes=_sorted_prefixes(hostile),
+            peaceful_prefixes=_sorted_prefixes(peaceful),
+            block_unknown=True,
+        )
+
+    for threat in threats:
+        if getattr(threat, "is_city_state", False):
+            name = str(getattr(threat, "owner_name", "") or "").strip()
+            if name:
+                hostile.add(name)
+
+    return _HostileOwnerContext(
+        hostile_prefixes=_sorted_prefixes(hostile),
+        peaceful_prefixes=_sorted_prefixes(peaceful),
+        block_unknown=False,
+    )
+
+
+def _label_matches_owner(label: str, owner: str) -> bool:
+    return label == owner or label.startswith(owner + " ")
+
+
+def _tile_has_hostile_unit(tile: Any, owner_context: _HostileOwnerContext) -> bool:
+    for label in tile.units or []:
+        label_text = str(label).strip()
+        if not label_text:
+            continue
+        if any(
+            _label_matches_owner(label_text, owner)
+            for owner in owner_context.hostile_prefixes
+        ):
+            return True
+        if owner_context.block_unknown and not any(
+            _label_matches_owner(label_text, owner)
+            for owner in owner_context.peaceful_prefixes
+        ):
+            return True
+    return False
+
+
 async def _visible_hostile_nearby(
-    gs: Any, cur_x: int, cur_y: int, target_x: int, target_y: int
+    gs: Any,
+    cur_x: int,
+    cur_y: int,
+    target_x: int,
+    target_y: int,
+    owner_context: _HostileOwnerContext,
 ) -> bool:
-    current_tiles = await gs.get_map_area(cur_x, cur_y, 2)
-    target_tiles = await gs.get_map_area(target_x, target_y, 2)
-    return any(tile.units for tile in current_tiles) or any(
-        tile.units for tile in target_tiles
+    current_tiles, target_tiles = await asyncio.gather(
+        gs.get_map_area(cur_x, cur_y, 2),
+        gs.get_map_area(target_x, target_y, 2),
+    )
+    return any(_tile_has_hostile_unit(tile, owner_context) for tile in current_tiles) or any(
+        _tile_has_hostile_unit(tile, owner_context) for tile in target_tiles
     )
 
 
 async def _run_single_task(
-    gs: Any, task: UnitTask, units_by_id: dict[int, Any]
+    gs: Any,
+    task: UnitTask,
+    units_by_id: dict[int, Any],
+    owner_context: _HostileOwnerContext,
 ) -> tuple[UnitTask, dict[str, Any]]:
     unit = units_by_id.get(task.unit_id)
     if unit is None:
@@ -293,7 +380,9 @@ async def _run_single_task(
                 task, status="complete", action="found_city", result=result_str
             )
 
-        if await _visible_hostile_nearby(gs, unit.x, unit.y, task.target_x, task.target_y):
+        if await _visible_hostile_nearby(
+            gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
+        ):
             new_task = replace(task, last_result="blocked_visible_hostile")
             return new_task, _result_dict(
                 task, status="active", action="block", result="blocked_visible_hostile"
@@ -317,15 +406,19 @@ async def _run_single_task(
                 task, status="complete", action="improve", result=result_str
             )
 
-        new_task = replace(task, last_result="blocked_improvement_not_valid")
+        new_task = replace(
+            task, status="failed", last_result="blocked_improvement_not_valid"
+        )
         return new_task, _result_dict(
             task,
-            status="active",
+            status="failed",
             action="block",
             result="blocked_improvement_not_valid",
         )
 
-    if await _visible_hostile_nearby(gs, unit.x, unit.y, task.target_x, task.target_y):
+    if await _visible_hostile_nearby(
+        gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
+    ):
         new_task = replace(task, last_result="blocked_visible_hostile")
         return new_task, _result_dict(
             task, status="active", action="block", result="blocked_visible_hostile"
@@ -347,11 +440,18 @@ async def run_pre_model_tasks(
     A per-task exception is caught and recorded as ``error:<repr>`` without
     aborting the remaining tasks.
     """
+    executable = [
+        task for task in tasks if task.status == "active" and task.kind in TASK_KINDS
+    ]
+    if not executable:
+        return tuple(tasks), []
+
     try:
         units = await gs.get_units()
     except Exception:  # pragma: no cover - defensive, mirrors per-task guard
         units = []
     units_by_id = {unit.unit_id: unit for unit in units}
+    owner_context = await _hostile_owner_context(gs)
 
     updated: list[UnitTask] = []
     results: list[dict[str, Any]] = []
@@ -362,7 +462,9 @@ async def run_pre_model_tasks(
             continue
 
         try:
-            new_task, result = await _run_single_task(gs, task, units_by_id)
+            new_task, result = await _run_single_task(
+                gs, task, units_by_id, owner_context
+            )
         except Exception as exc:
             error_msg = f"error:{exc!r}"
             new_task = replace(task, last_result=error_msg)
@@ -374,13 +476,18 @@ async def run_pre_model_tasks(
     return tuple(updated), results
 
 
-def format_task_block(tasks: Sequence[UnitTask], results: Sequence[dict[str, Any]]) -> str:
+def format_task_block(
+    tasks: Sequence[UnitTask],
+    results: Sequence[dict[str, Any]],
+    *,
+    max_tasks: int = 8,
+) -> str:
     """Render active tasks and this turn's results as a prompt-ready block.
 
     Returns "" when there are no active tasks and no results.
     """
-    active = [task for task in tasks if task.status == "active"][:8]
-    limited_results = list(results)[:8]
+    active = [task for task in tasks if task.status == "active"][:max_tasks]
+    limited_results = list(results)[:max_tasks]
 
     if not active and not limited_results:
         return ""

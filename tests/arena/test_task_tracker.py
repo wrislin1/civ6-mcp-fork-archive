@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from civ_mcp import lua as lq
@@ -72,19 +74,40 @@ class FakeGS:
         found_city_result="FOUNDED|18,24",
         move_unit_result="MOVING_TO|18,24",
         improve_tile_result="IMPROVED",
+        diplomacy=None,
+        units_calls=0,
+        threat_scan=None,
+        diplomacy_error=None,
+        threat_scan_error=None,
     ):
         self.units = units
         self.map_tiles = map_tiles or {}
         self.found_city_result = found_city_result
         self.move_unit_result = move_unit_result
         self.improve_tile_result = improve_tile_result
+        self.diplomacy = diplomacy if diplomacy is not None else []
+        self.units_calls = units_calls
+        self.threat_scan = threat_scan if threat_scan is not None else []
+        self.diplomacy_error = diplomacy_error
+        self.threat_scan_error = threat_scan_error
         self.found_city_calls = []
         self.move_unit_calls = []
         self.improve_tile_calls = []
         self.map_area_calls = []
 
     async def get_units(self):
+        self.units_calls += 1
         return self.units
+
+    async def get_diplomacy(self):
+        if self.diplomacy_error is not None:
+            raise self.diplomacy_error
+        return self.diplomacy
+
+    async def get_threat_scan(self):
+        if self.threat_scan_error is not None:
+            raise self.threat_scan_error
+        return self.threat_scan
 
     async def get_map_area(self, x, y, radius=2):
         self.map_area_calls.append((x, y, radius))
@@ -392,8 +415,9 @@ async def test_builder_improve_blocks_when_improvement_not_valid():
     updated, results = await run_pre_model_tasks(gs, [task])
 
     assert gs.improve_tile_calls == []
-    assert updated[0].status == "active"
+    assert updated[0].status == "failed"
     assert updated[0].last_result == "blocked_improvement_not_valid"
+    assert results[0]["status"] == "failed"
     assert results[0]["action"] == "block"
     assert results[0]["result"] == "blocked_improvement_not_valid"
 
@@ -428,6 +452,97 @@ async def test_visible_hostile_at_target_position_blocks_movement():
 
     assert gs.move_unit_calls == []
     assert updated[0].last_result == "blocked_visible_hostile"
+
+
+@pytest.mark.asyncio
+async def test_peaceful_foreign_unit_does_not_block_settler_movement():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Rome WARRIOR"])]},
+        diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=False)],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == [(1, 18, 24)]
+    assert updated[0].status == "active"
+    assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
+async def test_at_war_foreign_unit_blocks_settler_movement():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Rome WARRIOR"])]},
+        diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=True)],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == []
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert results[0]["action"] == "block"
+
+
+@pytest.mark.asyncio
+async def test_at_war_city_state_unit_blocks_settler_movement():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Vatican City WARRIOR"])]},
+        threat_scan=[
+            SimpleNamespace(owner_name="Vatican City", is_city_state=True),
+        ],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == []
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert results[0]["action"] == "block"
+    assert results[0]["result"] == "blocked_visible_hostile"
+
+
+@pytest.mark.asyncio
+async def test_diplomacy_failure_blocks_visible_foreign_unit():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Rome WARRIOR"])]},
+        diplomacy_error=RuntimeError("diplomacy unavailable"),
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == []
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert results[0]["action"] == "block"
+    assert results[0]["result"] == "blocked_visible_hostile"
+
+
+@pytest.mark.asyncio
+async def test_threat_scan_failure_blocks_unknown_foreign_unit():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Vatican City WARRIOR"])]},
+        diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=False)],
+        threat_scan_error=RuntimeError("threat scan unavailable"),
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == []
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert results[0]["action"] == "block"
+    assert results[0]["result"] == "blocked_visible_hostile"
 
 
 @pytest.mark.asyncio
@@ -478,6 +593,30 @@ async def test_non_active_tasks_are_not_executed():
 
 
 @pytest.mark.asyncio
+async def test_run_pre_model_tasks_skips_units_query_when_no_executable_tasks():
+    gs = FakeGS(units=[_unit(unit_id=1, unit_index=1, x=1, y=1)])
+
+    updated, results = await run_pre_model_tasks(gs, [])
+
+    assert updated == ()
+    assert results == []
+    assert gs.units_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_pre_model_tasks_skips_units_query_for_non_executable_tasks():
+    gs = FakeGS(units=[_unit(unit_id=1, unit_index=1, x=1, y=1)])
+    inactive = _task(task_id="settle:1", unit_id=1, status="complete")
+    unsupported = _task(task_id="attack:2", kind="attack", unit_id=2)
+
+    updated, results = await run_pre_model_tasks(gs, [inactive, unsupported])
+
+    assert updated == (inactive, unsupported)
+    assert results == []
+    assert gs.units_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_per_task_exception_is_caught_and_recorded():
     class RaisingGS(FakeGS):
         async def get_map_area(self, x, y, radius=2):
@@ -523,6 +662,26 @@ def test_format_task_block_includes_heading_and_bounded_content():
 
     assert block.startswith("== DETERMINISTIC TASK TRACKER ==")
     assert block.count("settle:") == 16  # 8 active task lines + 8 result lines
+
+
+def test_format_task_block_honors_configured_max_tasks():
+    tasks = tuple(_task(task_id=f"settle:{i}", unit_id=i) for i in range(12))
+    results = [
+        {
+            "task_id": f"settle:{i}",
+            "kind": "settle",
+            "unit_id": i,
+            "target": [18, 24],
+            "status": "active",
+            "action": "move",
+            "result": "MOVING_TO|18,24",
+        }
+        for i in range(12)
+    ]
+
+    block = format_task_block(tasks, results, max_tasks=12)
+
+    assert block.count("settle:") == 24
 
 
 def test_format_task_block_omits_non_active_tasks():
