@@ -1011,7 +1011,10 @@ def test_call_uses_prebuilt_briefing_without_building_from_gs(monkeypatch):
         captured["argv"] = args
         return FakeProc()
 
-    monkeypatch.setattr(cli_mod, "build_briefing", forbidden_build)
+    monkeypatch.setattr(
+        "civ_mcp.arena.prompt_context.build_briefing",
+        forbidden_build,
+    )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
     pol = CLIAgentPolicy(
         "cli-claude",
@@ -1057,7 +1060,10 @@ def test_call_uses_supplied_empty_briefing_without_rebuilding(monkeypatch):
     async def fake_create(*args, **kwargs):
         return FakeProc()
 
-    monkeypatch.setattr(cli_mod, "build_briefing", forbidden_build)
+    monkeypatch.setattr(
+        "civ_mcp.arena.prompt_context.build_briefing",
+        forbidden_build,
+    )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
     pol = CLIAgentPolicy(
         "cli-claude",

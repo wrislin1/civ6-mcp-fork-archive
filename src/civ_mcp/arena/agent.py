@@ -4,9 +4,10 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from civ_mcp.arena.briefing import Briefing, build_briefing
-from civ_mcp.arena.budget import briefing_budget, resolve_n_ctx
+from civ_mcp.arena.briefing import Briefing
+from civ_mcp.arena.budget import DEFAULT_N_CTX, resolve_n_ctx
 from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.prompt_context import maybe_build_briefing
 from civ_mcp.arena.prompting import build_opening_prompt
 from civ_mcp.arena.registry import (
     TOOL_REGISTRY,
@@ -14,6 +15,7 @@ from civ_mcp.arena.registry import (
     openai_tools,
     resolve_tools,
 )
+
 
 MODEL_FEED_CHAR_CAP = 1500  # max chars of a tool result fed to the model
 
@@ -81,29 +83,33 @@ class LLMPolicy:
         briefing: Briefing | None = None,
     ) -> dict:
         briefing_was_supplied = briefing is not None
-        briefing = briefing or Briefing()
-        if self.options.briefing.enabled and not briefing_was_supplied:
-            if _should_resolve_n_ctx(
+        if (
+            self.options.briefing.enabled
+            and not briefing_was_supplied
+            and _should_resolve_n_ctx(
                 self._n_ctx,
                 self._n_ctx_source,
                 self.options.context_budget,
                 self._n_ctx_resolves,
-            ):
-                self._n_ctx, self._n_ctx_source = await resolve_n_ctx(
-                    getattr(self.backend, "base_url", ""),
-                    getattr(self.backend, "model", ""),
-                    self.options.context_budget,
-                )
-                self._n_ctx_resolves += 1
-            playbook_chars = len(self._system) - len(SYSTEM)
-            tool_schema_chars = len(json.dumps(self._tools))
-            budget = briefing_budget(
-                self._n_ctx,
-                self.options,
-                playbook_chars,
-                tool_schema_chars,
             )
-            briefing = await build_briefing(gs, self.options.briefing, budget)
+        ):
+            self._n_ctx, self._n_ctx_source = await resolve_n_ctx(
+                getattr(self.backend, "base_url", ""),
+                getattr(self.backend, "model", ""),
+                self.options.context_budget,
+            )
+            self._n_ctx_resolves += 1
+        playbook_chars = len(self._system) - len(SYSTEM)
+        tool_schema_chars = len(json.dumps(self._tools))
+        n_ctx = self._n_ctx if self._n_ctx is not None else DEFAULT_N_CTX
+        briefing = await maybe_build_briefing(
+            gs,
+            self.options,
+            n_ctx=n_ctx,
+            playbook_chars=playbook_chars,
+            tool_schema_chars=tool_schema_chars,
+            supplied=briefing,
+        )
         include_standing_plan_instruction = self.options.standing_plan_enabled
         opening = build_opening_prompt(
             player_id=player_id,

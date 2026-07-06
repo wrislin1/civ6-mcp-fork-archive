@@ -383,7 +383,7 @@ async def test_briefing_prepended_and_telemetry(monkeypatch):
         )
 
     monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
-    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+    monkeypatch.setattr("civ_mcp.arena.prompt_context.build_briefing", fake_build)
 
     be = SpyBackend([_no_tool_reply()])
     be.base_url = "http://h:11440/v1"
@@ -411,7 +411,10 @@ async def test_policy_uses_supplied_empty_briefing_without_rebuilding(monkeypatc
     async def forbidden_build(gs, opts, budget):
         raise AssertionError("LLM policy must not rebuild a supplied briefing")
 
-    monkeypatch.setattr(agent_mod, "build_briefing", forbidden_build)
+    monkeypatch.setattr(
+        "civ_mcp.arena.prompt_context.build_briefing",
+        forbidden_build,
+    )
 
     be = SpyBackend([_no_tool_reply()])
     pol = LLMPolicy(
@@ -447,7 +450,7 @@ async def test_n_ctx_resolved_once_across_turns(monkeypatch):
         return Briefing(text="B", tokens=1)
 
     monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
-    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+    monkeypatch.setattr("civ_mcp.arena.prompt_context.build_briefing", fake_build)
 
     be = SpyBackend([_no_tool_reply(), _no_tool_reply()])
     be.base_url = "http://h:1/v1"
@@ -478,7 +481,7 @@ async def test_n_ctx_default_fallback_retries_on_next_turn(monkeypatch):
         return Briefing(text="B", tokens=1)
 
     monkeypatch.setattr(agent_mod, "resolve_n_ctx", fake_resolve)
-    monkeypatch.setattr(agent_mod, "build_briefing", fake_build)
+    monkeypatch.setattr("civ_mcp.arena.prompt_context.build_briefing", fake_build)
 
     be = SpyBackend([_no_tool_reply(), _no_tool_reply()])
     be.base_url = "http://h:1/v1"

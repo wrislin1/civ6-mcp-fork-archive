@@ -2,10 +2,12 @@ from __future__ import annotations
 import asyncio, json, os, signal, time
 
 from civ_mcp.arena.agent import load_playbook
-from civ_mcp.arena.briefing import Briefing, build_briefing
-from civ_mcp.arena.budget import DEFAULT_N_CTX, briefing_budget
+from civ_mcp.arena.briefing import Briefing
+from civ_mcp.arena.budget import DEFAULT_N_CTX
 from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.prompt_context import maybe_build_briefing
 from civ_mcp.arena.prompting import build_opening_prompt
+
 
 # Four-layer lockdown for CLI civ security:
 # 1. --setting-sources project,local keeps project .mcp.json auto-discovery (the only headless
@@ -431,12 +433,15 @@ class CLIAgentPolicy:
         briefing: Briefing | None = None,
     ) -> dict:
         include_standing_plan_instruction = self.options.standing_plan_enabled
-        briefing_was_supplied = briefing is not None
-        briefing = briefing or Briefing()
-        if self.options.briefing.enabled and not briefing_was_supplied:
-            playbook_chars = len(self._system_prefix)
-            budget = briefing_budget(DEFAULT_N_CTX, self.options, playbook_chars, 0)
-            briefing = await build_briefing(gs, self.options.briefing, budget)
+        playbook_chars = len(self._system_prefix)
+        briefing = await maybe_build_briefing(
+            gs,
+            self.options,
+            n_ctx=DEFAULT_N_CTX,
+            playbook_chars=playbook_chars,
+            tool_schema_chars=0,
+            supplied=briefing,
+        )
         opening = build_opening_prompt(
             player_id=player_id,
             turn=turn,

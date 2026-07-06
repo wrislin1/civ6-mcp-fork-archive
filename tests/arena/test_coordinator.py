@@ -864,7 +864,10 @@ async def test_exclusive_cli_briefing_built_before_disconnect(monkeypatch):
             assert kwargs["briefing"].text == "PREBUILT BRIEFING"
             return await super().__call__(gs, player_id, turn, **kwargs)
 
-    monkeypatch.setattr(coord_mod, "build_briefing", fake_build_briefing)
+    monkeypatch.setattr(
+        "civ_mcp.arena.prompt_context.build_briefing",
+        fake_build_briefing,
+    )
     conn = FakeConn()
     gs = FakeGS()
     opts = CivOptions(briefing=BriefingOptions(enabled=True))
