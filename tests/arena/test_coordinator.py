@@ -3,7 +3,9 @@ import asyncio
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve
 from civ_mcp.arena.coordinator import run_arena, ScriptedPolicy, _reconnect_with_retry
-from civ_mcp.arena.config import ArenaConfig, PlayerSpec
+from civ_mcp.arena.config import ArenaConfig, CivOptions, MemoryOptions, PlayerSpec, TaskTrackerOptions
+from civ_mcp.arena.memory import memory_path
+from civ_mcp.arena.task_tracker import UnitTask, save_task_state, task_path
 
 class FakeConn:
     """Serves canned GameCore reads by matching key substrings in the Lua.
@@ -159,7 +161,7 @@ async def test_coordinator_reclaim_retry_restores_human(monkeypatch):
 
     class ExclusivePol:
         needs_exclusive_tuner = True
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             return {"summary": "cli ran", "actions": []}
 
     conn = FakeConnFlaky(fail_times=1)
@@ -182,7 +184,7 @@ async def test_coordinator_dead_socket_attempts_full_handback_then_surfaces(monk
 
     class ExclusivePol:
         needs_exclusive_tuner = True
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             return {"summary": "cli ran", "actions": []}
 
     class DeadSocketConn(FakeConn):
@@ -223,7 +225,7 @@ async def test_coordinator_body_cancellation_not_masked_by_cleanup_error(monkeyp
 
     class CancelInBodyPol:
         needs_exclusive_tuner = True
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             raise asyncio.CancelledError()   # Ctrl-C lands mid-turn
 
     class DeadSocketConn(FakeConn):
@@ -259,7 +261,7 @@ async def test_coordinator_cancelled_in_finally_reraises_after_full_handback(mon
 
     class ExclusivePol:
         needs_exclusive_tuner = True
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             return {"summary": "cli ran", "actions": []}
 
     class CancelInFinallyConn(FakeConn):
@@ -307,7 +309,7 @@ async def test_sweep_failure_does_not_block_handback(monkeypatch):
         raise RuntimeError("sweep failed")
 
     class NoopPolicy:
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             return {"summary": "noop", "actions": []}
 
     monkeypatch.setattr(autoresolve, "sweep_promotions", boom)
@@ -324,7 +326,7 @@ async def test_sweep_failure_does_not_block_handback(monkeypatch):
 @pytest.mark.asyncio
 async def test_policy_result_cannot_overwrite_promotion_sweep_log():
     class ConflictingPolicy:
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             return {
                 "summary": "conflict",
                 "actions": [],
@@ -351,7 +353,7 @@ async def test_exclusive_policy_reconnects_before_sweep(monkeypatch):
     class ExclusivePolicy:
         needs_exclusive_tuner = True
 
-        async def __call__(self, gs, player_id, turn):
+        async def __call__(self, gs, player_id, turn, **kwargs):
             assert conn.is_connected is False
             return {"summary": "exclusive", "actions": []}
 
@@ -406,7 +408,7 @@ class TranscriptPolicy:
     provider = "local"
     model = "test-model"
 
-    async def __call__(self, gs, player_id, turn):
+    async def __call__(self, gs, player_id, turn, **kwargs):
         return {
             "summary": "done",
             "transcript": {
@@ -649,3 +651,188 @@ def test_clear_blocking_diplomacy_swallows_errors():
         async def execute_write(self, lua, timeout=5.0):
             raise ConnectionError("dead socket")
     assert asyncio.run(_clear_blocking_diplomacy(_Boom())) == "err"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — standing memory / task tracker coordinator integration
+# ---------------------------------------------------------------------------
+
+
+class RecordingPolicy:
+    """Fake policy that records the kwargs of every call and returns a canned result."""
+
+    provider = "local"
+
+    def __init__(self, result, options=None, needs_exclusive_tuner=False):
+        self.result = result
+        self.options = options or CivOptions()
+        self.needs_exclusive_tuner = needs_exclusive_tuner
+        self.calls = []
+
+    async def __call__(self, gs, player_id, turn, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
+class FakeGSWithUnit(FakeGS):
+    """FakeGS whose get_units() serves a single unit at a fixed position, and that
+    supports found_city -- enough for a settle task to complete in run_pre_model_tasks."""
+
+    def __init__(self, unit_id, unit_index, x, y, moves_remaining=2.0):
+        super().__init__()
+        self._unit = lq.UnitInfo(
+            unit_id=unit_id, unit_index=unit_index, name="Settler",
+            unit_type="UNIT_SETTLER", x=x, y=y, moves_remaining=moves_remaining,
+            max_moves=2.0, health=100, max_health=100, valid_improvements=[],
+        )
+        self.found_city_calls = []
+
+    async def get_units(self):
+        return [self._unit]
+
+    async def found_city(self, unit_index):
+        self.found_city_calls.append(unit_index)
+        return "FOUNDED|5,5"
+
+
+@pytest.mark.asyncio
+async def test_memory_from_turn_n_injected_on_turn_n_plus_1(tmp_path):
+    """Standing memory captured from one run_arena call's final summary is loaded and
+    injected as memory_block on a LATER, independent run_arena call for the same
+    run_id/player -- proving the persistence is run-local, not held in-process state."""
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200))
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1], run_id="memtest",
+                      transcript_dir=str(tmp_path))
+
+    pol1 = RecordingPolicy({
+        "summary": "did stuff",
+        "transcript": {"final_summary": (
+            "TACTICAL: did stuff.\nSTANDING PLAN:\n- march settler to (18,24)\n"
+        )},
+    }, options=opts)
+    await run_arena(FakeConn(), FakeGS(), cfg, policy=pol1)
+    # Nothing was on disk yet when turn N's policy was invoked.
+    assert pol1.calls[0]["memory_block"] == ""
+
+    pol2 = RecordingPolicy({"summary": "no plan this time"}, options=opts)
+    await run_arena(FakeConn(), FakeGS(), cfg, policy=pol2)
+    assert pol2.calls[0]["memory_block"].startswith("== STANDING PLAN FROM LAST TURN ==")
+    assert "march settler to (18,24)" in pol2.calls[0]["memory_block"]
+
+
+@pytest.mark.asyncio
+async def test_final_summary_with_standing_plan_saves_memory_to_disk(tmp_path):
+    """A final summary carrying a STANDING PLAN block is captured to the on-disk
+    memory store for this run_id/player, verified via the real file path."""
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200))
+    cfg = ArenaConfig(players=[PlayerSpec(4, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[4], run_id="memtest2",
+                      transcript_dir=str(tmp_path))
+    pol = RecordingPolicy({
+        "summary": "ignored",
+        "transcript": {"final_summary": "STANDING PLAN:\n- keep exploring\n"},
+    }, options=opts)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|4", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    path = memory_path(str(tmp_path), "memtest2", 4)
+    assert path.exists()
+    assert "keep exploring" in path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_final_summary_with_task_line_creates_persisted_task(tmp_path):
+    """A final summary carrying a TASK line results in a persisted UnitTask on disk,
+    even with no pre-existing task state for this player."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    cfg = ArenaConfig(players=[PlayerSpec(5, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[5], run_id="tasktest",
+                      transcript_dir=str(tmp_path))
+    pol = RecordingPolicy({
+        "summary": "ignored",
+        "transcript": {"final_summary": (
+            "STANDING PLAN:\n- march settler\nTASK settle unit_id=42 target=10,12\n"
+        )},
+    }, options=opts)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|5", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    path = task_path(str(tmp_path), "tasktest", 5)
+    assert path.exists()
+    assert '"unit_id": 42' in path.read_text()
+    assert '"kind": "settle"' in path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_pre_model_task_results_appear_in_log_and_transcript(tmp_path):
+    """A pre-existing active task that completes during the deterministic pre-model
+    phase shows up in both the coordinator log entry and the transcript record's
+    task_tracker.pre_model_results field."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True))
+    run_id, player_id = "tasktest2", 6
+    existing_task = UnitTask(
+        task_id="settle:42", kind="settle", unit_id=42, target_x=5, target_y=5,
+        created_turn=1, updated_turn=1,
+    )
+    save_task_state(str(tmp_path), run_id, player_id, [existing_task])
+
+    cfg = ArenaConfig(players=[PlayerSpec(player_id, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[player_id], run_id=run_id,
+                      transcript_dir=str(tmp_path))
+    pol = RecordingPolicy({"summary": "no plan"}, options=opts)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        [f"LOCAL|{player_id}", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    gs = FakeGSWithUnit(unit_id=42, unit_index=7, x=5, y=5)
+
+    from civ_mcp.arena.transcript import TranscriptSink
+    import os
+    sink = TranscriptSink(os.path.join(str(tmp_path), "transcript.jsonl"))
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert gs.found_city_calls == [7]
+    log_entry = result["log"][0]
+    assert log_entry["task_tracker"]["active_before"] == 1
+    assert log_entry["task_tracker"]["pre_model_results"][0]["action"] == "found_city"
+    assert log_entry["task_tracker"]["pre_model_results"][0]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_exclusive_cli_policy_still_receives_memory_and_task_blocks(tmp_path):
+    """A CLI-style policy (needs_exclusive_tuner=True) still gets memory_block and
+    task_block populated from disk, even though the tuner connection is released
+    before the policy call -- proving load happens before the exclusive disconnect."""
+    run_id, player_id = "clitest", 7
+    from civ_mcp.arena.memory import save_memory
+    save_memory(str(tmp_path), run_id, player_id, turn=1, text="scout north next.",
+                max_chars=1200)
+
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200))
+    cfg = ArenaConfig(players=[PlayerSpec(player_id, "cli-claude", "")], max_puppet_turns=1,
+                      puppet_ids=[player_id], run_id=run_id, transcript_dir=str(tmp_path))
+    pol = RecordingPolicy({"summary": "cli ran"}, options=opts, needs_exclusive_tuner=True)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        [f"LOCAL|{player_id}", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1
+    assert conn.restored is True  # reconnect + handback still happened
+    assert "scout north next." in pol.calls[0]["memory_block"]
+    assert pol.calls[0]["memory_block"].startswith("== STANDING PLAN FROM LAST TURN ==")

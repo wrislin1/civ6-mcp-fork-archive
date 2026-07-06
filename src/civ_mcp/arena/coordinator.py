@@ -4,6 +4,21 @@ import sys
 from datetime import datetime, timezone
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
+from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.memory import (
+    extract_standing_plan,
+    format_memory_block,
+    load_memory,
+    save_memory,
+)
+from civ_mcp.arena.task_tracker import (
+    format_task_block,
+    load_task_state,
+    merge_tasks,
+    parse_task_lines,
+    run_pre_model_tasks,
+    save_task_state,
+)
 
 
 async def _reconnect_with_retry(conn, attempts=5, delay=0.5):
@@ -63,7 +78,7 @@ async def _clear_blocking_diplomacy(conn) -> str:
 
 class ScriptedPolicy:
     """Deterministic no-LLM policy for the dry-run gate: observe, then skip unit 0."""
-    async def __call__(self, gs, player_id: int, turn: int) -> dict:
+    async def __call__(self, gs, player_id: int, turn: int, **kwargs) -> dict:
         await gs.get_game_overview()
         await gs.get_units()
         try:
@@ -89,10 +104,42 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
             if st.active and st.local in puppet_ids:
                 pol = policy_for(st.local)
                 exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
+                opts = getattr(pol, "options", CivOptions())
+                run_id = getattr(config, "run_id", "")
+                transcript_dir = config.transcript_dir
                 state_before = await _overview_snapshot(gs) if _tx_on else None
+
+                # --- Load standing memory / task tracker state and run deterministic
+                # pre-model task follow-through. This MUST happen before the exclusive
+                # disconnect below: it uses `gs`, which is backed by the live `conn` —
+                # a CLI turn's exclusive disconnect leaves no connection for these reads.
+                memory = load_memory(transcript_dir, run_id, st.local) if opts.memory.enabled else None
+                memory_block = format_memory_block(memory)
+
+                active_tasks_before: tuple = ()
+                updated_tasks: tuple = ()
+                task_results: list = []
+                active_tasks_after: tuple = ()
+                task_block = ""
+                if opts.task_tracker.enabled:
+                    task_state = load_task_state(transcript_dir, run_id, st.local)
+                    active_tasks_before = tuple(
+                        t for t in task_state.tasks if t.status == "active"
+                    )
+                    updated_tasks, task_results = await run_pre_model_tasks(
+                        gs, active_tasks_before
+                    )
+                    pre_model_state = save_task_state(
+                        transcript_dir, run_id, st.local, updated_tasks
+                    )
+                    active_tasks_after = pre_model_state.tasks
+                    task_block = format_task_block(updated_tasks, task_results)
+
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
-                result = await pol(gs, st.local, st.turn)
+                result = await pol(
+                    gs, st.local, st.turn, memory_block=memory_block, task_block=task_block
+                )
                 if exclusive and not conn.is_connected:
                     await _reconnect_with_retry(conn)   # reclaim before we end the turn
                 try:
@@ -100,17 +147,52 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 except Exception as e:
                     swept = []
                     print(f"[arena] promotion sweep failed: {e!r}", file=sys.stderr)
+
+                # --- Capture this turn's standing plan / tasks from the final summary.
+                # Runs whenever either feature is enabled, since both parse the same
+                # STANDING PLAN block the prompt asked for (build_opening_prompt's
+                # include_standing_plan_instruction uses the same OR condition).
+                captured_plan = ""
+                if opts.memory.enabled or opts.task_tracker.enabled:
+                    final_summary = (
+                        result.get("transcript", {}).get("final_summary")
+                        or result.get("summary", "")
+                    )
+                    captured_plan = extract_standing_plan(final_summary, opts.memory.max_chars)
+                if opts.memory.enabled and captured_plan:
+                    save_memory(
+                        transcript_dir, run_id, st.local, st.turn, captured_plan,
+                        opts.memory.max_chars,
+                    )
+                if opts.task_tracker.enabled:
+                    new_tasks = parse_task_lines(captured_plan, st.turn)
+                    merged = merge_tasks(updated_tasks, new_tasks, opts.task_tracker.max_tasks)
+                    captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
+                    active_tasks_after = captured_state.tasks
+
                 state_after = await _overview_snapshot(gs) if _tx_on else None
                 _log_entry = {
                     k: v
                     for k, v in result.items()
                     if k not in ("transcript", "promotion_sweep")
                 }
+                _standing_memory_fields = {
+                    "loaded": bool(memory),
+                    "injected_chars": len(memory_block),
+                    "captured_chars": len(captured_plan),
+                }
+                _task_tracker_fields = {
+                    "active_before": len(active_tasks_before),
+                    "pre_model_results": task_results,
+                    "active_after": len(active_tasks_after),
+                }
                 log.append({
                     "player": st.local,
                     "turn": st.turn,
                     **_log_entry,
                     "promotion_sweep": swept,
+                    "standing_memory": _standing_memory_fields,
+                    "task_tracker": _task_tracker_fields,
                 })
                 if _tx_on and result.get("transcript"):
                     payload = result["transcript"]
@@ -139,6 +221,8 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         "state_after":  state_after,
                         "state_delta":  state_delta,
                         "promotion_sweep": swept,
+                        "standing_memory": _standing_memory_fields,
+                        "task_tracker": _task_tracker_fields,
                     }
                     transcript.write(record)
                 # End this puppet's turn and hand control back toward the human.

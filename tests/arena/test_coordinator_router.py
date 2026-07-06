@@ -27,7 +27,7 @@ class FakeConn:
 class ExclusivePolicy:
     needs_exclusive_tuner = True
     def __init__(self): self.called_with_events = None
-    async def __call__(self, gs, player_id, turn):
+    async def __call__(self, gs, player_id, turn, **kwargs):
         self.called_with_events = list(gs.conn.events)  # snapshot at call time
         return {"summary": "cli ran", "actions": []}
 

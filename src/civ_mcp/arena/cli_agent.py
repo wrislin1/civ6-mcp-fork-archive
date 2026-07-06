@@ -420,12 +420,18 @@ class CLIAgentPolicy:
         except Exception:
             pass
 
-    async def __call__(self, gs, player_id: int, turn: int) -> dict:
+    async def __call__(
+        self,
+        gs,
+        player_id: int,
+        turn: int,
+        *,
+        memory_block: str = "",
+        task_block: str = "",
+    ) -> dict:
         include_standing_plan_instruction = (
             self.options.memory.enabled or self.options.task_tracker.enabled
         )
-        memory_block = ""
-        task_block = ""
         briefing = Briefing()
         if self.options.briefing.enabled:
             playbook_chars = len(self._system_prefix)

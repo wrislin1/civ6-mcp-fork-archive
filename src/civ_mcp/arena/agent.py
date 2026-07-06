@@ -70,7 +70,15 @@ class LLMPolicy:
         self._n_ctx_source = ""
         self._n_ctx_resolves = 0
 
-    async def __call__(self, gs, player_id: int, turn: int) -> dict:
+    async def __call__(
+        self,
+        gs,
+        player_id: int,
+        turn: int,
+        *,
+        memory_block: str = "",
+        task_block: str = "",
+    ) -> dict:
         briefing = Briefing()
         if self.options.briefing.enabled:
             if _should_resolve_n_ctx(
@@ -94,8 +102,6 @@ class LLMPolicy:
                 tool_schema_chars,
             )
             briefing = await build_briefing(gs, self.options.briefing, budget)
-        memory_block = ""
-        task_block = ""
         include_standing_plan_instruction = (
             self.options.memory.enabled or self.options.task_tracker.enabled
         )
