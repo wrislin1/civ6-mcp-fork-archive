@@ -24,7 +24,9 @@ SCHEMA_VERSION = 1
 
 _STANDING_PLAN_RE = re.compile(r"^\s*standing plan:\s*(.*)$", re.IGNORECASE)
 _BULLET_PREFIX_RE = re.compile(r"^\s*[-*•]+\s*")
-_TASK_OR_CANCEL_LINE_RE = re.compile(r"^\s*[-*•]*\s*(?:TASK\s+|CANCEL\s+)", re.IGNORECASE)
+_TASK_OR_CANCEL_LINE_RE = re.compile(
+    r"^\s*[-*•]*\s*(?:TASK\s+|CANCEL\s+unit_id=-?\d+\s*$)", re.IGNORECASE
+)
 _BULLETED_SECTION_HEADERS = frozenset(
     {
         "TACTICAL",

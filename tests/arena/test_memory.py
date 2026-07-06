@@ -260,7 +260,7 @@ def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains
     summary = (
         "STANDING PLAN:\n"
         "- Planning:\n"
-        "- CANCEL settle unit_id=123 reason=site unsafe\n"
+        "- CANCEL unit_id=123\n"
         "- Keep escort near the target.\n"
         "TACTICAL:\n"
         "- unrelated next section\n"
@@ -270,9 +270,25 @@ def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains
 
     assert result == (
         "Planning:\n"
-        "CANCEL settle unit_id=123 reason=site unsafe\n"
+        "CANCEL unit_id=123\n"
         "Keep escort near the target."
     )
+
+
+def test_extract_standing_plan_ignores_unsupported_cancel_as_task_signal():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Keep scout near city.\n"
+        "- Planning:\n"
+        "- CANCEL settle unit_id=123 reason=site unsafe\n"
+        "- Keep escort near the target.\n"
+        "TACTICAL:\n"
+        "- unrelated next section\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == "Keep scout near city."
 
 
 def test_format_memory_block_exact_heading():

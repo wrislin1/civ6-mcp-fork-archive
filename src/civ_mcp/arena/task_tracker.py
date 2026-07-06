@@ -265,6 +265,11 @@ def _sorted_prefixes(names: set[str]) -> tuple[str, ...]:
     return tuple(sorted(names, key=len, reverse=True))
 
 
+async def _call_context_source(gs: Any, method_name: str) -> Any:
+    method = getattr(gs, method_name)
+    return await method()
+
+
 async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
     hostile = {"Barbarian"}
     peaceful: set[str] = set()
@@ -272,8 +277,8 @@ async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
     block_unknown = False
 
     civ_result, threat_result = await asyncio.gather(
-        gs.get_diplomacy(),
-        gs.get_threat_scan(),
+        _call_context_source(gs, "get_diplomacy"),
+        _call_context_source(gs, "get_threat_scan"),
         return_exceptions=True,
     )
 

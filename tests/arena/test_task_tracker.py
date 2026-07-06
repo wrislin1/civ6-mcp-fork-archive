@@ -612,6 +612,29 @@ async def test_threat_scan_failure_blocks_unknown_city_state_unit():
 
 
 @pytest.mark.asyncio
+async def test_missing_threat_scan_blocks_unknown_unit_label_without_aborting():
+    class MissingThreatScanGS(FakeGS):
+        def __init__(self):
+            super().__init__(
+                units=[_unit(unit_id=65537, unit_index=1, x=1, y=1)],
+                map_tiles={(18, 24): [_tile(18, 24, units=["Unidentified WARRIOR"])]},
+                diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=False)],
+            )
+            self.get_threat_scan = None
+
+    gs = MissingThreatScanGS()
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == []
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert results[0]["action"] == "block"
+    assert results[0]["result"] == "blocked_visible_hostile"
+
+
+@pytest.mark.asyncio
 async def test_threat_scan_failure_keeps_known_peaceful_major_unit_unblocked():
     unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
     gs = FakeGS(
