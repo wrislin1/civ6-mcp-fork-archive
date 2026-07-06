@@ -120,6 +120,32 @@ async def _empire_resources(gs: Any, ctx: dict[str, Any]) -> str:
     return nr.narrate_empire_resources(stockpiles, owned, nearby, luxuries)
 
 
+_GP_CLOSE_RATIO = 0.5  # puppet's progress/cost ratio counted as "close to recruiting"
+
+
+async def _great_people(gs: Any, ctx: dict[str, Any]) -> str:
+    del ctx
+    gp = await gs.get_great_people()
+    if isinstance(gp, str):
+        return gp
+    if not gp:
+        return nr.narrate_great_people(gp)
+
+    # Keep this concise: the full timeline can span dozens of individuals across
+    # every era. Surface only what's actionable this turn or worth tracking —
+    # recruitable now, close to recruitable, or already claimed (contested/gone).
+    relevant = [
+        g
+        for g in gp
+        if g.can_recruit
+        or g.claimant != "Unclaimed"
+        or (g.cost > 0 and g.player_points / g.cost >= _GP_CLOSE_RATIO)
+    ]
+    if not relevant:
+        return ""
+    return nr.narrate_great_people(relevant)
+
+
 async def _rivals(gs: Any, ctx: dict[str, Any]) -> str:
     del ctx
     rivals = await gs.get_rival_snapshot()
@@ -171,6 +197,7 @@ _ORDER = (
     "map",
     "research",
     "empire_resources",
+    "great_people",
     "rivals",
     "threats",
     "victory",
@@ -184,6 +211,7 @@ _BUILDERS: dict[str, Callable[[Any, dict[str, Any]], Awaitable[str]]] = {
     "production_options": _production_options,
     "research": _research,
     "empire_resources": _empire_resources,
+    "great_people": _great_people,
     "rivals": _rivals,
     "threats": _threats,
     "victory": _victory,

@@ -156,6 +156,22 @@ def test_load_good(tmp_path):
     assert cli.provider == "cli-claude" and cli.options == CivOptions()
 
 
+def test_briefing_accepts_great_people_section(tmp_path):
+    text = GOOD.replace(
+        "sections: [overview, units, map]",
+        "sections: [overview, units, map, great_people]",
+    )
+
+    cfg = load_experiment(_write(tmp_path, text))
+
+    assert cfg.players[0].options.briefing.sections == (
+        "overview",
+        "units",
+        "map",
+        "great_people",
+    )
+
+
 def test_non_empty_briefing_block_defaults_enabled_true(tmp_path):
     text = GOOD.replace(
         "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",

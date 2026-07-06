@@ -118,3 +118,27 @@ If a war is going badly or has stopped producing gains, propose_peace after the
 10-turn cooldown. To start a war, send_diplomatic_action(action="DECLARE_SURPRISE_WAR")
 or another valid DECLARE_*_WAR token declares it, but attacks usually work next
 turn; declare, position safely, then attack on the following turn.
+
+## Standing plan
+End every turn's reasoning with a line starting `STANDING PLAN:` summarizing your
+intent for the next several turns. Use `TASK` lines under it for concrete multi-turn
+settler/builder work (e.g. a settler walking to a site, a builder queue) so you can
+pick the plan back up next turn without re-deriving it from scratch.
+
+## Great People
+Check get_great_people regularly and recruit as soon as `[CAN RECRUIT]` appears --
+rivals will claim what you pass on. Use get_gp_advisor to pick the best completed
+district to activate a recruited Great Person in. Never delete a Great Person unit;
+it shows 0 builder charges but is a different system and is only consumed on activation.
+
+## Trade routes
+Check get_trade_routes for idle traders -- an idle route is free yields going
+uncollected. Use get_trade_destinations(unit_id) to see options, then
+start_trade_route to the best one (domestic for food/production to new cities,
+international for gold).
+
+## World Congress and religion
+Monitor World Congress and religion state, but only cast votes or lock in belief
+choices after reading the relevant tool's actual output (get_world_congress,
+get_religion_beliefs, etc.) for that turn -- do not guess resolutions or beliefs
+from memory.

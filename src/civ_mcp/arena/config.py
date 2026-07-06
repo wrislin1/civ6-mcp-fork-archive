@@ -14,6 +14,7 @@ VALID_SECTIONS = (
     "research",
     "production_options",
     "empire_resources",
+    "great_people",
     "rivals",
     "threats",
     "victory",

@@ -578,3 +578,121 @@ async def test_failing_section_skipped_and_logged():
     assert "research" not in b.sections
     assert any("research" in e and "no tuner" in e for e in b.errors)
     assert "== OVERVIEW ==" in b.text
+
+
+def _gp(
+    individual_name,
+    class_name="Great Scientist",
+    era_name="ERA_ANCIENT",
+    cost=100,
+    claimant="Unclaimed",
+    player_points=0,
+    can_recruit=False,
+    gold_cost=0,
+    faith_cost=0,
+    individual_id=1,
+):
+    return lq.GreatPersonInfo(
+        class_name=class_name,
+        individual_name=individual_name,
+        era_name=era_name,
+        cost=cost,
+        claimant=claimant,
+        player_points=player_points,
+        can_recruit=can_recruit,
+        gold_cost=gold_cost,
+        faith_cost=faith_cost,
+        individual_id=individual_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_great_people_keeps_recruitable_close_and_contested_only():
+    gp = [
+        _gp("Hypatia", can_recruit=True, player_points=100, cost=100),
+        _gp("Confucius", player_points=60, cost=100),  # close (>= 0.5), not yet
+        _gp("Aristotle", player_points=10, cost=100),  # far, unclaimed: dropped
+        _gp("Plato", claimant="Rome", player_points=0, cost=100),  # contested
+    ]
+
+    class GS:
+        async def get_great_people(self):
+            return gp
+
+    text = await _briefing._great_people(GS(), {})
+
+    assert "Hypatia" in text
+    assert "Confucius" in text
+    assert "Plato" in text
+    assert "Aristotle" not in text
+
+
+@pytest.mark.asyncio
+async def test_great_people_empty_timeline_returns_message():
+    class GS:
+        async def get_great_people(self):
+            return []
+
+    text = await _briefing._great_people(GS(), {})
+
+    assert text == "No Great People in timeline."
+
+
+@pytest.mark.asyncio
+async def test_great_people_no_actionable_candidates_returns_empty():
+    class GS:
+        async def get_great_people(self):
+            return [_gp("Aristotle", player_points=10, cost=100)]
+
+    text = await _briefing._great_people(GS(), {})
+
+    assert text == ""
+
+
+@pytest.mark.asyncio
+async def test_great_people_string_passthrough():
+    class GS:
+        async def get_great_people(self):
+            return "ERR:NO_GP_SYSTEM|Great People system not available"
+
+    text = await _briefing._great_people(GS(), {})
+
+    assert text == "ERR:NO_GP_SYSTEM|Great People system not available"
+
+
+@pytest.mark.asyncio
+async def test_great_people_section_renders_when_configured():
+    gs = FakeGS()
+
+    async def great_people():
+        return [_gp("Hypatia", can_recruit=True, player_points=100, cost=100)]
+
+    gs.get_great_people = great_people
+
+    b = await build_briefing(
+        gs,
+        BriefingOptions(enabled=True, sections=("empire_resources", "great_people")),
+        100_000,
+    )
+
+    assert "great_people" in b.sections
+    assert "Hypatia" in b.text
+    assert "== GREAT_PEOPLE ==" in b.text
+
+
+@pytest.mark.asyncio
+async def test_great_people_omitted_when_not_configured():
+    class NoGreatPeopleGS(FakeGS):
+        async def get_great_people(self):
+            raise AssertionError("get_great_people must not be called")
+
+    gs = NoGreatPeopleGS()
+
+    b = await build_briefing(
+        gs,
+        BriefingOptions(enabled=True, sections=("empire_resources",)),
+        100_000,
+    )
+
+    assert "great_people" not in b.sections
+    assert "GREAT_PEOPLE" not in b.text
