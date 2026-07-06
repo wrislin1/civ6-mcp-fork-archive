@@ -459,9 +459,7 @@ class CLIAgentPolicy:
         # STANDING PLAN blocks (1-3 bullets + optional TASK lines) can exceed the plain
         # one-line-summary clamp; widen it whenever memory/task tracking are in play so the
         # block survives truncation for later extraction (extract_standing_plan).
-        max_summary_chars = 500
-        if include_standing_plan_instruction:
-            max_summary_chars = max(1200, self.options.standing_plan_capture_chars)
+        max_summary_chars = self.options.standing_plan_summary_chars
         argv = self._build_argv(prompt)
         # Layer-4 lockdown: disable run_lua/lifecycle tools server-side. Claude relays this
         # through .mcp.json; Codex receives the same values through inline mcp_servers.civ6.env.

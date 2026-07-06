@@ -831,6 +831,41 @@ def test_call_claude_summary_still_clamped_when_memory_disabled(monkeypatch):
     assert result["transcript"]["prompt_injections"]["standing_plan_instruction"] is False
 
 
+def test_call_claude_summary_caps_large_memory_capture_at_cli_bound(monkeypatch):
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            blob = json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "result": "x" * 4500,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "total_cost_usd": 0.0,
+            })
+            return (blob.encode(), b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude",
+        FakeCost(),
+        project_dir="/x",
+        timeout_s=5,
+        options=CivOptions(memory=MemoryOptions(enabled=True, max_chars=6000)),
+    )
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+
+    assert len(result["summary"]) == 4000
+    assert len(result["transcript"]["final_summary"]) == 4000
+
+
 def test_call_codex_standing_plan_survives_clamp_when_task_tracker_enabled(monkeypatch):
     class FakeProc:
         pid = 2

@@ -23,6 +23,8 @@ VALID_SECTIONS = (
 VALID_PLAYBOOKS = ("none", "condensed")
 
 STANDING_PLAN_CAPTURE_CHARS = 4000
+STANDING_PLAN_BASE_TASK_CAP = 8
+STANDING_PLAN_CHARS_PER_EXTRA_TASK = 120
 
 CLI_PROVIDER_COMMANDS = {"cli-claude": "claude", "cli-codex": "codex"}
 _CLI_PROVIDERS = set(CLI_PROVIDER_COMMANDS)
@@ -82,13 +84,33 @@ class CivOptions:
         return self.memory.enabled or self.task_tracker.enabled
 
     @property
+    def _standing_plan_task_capture_chars(self) -> int:
+        if not self.task_tracker.enabled:
+            return 0
+        extra_tasks = max(0, self.task_tracker.max_tasks - STANDING_PLAN_BASE_TASK_CAP)
+        return STANDING_PLAN_CAPTURE_CHARS + (
+            extra_tasks * STANDING_PLAN_CHARS_PER_EXTRA_TASK
+        )
+
+    @property
     def standing_plan_capture_chars(self) -> int:
         if not self.standing_plan_enabled:
             return 0
         capture_chars = self.memory.max_chars if self.memory.enabled else 0
         if self.task_tracker.enabled:
-            capture_chars = max(capture_chars, STANDING_PLAN_CAPTURE_CHARS)
+            capture_chars = max(capture_chars, self._standing_plan_task_capture_chars)
         return capture_chars
+
+    @property
+    def standing_plan_summary_chars(self) -> int:
+        if not self.standing_plan_enabled:
+            return 500
+        desired_chars = max(1200, self.standing_plan_capture_chars)
+        summary_cap = max(
+            STANDING_PLAN_CAPTURE_CHARS,
+            self._standing_plan_task_capture_chars,
+        )
+        return min(desired_chars, summary_cap)
 
 @dataclass(frozen=True)
 class PlayerSpec:
