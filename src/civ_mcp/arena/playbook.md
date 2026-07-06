@@ -94,3 +94,27 @@ upgraded. Use upgrade_unit(unit_id).
 Loyalty below 75 penalizes a city's yields -- assign a governor or fix amenities. Each
 new DISTINCT luxury = +1 amenity; duplicates are worthless, so save them to trade
 later. Watch era score against the Golden/Dark thresholds shown in the overview.
+
+## Diplomacy, trades, and peace
+If a leader screen or deal blocks progress, inspect it first: use get_pending_diplomacy
+for spoken encounters and respond_to_diplomacy(other_player_id, POSITIVE/NEGATIVE)
+for 2-3 rounds until it closes. Use get_pending_trades for incoming deals, then
+respond_to_trade only if the exchange helps you; reject bad deals quickly.
+
+On first meeting, use send_diplomatic_action(action="DIPLOMATIC_DELEGATION") if
+you can afford 25 gold. Friendly neighbors are worth converting with
+send_diplomatic_action(action="DECLARE_FRIENDSHIP"), then alliances after
+friendship matures and Diplomatic Service is available; alliances generate favor and reduce war risk.
+Embassies use send_diplomatic_action(action="RESIDENT_EMBASSY") after Writing.
+Use get_trade_options before propose_trade or form_alliance so you know gold,
+resources, favor, open borders, and alliance eligibility.
+
+Surplus luxuries beyond one copy give no extra amenities. Sell duplicates or spare
+diplomatic favor for gold or gold-per-turn, preferably testing the deal first with
+propose_trade(mode="test") before committing with mode="send". Open borders are also
+trade deals.
+
+If a war is going badly or has stopped producing gains, propose_peace after the
+10-turn cooldown. To start a war, send_diplomatic_action(action="DECLARE_SURPRISE_WAR")
+or another valid DECLARE_*_WAR token declares it, but attacks usually work next
+turn; declare, position safely, then attack on the following turn.

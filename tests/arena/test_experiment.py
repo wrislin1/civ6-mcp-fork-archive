@@ -4,6 +4,7 @@ import pytest
 
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.experiment import load_experiment
+from civ_mcp.arena.registry import resolve_tools
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -90,6 +91,28 @@ def test_loads_gemma_strategy_ab_slice1_artifact():
         assert player.options.briefing.enabled is False
 
 
+def test_slice1_treatment_full_tier_has_diplomacy_tools_and_control_does_not():
+    cfg = load_experiment(SLICE1_GEMMA_STRATEGY_AB)
+    by_player = {player.player_id: player for player in cfg.players}
+    diplomacy_tools = {
+        "get_pending_diplomacy",
+        "respond_to_diplomacy",
+        "get_pending_trades",
+        "respond_to_trade",
+        "get_trade_options",
+        "propose_trade",
+        "propose_peace",
+        "send_diplomatic_action",
+        "form_alliance",
+    }
+
+    for player_id in (1, 3, 5, 7):
+        assert diplomacy_tools <= set(resolve_tools(by_player[player_id].options.tools))
+
+    for player_id in (2, 4, 6):
+        assert diplomacy_tools.isdisjoint(set(resolve_tools(by_player[player_id].options.tools)))
+
+
 def test_playbook_covers_promotions_and_expansion_doctrine():
     text = (REPO_ROOT / "src" / "civ_mcp" / "arena" / "playbook.md").read_text()
 
@@ -97,6 +120,25 @@ def test_playbook_covers_promotions_and_expansion_doctrine():
         assert header in text
     assert "promotions briefing appears" in text
     assert "get_unit_promotions(unit_id).promotions" in text
+
+
+def test_playbook_covers_diplomacy_trade_and_peace_doctrine():
+    text = (REPO_ROOT / "src" / "civ_mcp" / "arena" / "playbook.md").read_text()
+
+    assert "## Diplomacy, trades, and peace" in text
+    assert "get_pending_diplomacy" in text
+    assert "respond_to_diplomacy" in text
+    assert "get_pending_trades" in text
+    assert "respond_to_trade" in text
+    assert "get_trade_options" in text
+    assert "propose_trade" in text
+    assert "propose_peace" in text
+    assert "form_alliance" in text
+    assert "send_diplomatic_action" in text
+    assert "DIPLOMATIC_DELEGATION" in text
+    assert "DECLARE_FRIENDSHIP" in text
+    assert "RESIDENT_EMBASSY" in text
+    assert "DECLARE_SURPRISE_WAR" in text
 
 
 def test_load_good(tmp_path):
