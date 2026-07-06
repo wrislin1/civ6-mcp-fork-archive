@@ -919,3 +919,33 @@ async def test_nonexclusive_policy_without_briefing_kwarg_runs():
     assert pol.calls == [
         {"player_id": 7, "turn": 2, "memory_block": "", "task_block": ""}
     ]
+
+
+@pytest.mark.asyncio
+async def test_task_tracker_only_uses_task_capture_budget_not_memory_default(tmp_path):
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    run_id, player_id = "task-capture-budget", 8
+    long_plan = (
+        "STANDING PLAN:\n"
+        + ("- filler line to push task below memory default\n" * 80)
+        + "TASK settle unit_id=42 target=10,12\n"
+    )
+    cfg = ArenaConfig(
+        players=[PlayerSpec(player_id, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[player_id],
+        run_id=run_id,
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {"summary": "ignored", "transcript": {"final_summary": long_plan}},
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([[f"LOCAL|{player_id}", "TURN|2", "ACTIVE|true", "LAST|1"]])
+
+    await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    path = task_path(str(tmp_path), run_id, player_id)
+    assert '"unit_id": 42' in path.read_text()

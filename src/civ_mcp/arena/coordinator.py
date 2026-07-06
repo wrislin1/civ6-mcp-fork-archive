@@ -164,16 +164,18 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     print(f"[arena] promotion sweep failed: {e!r}", file=sys.stderr)
 
                 # --- Capture this turn's standing plan / tasks from the final summary.
-                # Runs whenever either feature is enabled, since both parse the same
-                # STANDING PLAN block the prompt asked for (build_opening_prompt's
-                # include_standing_plan_instruction uses the same OR condition).
+                # Runs whenever standing-plan capture is enabled, since memory and
+                # task tracking both parse the same STANDING PLAN block.
                 captured_plan = ""
-                if opts.memory.enabled or opts.task_tracker.enabled:
+                if opts.standing_plan_enabled:
                     final_summary = (
                         result.get("transcript", {}).get("final_summary")
                         or result.get("summary", "")
                     )
-                    captured_plan = extract_standing_plan(final_summary, opts.memory.max_chars)
+                    captured_plan = extract_standing_plan(
+                        final_summary,
+                        opts.standing_plan_capture_chars,
+                    )
                 if opts.memory.enabled and captured_plan:
                     save_memory(
                         transcript_dir, run_id, st.local, st.turn, captured_plan,
