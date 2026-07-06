@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, signal, time
+import asyncio, json, os, re, signal, time
 
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.briefing import Briefing
@@ -90,6 +90,31 @@ _PROMPT = (
 )
 _PROMPT_SUMMARY_TAIL = " When done, give a one-line summary."
 
+_CLI_STANDING_PLAN_RE = re.compile(
+    r"^\s*(?:[-*]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
+    r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _find_standing_plan_start(text: str) -> int:
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if _CLI_STANDING_PLAN_RE.match(line):
+            return offset
+        offset += len(line)
+    return -1
+
+
+def _clamp_final_summary(text: str, max_summary_chars: int) -> str:
+    if len(text) <= max_summary_chars:
+        return text
+    plan_start = _find_standing_plan_start(text)
+    if plan_start >= 0:
+        return text[plan_start : plan_start + max_summary_chars].strip()
+    return text[:max_summary_chars]
+
+
 class CLIAgentPolicy:
     needs_exclusive_tuner = True   # the CLI's civ6 MCP needs the single tuner slot
 
@@ -139,7 +164,12 @@ class CLIAgentPolicy:
         raise ValueError(f"unknown CLI provider {self.provider!r}")
 
     @staticmethod
-    def _parse_claude(stdout: str, max_summary_chars: int = 500):
+    def _parse_claude(
+        stdout: str,
+        max_summary_chars: int = 500,
+        *,
+        preserve_standing_plan: bool = True,
+    ):
         obj = None
         for line in stdout.splitlines():
             line = line.strip()
@@ -157,12 +187,23 @@ class CLIAgentPolicy:
             except ValueError:
                 return ("(unparseable CLI output)", 0, 0, 0.0)
         u = obj.get("usage", {}) or {}
-        return (str(obj.get("result") or "")[:max_summary_chars],
+        text = str(obj.get("result") or "")
+        summary = (
+            _clamp_final_summary(text, max_summary_chars)
+            if preserve_standing_plan
+            else text[:max_summary_chars]
+        )
+        return (summary,
                 int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
                 float(obj.get("total_cost_usd") or 0.0))
 
     @staticmethod
-    def _parse_codex(stdout: str, max_summary_chars: int = 500):
+    def _parse_codex(
+        stdout: str,
+        max_summary_chars: int = 500,
+        *,
+        preserve_standing_plan: bool = True,
+    ):
         summary = ""
         prompt_tokens = 0
         completion_tokens = 0
@@ -177,7 +218,12 @@ class CLIAgentPolicy:
             if obj.get("type") == "item.completed":
                 item = obj.get("item", {}) or {}
                 if item.get("type") == "agent_message":
-                    summary = str(item.get("text") or "")[:max_summary_chars]
+                    text = str(item.get("text") or "")
+                    summary = (
+                        _clamp_final_summary(text, max_summary_chars)
+                        if preserve_standing_plan
+                        else text[:max_summary_chars]
+                    )
             elif obj.get("type") == "turn.completed":
                 usage = obj.get("usage", {}) or {}
                 prompt_tokens = int(usage.get("input_tokens") or 0)
@@ -524,13 +570,21 @@ class CLIAgentPolicy:
         if raw_dir:
             self._dump_raw(raw_dir, player_id, turn, stdout, stderr_full)
         if self.provider == "cli-codex":
-            summary, pt, ct, usd = self._parse_codex(stdout, max_summary_chars)
+            summary, pt, ct, usd = self._parse_codex(
+                stdout,
+                max_summary_chars,
+                preserve_standing_plan=include_standing_plan_instruction,
+            )
             try:
                 steps = self._stream_steps_codex(stdout)
             except Exception:
                 steps = []
         else:
-            summary, pt, ct, usd = self._parse_claude(stdout, max_summary_chars)
+            summary, pt, ct, usd = self._parse_claude(
+                stdout,
+                max_summary_chars,
+                preserve_standing_plan=include_standing_plan_instruction,
+            )
             try:
                 steps = self._stream_steps_claude(stdout)
             except Exception:

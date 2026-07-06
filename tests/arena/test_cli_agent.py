@@ -5,7 +5,7 @@ import signal
 
 import pytest
 
-from civ_mcp.arena.cli_agent import CLIAgentPolicy
+from civ_mcp.arena.cli_agent import CLIAgentPolicy, _clamp_final_summary
 from civ_mcp.arena.config import CivOptions, MemoryOptions, TaskTrackerOptions
 
 def _prompt(pid=2, turn=3):
@@ -765,6 +765,94 @@ _LONG_PREAMBLE = "A" * 550
 _LONG_FINAL_MESSAGE = f"{_LONG_PREAMBLE}\n\n{_STANDING_PLAN_TAIL}"
 assert len(_LONG_FINAL_MESSAGE) > 500
 assert _LONG_FINAL_MESSAGE[:500].find("STANDING PLAN:") == -1  # confirms the old clamp cuts it
+
+
+def test_parse_claude_preserves_trailing_standing_plan_past_memory_budget():
+    text = (
+        "A" * 1500
+        + "\n\nSTANDING PLAN:\n"
+        + "- keep settler moving east\n"
+        + "TASK settle unit_id=42 target=10,12\n"
+    )
+    blob = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "result": text,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "total_cost_usd": 0.0,
+    })
+
+    summary, pt, ct, usd = CLIAgentPolicy._parse_claude(blob, max_summary_chars=1200)
+
+    assert len(summary) <= 1200
+    assert summary.startswith("STANDING PLAN:")
+    assert "TASK settle unit_id=42 target=10,12" in summary
+    assert pt == 10
+    assert ct == 5
+    assert usd == 0.0
+
+
+def test_parse_codex_preserves_trailing_standing_plan_past_task_budget():
+    text = (
+        "A" * 4300
+        + "\n\nSTANDING PLAN:\n"
+        + "- improve the copper first\n"
+        + "TASK builder_improve unit_id=65538 target=12,19 improvement=IMPROVEMENT_MINE\n"
+    )
+    stdout = "\n".join([
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": text},
+        }),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 11, "output_tokens": 7},
+        }),
+    ])
+
+    summary, pt, ct, usd = CLIAgentPolicy._parse_codex(stdout, max_summary_chars=4000)
+
+    assert len(summary) <= 4000
+    assert summary.startswith("STANDING PLAN:")
+    assert "TASK builder_improve unit_id=65538" in summary
+    assert pt == 11
+    assert ct == 7
+    assert usd == 0.0
+
+
+def test_clamp_final_summary_preserves_standing_plan_at_legacy_budget():
+    text = "A" * 800 + "\n\nSTANDING PLAN:\n- hold position\n"
+
+    summary = _clamp_final_summary(text, max_summary_chars=500)
+
+    assert len(summary) <= 500
+    assert summary.startswith("STANDING PLAN:")
+    assert "- hold position" in summary
+
+
+def test_parse_claude_preserves_bold_standing_plan_heading_with_external_colon():
+    text = (
+        "A" * 1500
+        + "\n\n**STANDING PLAN**:\n"
+        + "- keep settler moving east\n"
+        + "TASK settle unit_id=42 target=10,12\n"
+    )
+    blob = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "result": text,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "total_cost_usd": 0.0,
+    })
+
+    summary, pt, ct, usd = CLIAgentPolicy._parse_claude(blob, max_summary_chars=1200)
+
+    assert len(summary) <= 1200
+    assert summary.startswith("**STANDING PLAN**:")
+    assert "TASK settle unit_id=42 target=10,12" in summary
+    assert pt == 10
+    assert ct == 5
+    assert usd == 0.0
 
 
 def test_call_claude_standing_plan_survives_clamp_when_memory_enabled(monkeypatch):
