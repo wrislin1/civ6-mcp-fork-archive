@@ -400,7 +400,7 @@ async def test_builder_improve_calls_improve_tile_only_when_improvement_valid():
 
 
 @pytest.mark.asyncio
-async def test_builder_improve_blocks_when_improvement_not_valid():
+async def test_builder_improve_keeps_task_active_when_improvement_not_currently_valid():
     unit = _unit(unit_id=65538, unit_index=2, x=12, y=19, valid_improvements=[])
     gs = FakeGS(units=[unit])
     task = _task(
@@ -415,11 +415,48 @@ async def test_builder_improve_blocks_when_improvement_not_valid():
     updated, results = await run_pre_model_tasks(gs, [task])
 
     assert gs.improve_tile_calls == []
-    assert updated[0].status == "failed"
+    assert updated[0].status == "active"
     assert updated[0].last_result == "blocked_improvement_not_valid"
-    assert results[0]["status"] == "failed"
+    assert results[0]["status"] == "active"
     assert results[0]["action"] == "block"
     assert results[0]["result"] == "blocked_improvement_not_valid"
+
+
+@pytest.mark.asyncio
+async def test_builder_improve_retries_after_transient_invalid_improvement_becomes_valid():
+    invalid_unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=[],
+    )
+    task = _task(
+        task_id="builder_improve:65538",
+        kind="builder_improve",
+        unit_id=65538,
+        target_x=12,
+        target_y=19,
+        improvement="IMPROVEMENT_FARM",
+    )
+
+    first_gs = FakeGS(units=[invalid_unit])
+    updated, first_results = await run_pre_model_tasks(first_gs, [task])
+
+    valid_unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=["IMPROVEMENT_FARM"],
+    )
+    second_gs = FakeGS(units=[valid_unit])
+    retried, retry_results = await run_pre_model_tasks(second_gs, updated)
+
+    assert first_results[0]["result"] == "blocked_improvement_not_valid"
+    assert second_gs.improve_tile_calls == [(2, "IMPROVEMENT_FARM")]
+    assert retried[0].status == "complete"
+    assert retry_results[0]["action"] == "improve"
 
 
 @pytest.mark.asyncio

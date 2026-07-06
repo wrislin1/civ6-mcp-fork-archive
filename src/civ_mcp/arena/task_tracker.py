@@ -406,12 +406,10 @@ async def _run_single_task(
                 task, status="complete", action="improve", result=result_str
             )
 
-        new_task = replace(
-            task, status="failed", last_result="blocked_improvement_not_valid"
-        )
+        new_task = replace(task, last_result="blocked_improvement_not_valid")
         return new_task, _result_dict(
             task,
-            status="failed",
+            status="active",
             action="block",
             result="blocked_improvement_not_valid",
         )
