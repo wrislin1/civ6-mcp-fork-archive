@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import inspect
 import sys
 from datetime import datetime, timezone
 from civ_mcp import lua as lq
@@ -90,6 +91,18 @@ class ScriptedPolicy:
             return {"summary": f"scripted: skip failed {e!r}", "actions": []}
         return {"summary": "scripted: observed + skipped unit 0", "actions": [{"tool": "skip_unit"}]}
 
+
+def _policy_accepts_kwarg(policy, name: str) -> bool:
+    try:
+        signature = inspect.signature(getattr(policy, "__call__"))
+    except (TypeError, ValueError):
+        return False
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD or param.name == name
+        for param in signature.parameters.values()
+    )
+
+
 async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=None) -> dict:
     if policy_for is None:
         if policy is None:
@@ -143,7 +156,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     )
 
                 policy_kwargs = {"memory_block": memory_block, "task_block": task_block}
-                if exclusive and opts.briefing.enabled:
+                if (
+                    exclusive
+                    and opts.briefing.enabled
+                    and _policy_accepts_kwarg(pol, "briefing")
+                ):
                     playbook_chars = (
                         len(load_playbook()) if opts.playbook == "condensed" else 0
                     )

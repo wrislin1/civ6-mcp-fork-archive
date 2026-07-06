@@ -3,7 +3,14 @@ import asyncio
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve
 from civ_mcp.arena.coordinator import run_arena, ScriptedPolicy, _reconnect_with_retry
-from civ_mcp.arena.config import ArenaConfig, CivOptions, MemoryOptions, PlayerSpec, TaskTrackerOptions
+from civ_mcp.arena.config import (
+    ArenaConfig,
+    BriefingOptions,
+    CivOptions,
+    MemoryOptions,
+    PlayerSpec,
+    TaskTrackerOptions,
+)
 from civ_mcp.arena.memory import memory_path
 from civ_mcp.arena.task_tracker import UnitTask, save_task_state, task_path
 
@@ -841,7 +848,6 @@ async def test_exclusive_cli_policy_still_receives_memory_and_task_blocks(tmp_pa
 @pytest.mark.asyncio
 async def test_exclusive_cli_briefing_built_before_disconnect(monkeypatch):
     from civ_mcp.arena.briefing import Briefing
-    from civ_mcp.arena.config import BriefingOptions
     import civ_mcp.arena.coordinator as coord_mod
 
     built_connected = []
@@ -874,6 +880,52 @@ async def test_exclusive_cli_briefing_built_before_disconnect(monkeypatch):
 
     assert result["puppet_turns_played"] == 1
     assert built_connected == [True]
+
+
+@pytest.mark.asyncio
+async def test_exclusive_policy_without_briefing_kwarg_runs_with_briefing_enabled():
+    class NarrowExclusivePolicy:
+        needs_exclusive_tuner = True
+        options = CivOptions(briefing=BriefingOptions(enabled=True))
+
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(
+            self,
+            gs,
+            player_id,
+            turn,
+            *,
+            memory_block="",
+            task_block="",
+        ):
+            self.calls.append(
+                {
+                    "player_id": player_id,
+                    "turn": turn,
+                    "memory_block": memory_block,
+                    "task_block": task_block,
+                }
+            )
+            return {"summary": "narrow exclusive policy ran", "actions": []}
+
+    conn = FakeConn()
+    gs = FakeGS()
+    cfg = ArenaConfig(
+        players=[PlayerSpec(7, "cli-claude", "")],
+        max_puppet_turns=1,
+        puppet_ids=[7],
+    )
+    conn._polls = iter([[ "LOCAL|7", "TURN|2", "ACTIVE|true", "LAST|1" ]])
+    pol = NarrowExclusivePolicy()
+
+    result = await run_arena(conn, gs, cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1
+    assert pol.calls == [
+        {"player_id": 7, "turn": 2, "memory_block": "", "task_block": ""}
+    ]
 
 
 @pytest.mark.asyncio
