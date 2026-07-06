@@ -14,6 +14,7 @@ never leak across runs.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,7 @@ SCHEMA_VERSION = 1
 
 _STANDING_PLAN_RE = re.compile(r"^\s*standing plan:\s*(.*)$", re.IGNORECASE)
 _BULLET_PREFIX_RE = re.compile(r"^\s*[-*•]+\s*")
+_TASK_OR_CANCEL_LINE_RE = re.compile(r"^\s*[-*•]*\s*(?:TASK\s+|CANCEL\s+)", re.IGNORECASE)
 _BULLETED_SECTION_HEADERS = frozenset(
     {
         "TACTICAL",
@@ -141,8 +143,9 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     if inline_content:
         collected.append(_strip_bullet(inline_content))
 
-    for line in lines[start_idx + 1 :]:
-        if _is_section_header(line):
+    following = lines[start_idx + 1 :]
+    for offset, line in enumerate(following):
+        if _is_section_header(line, following[offset + 1 :]):
             break
         if line.strip() == "":
             # Blank lines are not a terminator per the brief; skip them so a
@@ -188,7 +191,18 @@ def _strip_bullet(line: str) -> str:
     return _BULLET_PREFIX_RE.sub("", line, count=1)
 
 
-def _is_section_header(line: str) -> bool:
+def _has_task_line_before_next_header(lines: Sequence[str]) -> bool:
+    for line in lines:
+        if line.strip() == "":
+            continue
+        if _TASK_OR_CANCEL_LINE_RE.match(line):
+            return True
+        if _is_section_header(line):
+            return False
+    return False
+
+
+def _is_section_header(line: str, following_lines: Sequence[str] = ()) -> bool:
     stripped = line.strip()
     if not stripped.endswith(":"):
         return False
@@ -200,5 +214,8 @@ def _is_section_header(line: str) -> bool:
         return False
 
     if bullet:
-        return body.upper() in _BULLETED_SECTION_HEADERS
+        return (
+            body.upper() in _BULLETED_SECTION_HEADERS
+            and not _has_task_line_before_next_header(following_lines)
+        )
     return body.isupper()

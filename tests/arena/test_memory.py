@@ -224,6 +224,25 @@ def test_extract_standing_plan_stops_at_lowercase_bulleted_reflection_header():
     )
 
 
+def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains_task():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Planning:\n"
+        "- TASK settle unit_id=123 target=18,24\n"
+        "- Keep escort near the target.\n"
+        "TACTICAL:\n"
+        "- unrelated next section\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == (
+        "Planning:\n"
+        "TASK settle unit_id=123 target=18,24\n"
+        "Keep escort near the target."
+    )
+
+
 def test_format_memory_block_exact_heading():
     memory = StandingMemory(
         schema_version=1,
