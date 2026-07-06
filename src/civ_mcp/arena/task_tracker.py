@@ -327,14 +327,17 @@ def _label_matches_owner(label: str, owner: str) -> bool:
 
 
 def _tile_has_hostile_unit(tile: Any, owner_context: _HostileOwnerContext) -> bool:
-    labels = tile.units or []
-    if labels and (tile.x, tile.y) in owner_context.hostile_coords:
+    labels = [str(label).strip() for label in (tile.units or []) if str(label).strip()]
+    if labels and (tile.x, tile.y) in owner_context.hostile_coords and any(
+        not any(
+            _label_matches_owner(label_text, owner)
+            for owner in owner_context.peaceful_prefixes
+        )
+        for label_text in labels
+    ):
         return True
 
-    for label in labels:
-        label_text = str(label).strip()
-        if not label_text:
-            continue
+    for label_text in labels:
         if any(
             _label_matches_owner(label_text, owner)
             for owner in owner_context.hostile_prefixes

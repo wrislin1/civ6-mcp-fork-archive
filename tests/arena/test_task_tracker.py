@@ -703,6 +703,31 @@ async def test_threat_scan_major_owner_does_not_globally_block_peaceful_major_la
 
 
 @pytest.mark.asyncio
+async def test_threat_scan_coordinate_does_not_block_known_peaceful_major_label():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Rome WARRIOR"])]},
+        diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=False)],
+        threat_scan=[
+            SimpleNamespace(
+                x=18,
+                y=24,
+                owner_name="Rome",
+                is_city_state=False,
+            )
+        ],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == [(1, 18, 24)]
+    assert updated[0].status == "active"
+    assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
 async def test_hostile_context_fetches_diplomacy_and_threat_scan_concurrently():
     class ConcurrentGS(FakeGS):
         def __init__(self):
