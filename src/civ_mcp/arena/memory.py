@@ -48,15 +48,28 @@ def load_memory(transcript_dir: str, run_id: str, player_id: int) -> StandingMem
     if not isinstance(data, dict):
         return None
     try:
-        return StandingMemory(
-            schema_version=data["schema_version"],
-            run_id=data["run_id"],
-            player_id=data["player_id"],
-            updated_turn=data["updated_turn"],
-            text=data["text"],
-        )
-    except (KeyError, TypeError):
+        schema_version = data["schema_version"]
+        saved_run_id = data["run_id"]
+        saved_player_id = data["player_id"]
+        updated_turn = data["updated_turn"]
+        text = data["text"]
+    except KeyError:
         return None
+    if (
+        type(schema_version) is not int
+        or type(saved_run_id) is not str
+        or type(saved_player_id) is not int
+        or type(updated_turn) is not int
+        or type(text) is not str
+    ):
+        return None
+    return StandingMemory(
+        schema_version=schema_version,
+        run_id=saved_run_id,
+        player_id=saved_player_id,
+        updated_turn=updated_turn,
+        text=text,
+    )
 
 
 def save_memory(
@@ -129,11 +142,20 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     return _clamp("\n".join(collected), max_chars)
 
 
-def format_memory_block(memory: StandingMemory | None) -> str:
-    """Render a standing memory as a prompt-ready block, or "" if empty/absent."""
+def format_memory_block(
+    memory: StandingMemory | None, *, current_turn: int | None = None
+) -> str:
+    """Render standing memory as a prompt-ready block, or "" if empty/absent."""
     if memory is None or not memory.text:
         return ""
-    return f"== STANDING PLAN FROM LAST TURN ==\n{memory.text}"
+    suffix = f"captured turn {memory.updated_turn}"
+    if current_turn is not None:
+        age = max(0, current_turn - memory.updated_turn)
+        if age == 1:
+            suffix += ", 1 turn old"
+        elif age != 0:
+            suffix += f", {age} turns old"
+    return f"== STANDING PLAN ({suffix}) ==\n{memory.text}"
 
 
 def _clamp(text: str, max_chars: int) -> str:
@@ -149,6 +171,8 @@ def _strip_bullet(line: str) -> str:
 
 def _is_section_header(line: str) -> bool:
     stripped = line.strip()
+    if _BULLET_PREFIX_RE.match(stripped):
+        return False
     if not stripped.endswith(":"):
         return False
     body = stripped[:-1].strip()

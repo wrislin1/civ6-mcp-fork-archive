@@ -28,6 +28,17 @@ def test_load_memory_malformed_structure_returns_none(tmp_path):
     assert load_memory(str(tmp_path), "run1", 0) is None
 
 
+def test_load_memory_wrong_type_updated_turn_returns_none(tmp_path):
+    path = memory_path(str(tmp_path), "run1", 0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"schema_version": 1, "run_id": "run1", "player_id": 0, '
+        '"updated_turn": "5", "text": "Keep marching."}'
+    )
+
+    assert load_memory(str(tmp_path), "run1", 0) is None
+
+
 def test_save_then_load_round_trip(tmp_path):
     saved = save_memory(str(tmp_path), "run1", 2, turn=15, text="Keep building settlers.", max_chars=1200)
 
@@ -145,6 +156,23 @@ def test_extract_standing_plan_clamps_to_max_chars():
     assert len(result) == 1200
 
 
+def test_extract_standing_plan_keeps_all_caps_bullet_ending_colon():
+    summary = (
+        "STANDING PLAN:\n"
+        "- BUILD CAMPUS:\n"
+        "- TASK builder_improve unit_id=456 target=12,19 improvement=IMPROVEMENT_MINE\n"
+        "TACTICAL:\n"
+        "- unrelated next section\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == (
+        "BUILD CAMPUS:\n"
+        "TASK builder_improve unit_id=456 target=12,19 improvement=IMPROVEMENT_MINE"
+    )
+
+
 def test_format_memory_block_exact_heading():
     memory = StandingMemory(
         schema_version=1,
@@ -156,7 +184,35 @@ def test_format_memory_block_exact_heading():
 
     result = format_memory_block(memory)
 
-    assert result == "== STANDING PLAN FROM LAST TURN ==\nKeep marching."
+    assert result == "== STANDING PLAN (captured turn 5) ==\nKeep marching."
+
+
+def test_format_memory_block_surfaces_turn_age():
+    memory = StandingMemory(
+        schema_version=1,
+        run_id="run1",
+        player_id=0,
+        updated_turn=5,
+        text="Keep marching.",
+    )
+
+    result = format_memory_block(memory, current_turn=8)
+
+    assert result == "== STANDING PLAN (captured turn 5, 3 turns old) ==\nKeep marching."
+
+
+def test_format_memory_block_surfaces_one_turn_old():
+    memory = StandingMemory(
+        schema_version=1,
+        run_id="run1",
+        player_id=0,
+        updated_turn=7,
+        text="Keep marching.",
+    )
+
+    result = format_memory_block(memory, current_turn=8)
+
+    assert result == "== STANDING PLAN (captured turn 7, 1 turn old) ==\nKeep marching."
 
 
 def test_format_memory_block_returns_empty_for_none():

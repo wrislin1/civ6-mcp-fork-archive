@@ -114,7 +114,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 # disconnect below: it uses `gs`, which is backed by the live `conn` —
                 # a CLI turn's exclusive disconnect leaves no connection for these reads.
                 memory = load_memory(transcript_dir, run_id, st.local) if opts.memory.enabled else None
-                memory_block = format_memory_block(memory)
+                memory_block = format_memory_block(memory, current_turn=st.turn)
 
                 active_tasks_before: tuple = ()
                 updated_tasks: tuple = ()

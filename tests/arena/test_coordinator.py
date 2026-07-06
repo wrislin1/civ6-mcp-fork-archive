@@ -717,7 +717,7 @@ async def test_memory_from_turn_n_injected_on_turn_n_plus_1(tmp_path):
 
     pol2 = RecordingPolicy({"summary": "no plan this time"}, options=opts)
     await run_arena(FakeConn(), FakeGS(), cfg, policy=pol2)
-    assert pol2.calls[0]["memory_block"].startswith("== STANDING PLAN FROM LAST TURN ==")
+    assert pol2.calls[0]["memory_block"].startswith("== STANDING PLAN (captured turn 2")
     assert "march settler to (18,24)" in pol2.calls[0]["memory_block"]
 
 
@@ -835,4 +835,4 @@ async def test_exclusive_cli_policy_still_receives_memory_and_task_blocks(tmp_pa
     assert result["puppet_turns_played"] == 1
     assert conn.restored is True  # reconnect + handback still happened
     assert "scout north next." in pol.calls[0]["memory_block"]
-    assert pol.calls[0]["memory_block"].startswith("== STANDING PLAN FROM LAST TURN ==")
+    assert pol.calls[0]["memory_block"].startswith("== STANDING PLAN (captured turn 1, 1 turn old) ==")
