@@ -290,6 +290,24 @@ def test_merge_respects_max_tasks_keeping_newest():
     assert [t.task_id for t in merged] == ["settle:2", "settle:3"]
 
 
+def test_merge_cap_never_evicts_active_task_for_completed_one():
+    # run_pre_model_tasks returns freshly-completed tasks in `existing`,
+    # carrying their original updated_turn. A completed task with the newest
+    # updated_turn must NOT occupy a cap slot and drop an in-progress active
+    # task -- the cap applies to active tasks only.
+    existing = (
+        _task(task_id="settle:1", unit_id=1, updated_turn=1, status="active"),  # A, oldest
+        _task(task_id="settle:2", unit_id=2, updated_turn=2, status="active"),  # B
+        _task(task_id="settle:3", unit_id=3, updated_turn=3, status="complete"),  # C, newest
+    )
+
+    merged = merge_tasks(existing, [], max_tasks=2)
+
+    # Both active tasks survive; the completed one is dropped, not [B, C].
+    assert {t.task_id for t in merged} == {"settle:1", "settle:2"}
+    assert all(t.status == "active" for t in merged)
+
+
 # ---------------------------------------------------------------------------
 # run_pre_model_tasks
 # ---------------------------------------------------------------------------

@@ -211,7 +211,9 @@ def merge_tasks(
     - ``CANCEL`` updates remove whichever existing task currently owns that
       ``unit_id`` (regardless of kind).
     - Tasks absent from ``updates`` persist unchanged.
-    - The newest ``max_tasks`` active tasks (by ``updated_turn``) are kept.
+    - Only ``active`` tasks appear in the output; the newest ``max_tasks`` of
+      them (by ``updated_turn``) are kept. A non-active task (completed/lost/
+      cancelled) can never occupy a cap slot and evict an active one.
     """
     merged: dict[str, UnitTask] = {task.task_id: task for task in existing}
 
@@ -226,10 +228,17 @@ def merge_tasks(
             continue
         merged[update.task_id] = update
 
+    # Cap ACTIVE tasks only: a freshly completed/lost task (which
+    # run_pre_model_tasks returns in `existing`, carrying its original
+    # updated_turn) must never occupy a cap slot and evict an in-progress
+    # active task. Non-active tasks are dropped from the output entirely --
+    # save_task_state persists active-only anyway, and the brief specifies
+    # keeping active tasks (cancelled/completed/lost do not survive merge).
     ordered = sorted(merged.values(), key=lambda task: task.updated_turn)
-    if max_tasks >= 0 and len(ordered) > max_tasks:
-        ordered = ordered[-max_tasks:]
-    return tuple(ordered)
+    active = [task for task in ordered if task.status == "active"]
+    if max_tasks > 0 and len(active) > max_tasks:
+        active = active[-max_tasks:]
+    return tuple(active)
 
 
 def _result_dict(task: UnitTask, *, status: str, action: str, result: str) -> dict[str, Any]:
