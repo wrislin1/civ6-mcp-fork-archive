@@ -23,6 +23,16 @@ SCHEMA_VERSION = 1
 
 _STANDING_PLAN_RE = re.compile(r"^\s*standing plan:\s*(.*)$", re.IGNORECASE)
 _BULLET_PREFIX_RE = re.compile(r"^\s*[-*•]+\s*")
+_BULLETED_SECTION_HEADERS = frozenset(
+    {
+        "TACTICAL",
+        "STRATEGIC",
+        "TOOLING",
+        "PLANNING",
+        "HYPOTHESIS",
+        "STRATEGIC NOTES",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -109,9 +119,10 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
 
     Finds a case-insensitive line starting with ``STANDING PLAN:`` and
     captures that line's trailing content plus following non-empty lines,
-    stopping at a new ALL-CAPS section header (e.g. ``TACTICAL:``) or end of
-    string. Left-edge markdown bullets are stripped per line. Returns ""
-    when no standing plan marker is present.
+    stopping at an unbulleted ALL-CAPS section header, a known bulleted
+    reflection header such as ``- TACTICAL:``, or end of string. Left-edge
+    markdown bullets are stripped per line. Returns "" when no standing plan
+    marker is present.
     """
     lines = summary.splitlines()
     start_idx = None
@@ -171,9 +182,15 @@ def _strip_bullet(line: str) -> str:
 
 def _is_section_header(line: str) -> bool:
     stripped = line.strip()
-    if _BULLET_PREFIX_RE.match(stripped):
-        return False
     if not stripped.endswith(":"):
         return False
-    body = stripped[:-1].strip()
-    return bool(body) and body.isupper()
+
+    bullet = _BULLET_PREFIX_RE.match(stripped)
+    candidate = _strip_bullet(stripped) if bullet else stripped
+    body = candidate[:-1].strip()
+    if not body or not body.isupper():
+        return False
+
+    if bullet:
+        return body in _BULLETED_SECTION_HEADERS
+    return True
