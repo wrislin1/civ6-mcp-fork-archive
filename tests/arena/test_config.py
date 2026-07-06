@@ -88,6 +88,16 @@ def test_civ_options_fingerprint_is_json_safe():
     assert fp["briefing"]["enabled"] is True
 
 
+def test_civ_options_memory_fingerprint_includes_max_age_turns():
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=900, max_age_turns=6))
+
+    assert opts.fingerprint()["memory"] == {
+        "enabled": True,
+        "max_chars": 900,
+        "max_age_turns": 6,
+    }
+
+
 def test_civ_options_standing_plan_enabled_property():
     assert CivOptions().standing_plan_enabled is False
     assert CivOptions(memory=MemoryOptions(enabled=True)).standing_plan_enabled is True

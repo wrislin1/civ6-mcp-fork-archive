@@ -156,12 +156,32 @@ def _parse_briefing(civ_label: str, raw: object) -> BriefingOptions:
 def _parse_memory(civ_label: str, raw: object) -> MemoryOptions:
     if not isinstance(raw, dict):
         raise _err(civ_label, f"memory must be a mapping, got {raw!r}")
-    _validate_mapping_keys(civ_label, raw, {"enabled", "max_chars"}, "memory")
+    _validate_mapping_keys(
+        civ_label,
+        raw,
+        {"enabled", "max_chars", "max_age_turns"},
+        "memory",
+    )
     enabled = raw.get("enabled", _MEMORY_DEFAULTS.enabled)
     if not isinstance(enabled, bool):
         raise _err(civ_label, f"memory.enabled must be a boolean, got {enabled!r}")
-    max_chars = _positive_int(civ_label, "memory.max_chars", raw.get("max_chars", _MEMORY_DEFAULTS.max_chars))
-    return MemoryOptions(enabled=enabled, max_chars=max_chars)
+    max_chars = _positive_int(
+        civ_label,
+        "memory.max_chars",
+        raw.get("max_chars", _MEMORY_DEFAULTS.max_chars),
+    )
+    max_age_turns = _int(
+        civ_label,
+        "memory.max_age_turns",
+        raw.get("max_age_turns", _MEMORY_DEFAULTS.max_age_turns),
+    )
+    if max_age_turns <= 0:
+        raise _err(civ_label, "memory.max_age_turns must be a positive integer")
+    return MemoryOptions(
+        enabled=enabled,
+        max_chars=max_chars,
+        max_age_turns=max_age_turns,
+    )
 
 
 def _parse_task_tracker(civ_label: str, raw: object) -> TaskTrackerOptions:

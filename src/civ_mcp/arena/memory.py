@@ -154,14 +154,22 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
 
 
 def format_memory_block(
-    memory: StandingMemory | None, *, current_turn: int | None = None
+    memory: StandingMemory | None,
+    *,
+    current_turn: int | None = None,
+    max_age_turns: int | None = None,
 ) -> str:
-    """Render standing memory as a prompt-ready block, or "" if empty/absent."""
+    """Render standing memory as a prompt-ready block, or "" if empty/absent/stale."""
     if memory is None or not memory.text:
         return ""
-    suffix = f"captured turn {memory.updated_turn}"
+    age: int | None = None
     if current_turn is not None:
         age = max(0, current_turn - memory.updated_turn)
+        if max_age_turns is not None and age > max_age_turns:
+            return ""
+
+    suffix = f"captured turn {memory.updated_turn}"
+    if age is not None:
         if age == 1:
             suffix += ", 1 turn old"
         elif age != 0:

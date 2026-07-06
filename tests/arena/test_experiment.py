@@ -746,12 +746,16 @@ def test_local_civ_parses_memory_and_task_tracker(tmp_path):
     text = GOOD.replace(
         "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
         "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}\n"
-        "    memory: {enabled: true, max_chars: 800}\n"
+        "    memory: {enabled: true, max_chars: 800, max_age_turns: 6}\n"
         "    task_tracker: {enabled: true, max_tasks: 5}",
     )
     cfg = load_experiment(_write(tmp_path, text))
     local = cfg.players[0]
-    assert local.options.memory == MemoryOptions(enabled=True, max_chars=800)
+    assert local.options.memory == MemoryOptions(
+        enabled=True,
+        max_chars=800,
+        max_age_turns=6,
+    )
     assert local.options.task_tracker == TaskTrackerOptions(enabled=True, max_tasks=5)
 
 
@@ -810,6 +814,18 @@ def test_rejects_non_boolean_memory_enabled(tmp_path):
         load_experiment(_write(tmp_path, bad))
 
 
+def test_memory_max_age_turns_must_be_positive(tmp_path):
+    text = """
+civs:
+  - player: 1
+    provider: cli-claude
+    memory: {enabled: true, max_age_turns: 0}
+"""
+
+    with pytest.raises(ValueError, match="memory.max_age_turns must be a positive integer"):
+        load_experiment(_write(tmp_path, text))
+
+
 def test_rejects_non_positive_task_tracker_max_tasks(tmp_path):
     bad = GOOD.replace(
         "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",
@@ -825,5 +841,5 @@ def test_civ_options_fingerprint_contains_memory_and_task_tracker():
         memory=MemoryOptions(enabled=True, max_chars=900),
         task_tracker=TaskTrackerOptions(enabled=True, max_tasks=4),
     ).fingerprint()
-    assert fp["memory"] == {"enabled": True, "max_chars": 900}
+    assert fp["memory"] == {"enabled": True, "max_chars": 900, "max_age_turns": 10}
     assert fp["task_tracker"] == {"enabled": True, "max_tasks": 4}

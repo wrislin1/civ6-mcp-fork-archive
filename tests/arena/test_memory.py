@@ -232,6 +232,34 @@ def test_format_memory_block_surfaces_one_turn_old():
     assert result == "== STANDING PLAN (captured turn 7, 1 turn old) ==\nKeep marching."
 
 
+def test_format_memory_block_omits_stale_memory_when_max_age_exceeded():
+    memory = StandingMemory(
+        schema_version=1,
+        run_id="run1",
+        player_id=0,
+        updated_turn=5,
+        text="Keep marching.",
+    )
+
+    result = format_memory_block(memory, current_turn=16, max_age_turns=10)
+
+    assert result == ""
+
+
+def test_format_memory_block_includes_memory_at_max_age_boundary():
+    memory = StandingMemory(
+        schema_version=1,
+        run_id="run1",
+        player_id=0,
+        updated_turn=5,
+        text="Keep marching.",
+    )
+
+    result = format_memory_block(memory, current_turn=15, max_age_turns=10)
+
+    assert result == "== STANDING PLAN (captured turn 5, 10 turns old) ==\nKeep marching."
+
+
 def test_format_memory_block_returns_empty_for_none():
     assert format_memory_block(None) == ""
 

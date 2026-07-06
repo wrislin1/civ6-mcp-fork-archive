@@ -38,6 +38,7 @@ class BriefingOptions:
 class MemoryOptions:
     enabled: bool = False
     max_chars: int = 1200
+    max_age_turns: int = 10
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,11 @@ class CivOptions:
                 "map_radius": self.briefing.map_radius,
                 "sections": list(self.briefing.sections),
             },
-            "memory": {"enabled": self.memory.enabled, "max_chars": self.memory.max_chars},
+            "memory": {
+                "enabled": self.memory.enabled,
+                "max_chars": self.memory.max_chars,
+                "max_age_turns": self.memory.max_age_turns,
+            },
             "task_tracker": {"enabled": self.task_tracker.enabled, "max_tasks": self.task_tracker.max_tasks},
         }
 
