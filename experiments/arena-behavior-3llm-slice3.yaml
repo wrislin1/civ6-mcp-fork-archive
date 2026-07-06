@@ -1,0 +1,65 @@
+# Slice 3: behavior/performance run.
+#
+# Human plays seat 0. Only seats 1,3,5 are LLM-controlled puppets.
+# Seats 2,4,6,7 are omitted intentionally and remain regular game AI.
+# This is not an A/B config.
+max_puppet_turns: 140
+idle_poll_limit: 3600
+civs:
+  - player: 1
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    memory:
+      enabled: true
+      max_chars: 1200
+    task_tracker:
+      enabled: true
+      max_tasks: 8
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources, great_people, victory]
+  - player: 3
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    memory:
+      enabled: true
+      max_chars: 1200
+    task_tracker:
+      enabled: true
+      max_tasks: 8
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources, great_people, victory]
+  - player: 5
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    memory:
+      enabled: true
+      max_chars: 1200
+    task_tracker:
+      enabled: true
+      max_tasks: 8
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources, great_people, victory]

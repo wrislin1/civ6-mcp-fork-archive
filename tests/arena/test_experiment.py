@@ -9,6 +9,7 @@ from civ_mcp.arena.registry import resolve_tools
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SLICE1_GEMMA_STRATEGY_AB = REPO_ROOT / "experiments" / "gemma-strategy-ab-slice1.yaml"
+SLICE3_BEHAVIOR_3LLM = REPO_ROOT / "experiments" / "arena-behavior-3llm-slice3.yaml"
 
 GOOD = """
 run_id: exp-1
@@ -111,6 +112,21 @@ def test_slice1_treatment_full_tier_has_diplomacy_tools_and_control_does_not():
 
     for player_id in (2, 4, 6):
         assert diplomacy_tools.isdisjoint(set(resolve_tools(by_player[player_id].options.tools)))
+
+
+def test_loads_arena_behavior_3llm_slice3_artifact():
+    assert SLICE3_BEHAVIOR_3LLM.exists(), f"missing fixture: {SLICE3_BEHAVIOR_3LLM}"
+
+    cfg = load_experiment(SLICE3_BEHAVIOR_3LLM)
+
+    assert len(cfg.players) == 3
+    assert [player.player_id for player in cfg.players] == [1, 3, 5]
+
+    for player in cfg.players:
+        assert player.options.memory.enabled is True
+        assert player.options.task_tracker.enabled is True
+        assert player.options.briefing.enabled is True
+        assert "great_people" in player.options.briefing.sections
 
 
 def test_playbook_covers_promotions_and_expansion_doctrine():
