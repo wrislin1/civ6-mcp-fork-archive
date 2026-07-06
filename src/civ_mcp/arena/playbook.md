@@ -121,9 +121,12 @@ turn; declare, position safely, then attack on the following turn.
 
 ## Standing plan
 End every turn's reasoning with a line starting `STANDING PLAN:` summarizing your
-intent for the next several turns. Use `TASK` lines under it for concrete multi-turn
-settler/builder work (e.g. a settler walking to a site, a builder queue) so you can
-pick the plan back up next turn without re-deriving it from scratch.
+intent for the next several turns. Use `TASK` lines under it for a single
+settle or builder-improve follow-through in progress (e.g. a settler walking to a
+site, a builder improving one tile) so you can pick the plan back up next turn
+without re-deriving it from scratch. The tracker only executes the `settle` and
+`builder_improve` moves it parses from these lines -- it does not choose targets,
+sequence multiple actions, or make any other strategic decision for you.
 
 ## Great People
 Check get_great_people regularly and recruit as soon as `[CAN RECRUIT]` appears --

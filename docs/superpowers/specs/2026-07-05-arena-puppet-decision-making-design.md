@@ -1,7 +1,7 @@
 # Arena Puppet Decision-Making — Design Spec
 
 **Date:** 2026-07-05
-**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); Slice 2 implementation branch ready for review (2026-07-06, `arena-diplomacy-tools-slice2`); Slice 3 remains a follow-on.
+**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); Slice 2 implemented + hardened (2026-07-06, through `2dfc3d4`); Slice 3 (standing memory + deterministic low-risk task tracker + behavior tools) planned and implemented by this document (Tasks 1-9, see `docs/superpowers/plans/2026-07-06-arena-standing-memory-task-tracker-slice3.md`) — A/B testing is complete; next live validation is 8 civs with 3 LLM puppets (seats 1, 3, 5) and 4 regular AI civs. Slice 4 (broader deterministic autonomy) is deferred until that live test produces behavior results.
 **Author:** riz + Claude (brainstorming-locals + superpowers:brainstorming)
 
 ## Motivation
@@ -41,17 +41,22 @@ doctrine, model decides. This keeps puppets genuinely autonomous where it matter
 for the experiment while guaranteeing the mechanical follow-through that "fix
 execution, not just intent" requires.
 
-## Program shape (three slices, built in order)
+## Program shape (four slices, built in order)
 
 | Slice | Deliverable | Depth |
 |---|---|---|
 | **1. Doctrine + signals + promotion lever** | Playbook doctrine, promotion ACTION block, deterministic end-of-turn promotion sweep | Shallow, no new architecture |
 | **2. Capability tools + doctrine** | Register diplomacy/peace/trade/alliance arena tools + their playbook doctrine | Medium — wrap existing MCP handlers |
-| **3. Cross-turn memory / standing plan** | Persist per-puppet intent across turns | Deep — new architecture |
+| **3. Standing memory + deterministic low-risk task tracker + behavior tools** | Per-puppet standing plan/memory persisted across turns; deterministic pre-model follow-through for `settle`/`builder_improve` unit tasks only; Great People, trade, religion, and World Congress behavior-critical tools | Deep — new architecture |
+| **4. Broader deterministic autonomy after Slice 3 live testing** | Option 2 from brainstorming: extend deterministic scaffolding to judgment-heavier actions. Deferred until the Slice 3 live validation run (8 civs: 3 LLM puppets + 4 regular AI civs) produces behavior results | Not yet scoped |
 
-Slices 2 and 3 each get their own brainstorm + spec before implementation. This
-document specifies **slice 1 in implementation-ready detail** and slices 2–3 at
-scope level.
+Slices 2 and 3 each got their own brainstorm + spec before implementation
+(slice 3's plan lives at
+`docs/superpowers/plans/2026-07-06-arena-standing-memory-task-tracker-slice3.md`).
+This document specifies **slice 1 in implementation-ready detail** and slices
+2–3 at scope level (see their own specs/plans for implementation detail).
+Slice 4 is not yet planned — it waits on Slice 3 live behavior results before
+its own brainstorm and spec.
 
 ---
 
@@ -328,6 +333,13 @@ counter-offer flow — how much of that does the puppet drive? These need live
 investigation before planning.
 
 ## Slice 3 — Cross-turn memory / standing plan (scope-level)
+
+**Implemented as:** a model-authored `STANDING PLAN:` block (captured as standing
+memory) combined with the deterministic execution-tracker option below, scoped to
+`settle` and `builder_improve` unit tasks only — see
+`docs/superpowers/plans/2026-07-06-arena-standing-memory-task-tracker-slice3.md`
+for implementation-ready detail. The brainstorm below is kept for history; it
+predates that choice.
 
 Persist a short per-puppet plan/intent across turns so a settler march or war-prep
 survives to completion. Candidate mechanisms (to be chosen in slice 3's brainstorm):
