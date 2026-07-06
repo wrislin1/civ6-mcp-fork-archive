@@ -66,6 +66,7 @@ class _HostileOwnerContext:
     hostile_prefixes: tuple[str, ...]
     peaceful_prefixes: tuple[str, ...]
     hostile_coords: frozenset[tuple[int, int]]
+    block_unknown: bool
 
 
 def _empty_state(run_id: str, player_id: int) -> TaskState:
@@ -260,29 +261,35 @@ def _result_dict(task: UnitTask, *, status: str, action: str, result: str) -> di
     }
 
 
-async def _load_diplomacy_safely(gs: Any) -> tuple[Any, ...]:
-    try:
-        return tuple(await gs.get_diplomacy())
-    except Exception:
-        return ()
-
-
-async def _load_threat_scan_safely(gs: Any) -> tuple[Any, ...]:
-    try:
-        return tuple(await gs.get_threat_scan())
-    except Exception:
-        return ()
+def _sorted_prefixes(names: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(names, key=len, reverse=True))
 
 
 async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
     hostile = {"Barbarian"}
     peaceful: set[str] = set()
     hostile_coords: set[tuple[int, int]] = set()
+    block_unknown = False
 
-    civs, threats = await asyncio.gather(
-        _load_diplomacy_safely(gs),
-        _load_threat_scan_safely(gs),
+    civ_result, threat_result = await asyncio.gather(
+        gs.get_diplomacy(),
+        gs.get_threat_scan(),
+        return_exceptions=True,
     )
+
+    civs: tuple[Any, ...]
+    if isinstance(civ_result, Exception):
+        civs = ()
+        block_unknown = True
+    else:
+        civs = tuple(civ_result)
+
+    threats: tuple[Any, ...]
+    if isinstance(threat_result, Exception):
+        threats = ()
+        block_unknown = True
+    else:
+        threats = tuple(threat_result)
 
     for civ in civs:
         name = str(getattr(civ, "civ_name", "") or "").strip()
@@ -303,9 +310,10 @@ async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
             hostile.add(name)
 
     return _HostileOwnerContext(
-        hostile_prefixes=tuple(hostile),
-        peaceful_prefixes=tuple(peaceful),
+        hostile_prefixes=_sorted_prefixes(hostile),
+        peaceful_prefixes=_sorted_prefixes(peaceful),
         hostile_coords=frozenset(hostile_coords),
+        block_unknown=block_unknown,
     )
 
 
@@ -325,6 +333,11 @@ def _tile_has_hostile_unit(tile: Any, owner_context: _HostileOwnerContext) -> bo
         if any(
             _label_matches_owner(label_text, owner)
             for owner in owner_context.hostile_prefixes
+        ):
+            return True
+        if owner_context.block_unknown and not any(
+            _label_matches_owner(label_text, owner)
+            for owner in owner_context.peaceful_prefixes
         ):
             return True
     return False
@@ -407,6 +420,19 @@ async def _run_single_task(
                 task, status="complete", action="improve", result=result_str
             )
 
+        if task.last_result == "blocked_improvement_not_valid":
+            new_task = replace(
+                task,
+                status="failed",
+                last_result="blocked_improvement_not_valid_retry_limit",
+            )
+            return new_task, _result_dict(
+                task,
+                status="failed",
+                action="block",
+                result="blocked_improvement_not_valid_retry_limit",
+            )
+
         new_task = replace(task, last_result="blocked_improvement_not_valid")
         return new_task, _result_dict(
             task,
@@ -426,6 +452,21 @@ async def _run_single_task(
     result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
     new_task = replace(task, last_result=result_str)
     return new_task, _result_dict(task, status="active", action="move", result=result_str)
+
+
+def _empty_hostile_owner_context() -> _HostileOwnerContext:
+    return _HostileOwnerContext(
+        hostile_prefixes=("Barbarian",),
+        peaceful_prefixes=(),
+        hostile_coords=frozenset(),
+        block_unknown=False,
+    )
+
+
+def _task_needs_hostile_context(task: UnitTask, unit: Any | None) -> bool:
+    if unit is None or unit.moves_remaining <= 0:
+        return False
+    return (unit.x, unit.y) != (task.target_x, task.target_y)
 
 
 async def run_pre_model_tasks(
@@ -450,7 +491,13 @@ async def run_pre_model_tasks(
     except Exception:  # pragma: no cover - defensive, mirrors per-task guard
         units = []
     units_by_id = {unit.unit_id: unit for unit in units}
-    owner_context = await _hostile_owner_context(gs)
+    if any(
+        _task_needs_hostile_context(task, units_by_id.get(task.unit_id))
+        for task in executable
+    ):
+        owner_context = await _hostile_owner_context(gs)
+    else:
+        owner_context = _empty_hostile_owner_context()
 
     updated: list[UnitTask] = []
     results: list[dict[str, Any]] = []
