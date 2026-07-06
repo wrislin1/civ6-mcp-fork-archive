@@ -65,7 +65,7 @@ class TaskState:
 class _HostileOwnerContext:
     hostile_prefixes: tuple[str, ...]
     peaceful_prefixes: tuple[str, ...]
-    block_unknown: bool
+    hostile_coords: frozenset[tuple[int, int]]
 
 
 def _empty_state(run_id: str, player_id: int) -> TaskState:
@@ -260,21 +260,29 @@ def _result_dict(task: UnitTask, *, status: str, action: str, result: str) -> di
     }
 
 
-def _sorted_prefixes(names: set[str]) -> tuple[str, ...]:
-    return tuple(sorted(names, key=len, reverse=True))
+async def _load_diplomacy_safely(gs: Any) -> tuple[Any, ...]:
+    try:
+        return tuple(await gs.get_diplomacy())
+    except Exception:
+        return ()
+
+
+async def _load_threat_scan_safely(gs: Any) -> tuple[Any, ...]:
+    try:
+        return tuple(await gs.get_threat_scan())
+    except Exception:
+        return ()
 
 
 async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
     hostile = {"Barbarian"}
     peaceful: set[str] = set()
-    try:
-        civs = await gs.get_diplomacy()
-    except Exception:
-        return _HostileOwnerContext(
-            hostile_prefixes=_sorted_prefixes(hostile),
-            peaceful_prefixes=(),
-            block_unknown=True,
-        )
+    hostile_coords: set[tuple[int, int]] = set()
+
+    civs, threats = await asyncio.gather(
+        _load_diplomacy_safely(gs),
+        _load_threat_scan_safely(gs),
+    )
 
     for civ in civs:
         name = str(getattr(civ, "civ_name", "") or "").strip()
@@ -285,25 +293,19 @@ async def _hostile_owner_context(gs: Any) -> _HostileOwnerContext:
         else:
             peaceful.add(name)
 
-    try:
-        threats = await gs.get_threat_scan()
-    except Exception:
-        return _HostileOwnerContext(
-            hostile_prefixes=_sorted_prefixes(hostile),
-            peaceful_prefixes=_sorted_prefixes(peaceful),
-            block_unknown=True,
-        )
-
     for threat in threats:
-        if getattr(threat, "is_city_state", False):
-            name = str(getattr(threat, "owner_name", "") or "").strip()
-            if name:
-                hostile.add(name)
+        tx = getattr(threat, "x", None)
+        ty = getattr(threat, "y", None)
+        if type(tx) is int and type(ty) is int:
+            hostile_coords.add((tx, ty))
+        name = str(getattr(threat, "owner_name", "") or "").strip()
+        if name and getattr(threat, "is_city_state", False):
+            hostile.add(name)
 
     return _HostileOwnerContext(
-        hostile_prefixes=_sorted_prefixes(hostile),
-        peaceful_prefixes=_sorted_prefixes(peaceful),
-        block_unknown=False,
+        hostile_prefixes=tuple(hostile),
+        peaceful_prefixes=tuple(peaceful),
+        hostile_coords=frozenset(hostile_coords),
     )
 
 
@@ -312,18 +314,17 @@ def _label_matches_owner(label: str, owner: str) -> bool:
 
 
 def _tile_has_hostile_unit(tile: Any, owner_context: _HostileOwnerContext) -> bool:
-    for label in tile.units or []:
+    labels = tile.units or []
+    if labels and (tile.x, tile.y) in owner_context.hostile_coords:
+        return True
+
+    for label in labels:
         label_text = str(label).strip()
         if not label_text:
             continue
         if any(
             _label_matches_owner(label_text, owner)
             for owner in owner_context.hostile_prefixes
-        ):
-            return True
-        if owner_context.block_unknown and not any(
-            _label_matches_owner(label_text, owner)
-            for owner in owner_context.peaceful_prefixes
         ):
             return True
     return False

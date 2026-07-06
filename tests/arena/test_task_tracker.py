@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -546,7 +547,7 @@ async def test_at_war_city_state_unit_blocks_settler_movement():
 
 
 @pytest.mark.asyncio
-async def test_diplomacy_failure_blocks_visible_foreign_unit():
+async def test_diplomacy_failure_does_not_block_unconfirmed_foreign_unit():
     unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
     gs = FakeGS(
         units=[unit],
@@ -557,14 +558,13 @@ async def test_diplomacy_failure_blocks_visible_foreign_unit():
 
     updated, results = await run_pre_model_tasks(gs, [task])
 
-    assert gs.move_unit_calls == []
-    assert updated[0].last_result == "blocked_visible_hostile"
-    assert results[0]["action"] == "block"
-    assert results[0]["result"] == "blocked_visible_hostile"
+    assert gs.move_unit_calls == [(1, 18, 24)]
+    assert updated[0].status == "active"
+    assert results[0]["action"] == "move"
 
 
 @pytest.mark.asyncio
-async def test_threat_scan_failure_blocks_unknown_foreign_unit():
+async def test_threat_scan_failure_does_not_block_unknown_city_state_unit():
     unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
     gs = FakeGS(
         units=[unit],
@@ -576,10 +576,88 @@ async def test_threat_scan_failure_blocks_unknown_foreign_unit():
 
     updated, results = await run_pre_model_tasks(gs, [task])
 
+    assert gs.move_unit_calls == [(1, 18, 24)]
+    assert updated[0].status == "active"
+    assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
+async def test_diplomacy_failure_still_blocks_exact_threat_scan_coordinate():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Unidentified WARRIOR"])]},
+        diplomacy_error=RuntimeError("diplomacy unavailable"),
+        threat_scan=[
+            SimpleNamespace(
+                x=18,
+                y=24,
+                owner_name="",
+                is_city_state=False,
+            )
+        ],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
     assert gs.move_unit_calls == []
     assert updated[0].last_result == "blocked_visible_hostile"
     assert results[0]["action"] == "block"
-    assert results[0]["result"] == "blocked_visible_hostile"
+
+
+@pytest.mark.asyncio
+async def test_threat_scan_major_owner_does_not_globally_block_peaceful_major_labels():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(18, 24): [_tile(18, 24, units=["Rome WARRIOR"])]},
+        diplomacy=[SimpleNamespace(civ_name="Rome", is_at_war=False)],
+        threat_scan=[
+            SimpleNamespace(
+                x=5,
+                y=5,
+                owner_name="Rome",
+                is_city_state=False,
+            )
+        ],
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert gs.move_unit_calls == [(1, 18, 24)]
+    assert updated[0].status == "active"
+    assert results[0]["action"] == "move"
+
+
+@pytest.mark.asyncio
+async def test_hostile_context_fetches_diplomacy_and_threat_scan_concurrently():
+    class ConcurrentGS(FakeGS):
+        def __init__(self):
+            super().__init__(
+                units=[_unit(unit_id=65537, unit_index=1, x=1, y=1)],
+                map_tiles={(18, 24): []},
+            )
+            self.threat_started = False
+            self.diplomacy_resumed_after_threat_started = False
+
+        async def get_diplomacy(self):
+            await asyncio.sleep(0)
+            self.diplomacy_resumed_after_threat_started = self.threat_started
+            return self.diplomacy
+
+        async def get_threat_scan(self):
+            self.threat_started = True
+            await asyncio.sleep(0)
+            return self.threat_scan
+
+    gs = ConcurrentGS()
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    await run_pre_model_tasks(gs, [task])
+
+    assert gs.diplomacy_resumed_after_threat_started is True
 
 
 @pytest.mark.asyncio
