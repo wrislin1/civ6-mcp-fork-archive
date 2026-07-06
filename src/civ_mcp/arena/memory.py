@@ -22,8 +22,14 @@ from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
 
-_STANDING_PLAN_RE = re.compile(r"^\s*standing plan:\s*(.*)$", re.IGNORECASE)
-_BULLET_PREFIX_RE = re.compile(r"^\s*[-*•]+\s*")
+_STANDING_PLAN_RE = re.compile(
+    r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
+    r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)\s*(.*)$",
+    re.IGNORECASE,
+)
+_BULLET_PREFIX_RE = re.compile(r"^\s*[-*\u2022]+\s+")
+_HEADING_PREFIX_RE = re.compile(r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?")
+_HEADING_EMPHASIS_RE = re.compile(r"^(?:[*_]{1,3})?(.*?)(?:[*_]{1,3})?$")
 _TASK_OR_CANCEL_LINE_RE = re.compile(
     r"^\s*[-*•]*\s*(?:TASK\s+|CANCEL\s+unit_id=-?\d+\s*$)", re.IGNORECASE
 )
@@ -122,12 +128,13 @@ def save_memory(
 def extract_standing_plan(summary: str, max_chars: int) -> str:
     """Extract a "STANDING PLAN:" block from a puppet's final-turn summary.
 
-    Finds a case-insensitive line starting with ``STANDING PLAN:`` and
-    captures that line's trailing content plus following non-empty lines,
-    stopping at an unbulleted ALL-CAPS section header, a known bulleted
-    reflection header such as ``- TACTICAL:``, or end of string. Left-edge
-    markdown bullets are stripped per line. Returns "" when no standing plan
-    marker is present.
+    Finds a case-insensitive ``STANDING PLAN`` marker, including common
+    markdown heading, bullet, and emphasis forms, and captures that line's
+    trailing content plus following non-empty lines. Stops at an unbulleted
+    known reflection header (case-insensitive), an unbulleted ALL-CAPS section
+    header, a known bulleted reflection header such as ``- TACTICAL:``, or end
+    of string. Left-edge markdown bullets are stripped per line. Returns ""
+    when no standing plan marker is present.
     """
     lines = summary.splitlines()
     start_idx = None
@@ -205,23 +212,39 @@ def _has_task_line_before_next_header(lines: Sequence[str]) -> bool:
     return False
 
 
-def _is_section_header(line: str, following_lines: Sequence[str] = ()) -> bool:
+def _header_body(line: str) -> tuple[str, bool]:
     stripped = line.strip()
-    if not stripped.endswith(":"):
-        return False
-
-    bullet = _BULLET_PREFIX_RE.match(stripped)
-    candidate = _strip_bullet(stripped) if bullet else stripped
+    bullet = _BULLET_PREFIX_RE.match(stripped) is not None
+    candidate = _HEADING_PREFIX_RE.sub("", stripped, count=1).strip()
+    if not candidate.endswith(":"):
+        emphasis = _HEADING_EMPHASIS_RE.match(candidate)
+        if emphasis:
+            candidate = emphasis.group(1).strip()
+        if not candidate.endswith(":"):
+            return "", bullet
     body = candidate[:-1].strip()
+    emphasis = _HEADING_EMPHASIS_RE.match(body)
+    if emphasis:
+        body = emphasis.group(1).strip()
+    return body, bullet
+
+
+def _is_section_header(line: str, following_lines: Sequence[str] = ()) -> bool:
+    body, bullet = _header_body(line)
     if not body:
         return False
 
+    header = body.upper()
     if bullet:
-        header = body.upper()
-        if header not in _BULLETED_SECTION_HEADERS:
-            return False
-        return not (
-            header in _TASK_AWARE_BULLETED_PLAN_SUBHEADINGS
-            and _has_task_line_before_next_header(following_lines)
-        )
-    return body.isupper()
+        # Bulleted lines terminate ONLY on a known reflection header. An arbitrary
+        # all-caps imperative bullet like "- BUILD CAMPUS:" is legitimate plan
+        # content and must be kept (test_extract_standing_plan_keeps_all_caps_
+        # bullet_ending_colon). PLANNING is task-aware: it is only a terminator when
+        # no TASK/CANCEL line follows before the next header.
+        if header in _TASK_AWARE_BULLETED_PLAN_SUBHEADINGS:
+            return not _has_task_line_before_next_header(following_lines)
+        return header in _BULLETED_SECTION_HEADERS
+
+    # Unbulleted: a known reflection header (matched case-insensitively, so title-case
+    # "Tactical:" terminates) or any all-caps line ("STRATEGIC NOTES:") terminates.
+    return header in _BULLETED_SECTION_HEADERS or body.isupper()

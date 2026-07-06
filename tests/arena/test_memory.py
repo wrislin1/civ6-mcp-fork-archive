@@ -127,6 +127,18 @@ def test_extract_standing_plan_inline():
     assert result == "finish archer movement, then settle unit_id=123 at 18,24."
 
 
+def test_extract_standing_plan_accepts_markdown_heading_forms():
+    cases = [
+        "**STANDING PLAN:**\n- keep scout moving\n",
+        "**STANDING PLAN**:\n- keep scout moving\n",
+        "- STANDING PLAN:\n- keep scout moving\n",
+        "## STANDING PLAN:\n- keep scout moving\n",
+    ]
+
+    for summary in cases:
+        assert extract_standing_plan(summary, max_chars=1200) == "keep scout moving"
+
+
 def test_extract_standing_plan_stops_at_next_section_header():
     summary = (
         "STANDING PLAN:\n"
@@ -138,6 +150,43 @@ def test_extract_standing_plan_stops_at_next_section_header():
     result = extract_standing_plan(summary, max_chars=1200)
 
     assert result == "Keep marching."
+
+
+def test_extract_standing_plan_stops_at_titlecase_known_unbulleted_header():
+    summary = (
+        "STANDING PLAN:\n"
+        "- keep builder near copper\n"
+        "Tactical:\n"
+        "- unrelated reflection content\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == "keep builder near copper"
+
+
+def test_extract_standing_plan_stops_at_emphasized_known_unbulleted_header():
+    summary = (
+        "STANDING PLAN:\n"
+        "- keep builder near copper\n"
+        "**Tactical:**\n"
+        "- unrelated reflection content\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == "keep builder near copper"
+
+
+def test_extract_standing_plan_stops_at_emphasized_planning_header_even_with_task_line():
+    summary = (
+        "STANDING PLAN:\n"
+        "- keep scout moving\n"
+        "**Planning:**\n"
+        "- TASK settle unit_id=42 target=10,12\n"
+    )
+
+    assert extract_standing_plan(summary, max_chars=1200) == "keep scout moving"
 
 
 def test_extract_standing_plan_absent_marker_returns_empty_string():
