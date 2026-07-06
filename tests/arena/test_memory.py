@@ -224,6 +224,19 @@ def test_extract_standing_plan_stops_at_lowercase_bulleted_reflection_header():
     )
 
 
+def test_extract_standing_plan_stops_at_bulleted_reflection_header_even_with_task_line():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Keep scout near city.\n"
+        "- TACTICAL:\n"
+        "- TASK settle unit_id=123 target=18,24\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == "Keep scout near city."
+
+
 def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains_task():
     summary = (
         "STANDING PLAN:\n"
@@ -239,6 +252,25 @@ def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains
     assert result == (
         "Planning:\n"
         "TASK settle unit_id=123 target=18,24\n"
+        "Keep escort near the target."
+    )
+
+
+def test_extract_standing_plan_keeps_reserved_bullet_heading_when_block_contains_cancel():
+    summary = (
+        "STANDING PLAN:\n"
+        "- Planning:\n"
+        "- CANCEL settle unit_id=123 reason=site unsafe\n"
+        "- Keep escort near the target.\n"
+        "TACTICAL:\n"
+        "- unrelated next section\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=1200)
+
+    assert result == (
+        "Planning:\n"
+        "CANCEL settle unit_id=123 reason=site unsafe\n"
         "Keep escort near the target."
     )
 

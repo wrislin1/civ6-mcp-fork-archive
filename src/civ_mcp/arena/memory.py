@@ -35,6 +35,7 @@ _BULLETED_SECTION_HEADERS = frozenset(
         "STRATEGIC NOTES",
     }
 )
+_TASK_AWARE_BULLETED_PLAN_SUBHEADINGS = frozenset({"PLANNING"})
 
 
 @dataclass(frozen=True)
@@ -214,8 +215,11 @@ def _is_section_header(line: str, following_lines: Sequence[str] = ()) -> bool:
         return False
 
     if bullet:
-        return (
-            body.upper() in _BULLETED_SECTION_HEADERS
-            and not _has_task_line_before_next_header(following_lines)
+        header = body.upper()
+        if header not in _BULLETED_SECTION_HEADERS:
+            return False
+        return not (
+            header in _TASK_AWARE_BULLETED_PLAN_SUBHEADINGS
+            and _has_task_line_before_next_header(following_lines)
         )
     return body.isupper()
