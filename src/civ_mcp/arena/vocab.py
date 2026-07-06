@@ -36,4 +36,10 @@ LOCAL_TOOL_VERBS: dict[str, str] = {
     "skip_remaining_units": "skip",
     "purchase_tile": "purchase_tile",
     "set_city_focus": "set_city_focus",
+    "respond_to_diplomacy": "respond_to_diplomacy",
+    "respond_to_trade": "respond_to_trade",
+    "propose_trade": "propose_trade",
+    "propose_peace": "propose_peace",
+    "send_diplomatic_action": "send_diplomatic_action",
+    "form_alliance": "form_alliance",
 }

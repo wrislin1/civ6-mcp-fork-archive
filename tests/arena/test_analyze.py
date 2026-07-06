@@ -1265,6 +1265,12 @@ def test_local_tool_verbs_mirror_registry_verbs_exactly() -> None:
     # Sanity: the previously-missed exploration/skip actions are covered.
     assert registry_verbs["automate_explore"] == "automate"
     assert registry_verbs["skip_remaining_units"] == "skip"
+    assert registry_verbs["respond_to_diplomacy"] == "respond_to_diplomacy"
+    assert registry_verbs["respond_to_trade"] == "respond_to_trade"
+    assert registry_verbs["propose_trade"] == "propose_trade"
+    assert registry_verbs["propose_peace"] == "propose_peace"
+    assert registry_verbs["send_diplomatic_action"] == "send_diplomatic_action"
+    assert registry_verbs["form_alliance"] == "form_alliance"
 
 
 def test_rubric_counts_automate_explore_as_exploration() -> None:
@@ -1294,7 +1300,7 @@ def test_rubric_counts_automate_explore_as_exploration() -> None:
     assert report["by_player"][1]["rubric"]["explored_vs_idle"] is not None
 
 
-def test_step_verb_uses_vocab_constants():
+def test_step_verb_covers_all_shared_vocab_entries():
     """_step_verb must map each LOCAL_TOOL_VERBS key to its verb value, and strip MCP_CIV6_PREFIX."""
     from civ_mcp.arena.analyze import _step_verb
     from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS, MCP_CIV6_PREFIX
