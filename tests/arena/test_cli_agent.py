@@ -6,6 +6,13 @@ import signal
 import pytest
 
 from civ_mcp.arena.cli_agent import CLIAgentPolicy
+from civ_mcp.arena.config import CivOptions, MemoryOptions, TaskTrackerOptions
+
+def _prompt(pid=2, turn=3):
+    """Build a representative prompt string for _build_argv tests that don't care
+    about the exact prompt contents, only that it round-trips through argv."""
+    return f"You are playing player {pid}; it is turn {turn}. Do NOT end the turn."
+
 
 class FakeCost:
     def __init__(self): self.records = []
@@ -80,7 +87,7 @@ _CODEX_ERROR_FIXTURE = "\n".join([
 
 def test_claude_argv_contains_mcp_and_safety():
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", max_turns=20)
-    argv = pol._build_argv(player_id=2, turn=3)
+    argv = pol._build_argv(_prompt(2, 3))
     assert argv[0] == "claude"
     # stream-json replaces the old plain-json flag (Task 3)
     assert "-p" in argv and "--output-format" in argv and "stream-json" in argv
@@ -102,7 +109,7 @@ def test_claude_argv_contains_mcp_and_safety():
 def test_claude_argv_stream_json_explicit():
     """The --output-format value must be exactly 'stream-json', not 'json'."""
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", max_turns=20)
-    argv = pol._build_argv(player_id=1, turn=1)
+    argv = pol._build_argv(_prompt(1, 1))
     fmt_idx = argv.index("--output-format")
     assert argv[fmt_idx + 1] == "stream-json", (
         f"Expected 'stream-json' after --output-format, got {argv[fmt_idx + 1]!r}"
@@ -114,7 +121,7 @@ def test_claude_argv_stream_json_explicit():
 
 def test_codex_argv_contains_inline_civ6_mcp_and_safety():
     pol = CLIAgentPolicy("cli-codex", FakeCost(), project_dir="/x", model="gpt-5.5", max_turns=20)
-    argv = pol._build_argv(player_id=2, turn=3)
+    argv = pol._build_argv(_prompt(2, 3))
     assert argv[:2] == ["codex", "exec"]
     assert "--json" in argv
     assert "--ignore-user-config" in argv
@@ -133,7 +140,7 @@ def test_codex_argv_contains_inline_civ6_mcp_and_safety():
 
 def test_host_tools_and_destructive_civ6_tools_denied_without_tools_flag():
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir=".", max_turns=5)
-    argv = pol._build_argv(player_id=2, turn=5)
+    argv = pol._build_argv(_prompt(2, 5))
     # `--tools ""` disables the civ6 stdio MCP tools under headless `claude -p`.
     # Keep MCP tools available and deny host built-ins through the explicit denylist instead.
     assert "--tools" not in argv
@@ -312,7 +319,7 @@ def test_project_auto_discovery_scoped_to_project_settings():
     path and keeps user-scope MCP servers out of the bypassPermissions subprocess.
     """
     pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir=".", max_turns=5)
-    argv = pol._build_argv(player_id=2, turn=5)
+    argv = pol._build_argv(_prompt(2, 5))
     assert "--mcp-config" not in argv
     assert "--strict-mcp-config" not in argv
     assert "--setting-sources" in argv
@@ -740,3 +747,206 @@ def test_call_raw_capture_absent_when_env_unset(monkeypatch, tmp_path):
     asyncio.run(pol(None, player_id=2, turn=7))
 
     assert not raw_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Step 3c — STANDING PLAN block must survive the summary clamp when memory or
+# task tracking is enabled. Regression guard for the old hardcoded [:500] clamp,
+# which would truncate a final message before a STANDING PLAN block appearing
+# past char 500 — silently breaking Task 5's extract_standing_plan on CLI puppets.
+# ---------------------------------------------------------------------------
+
+_STANDING_PLAN_TAIL = (
+    "STANDING PLAN:\n- do X\n- do Y\nTASK settle unit_id=42 target=10,12\n"
+)
+# Preamble long enough that the STANDING PLAN region starts well past char 500 —
+# the old clamp would cut it off entirely.
+_LONG_PREAMBLE = "A" * 550
+_LONG_FINAL_MESSAGE = f"{_LONG_PREAMBLE}\n\n{_STANDING_PLAN_TAIL}"
+assert len(_LONG_FINAL_MESSAGE) > 500
+assert _LONG_FINAL_MESSAGE[:500].find("STANDING PLAN:") == -1  # confirms the old clamp cuts it
+
+
+def test_call_claude_standing_plan_survives_clamp_when_memory_enabled(monkeypatch):
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            blob = json.dumps({
+                "type": "result", "subtype": "success",
+                "result": _LONG_FINAL_MESSAGE,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "total_cost_usd": 0.0,
+            })
+            return (blob.encode(), b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(memory=MemoryOptions(enabled=True)),
+    )
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+
+    assert "STANDING PLAN:" in result["summary"]
+    assert "TASK settle unit_id=42 target=10,12" in result["summary"]
+    assert "STANDING PLAN:" in result["transcript"]["final_summary"]
+    assert result["transcript"]["prompt_injections"]["standing_plan_instruction"] is True
+
+
+def test_call_claude_summary_still_clamped_when_memory_disabled(monkeypatch):
+    """Control: with memory/task tracking both disabled, the legacy [:500] clamp still
+    applies — this must NOT regress to unbounded transcript growth."""
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            blob = json.dumps({
+                "type": "result", "subtype": "success",
+                "result": _LONG_FINAL_MESSAGE,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "total_cost_usd": 0.0,
+            })
+            return (blob.encode(), b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+
+    assert len(result["summary"]) == 500
+    assert "STANDING PLAN:" not in result["summary"]
+    assert result["transcript"]["prompt_injections"]["standing_plan_instruction"] is False
+
+
+def test_call_codex_standing_plan_survives_clamp_when_task_tracker_enabled(monkeypatch):
+    class FakeProc:
+        pid = 2
+        returncode = 0
+
+        async def communicate(self):
+            blob = "\n".join([
+                json.dumps({"type": "thread.started", "thread_id": "t1"}),
+                json.dumps({"type": "item.completed", "item": {
+                    "id": "item_0", "type": "agent_message", "text": _LONG_FINAL_MESSAGE}}),
+                json.dumps({"type": "turn.completed",
+                            "usage": {"input_tokens": 10, "output_tokens": 5}}),
+            ])
+            return (blob.encode(), b"")
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-codex", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(task_tracker=TaskTrackerOptions(enabled=True)),
+    )
+    result = asyncio.run(pol(None, player_id=1, turn=1))
+
+    assert "STANDING PLAN:" in result["summary"]
+    assert "TASK settle unit_id=42 target=10,12" in result["transcript"]["final_summary"]
+
+
+# ---------------------------------------------------------------------------
+# __call__ prompt construction — playbook prefix, "Do NOT end the turn" clause,
+# and standing-plan tail vs one-line-summary tail
+# ---------------------------------------------------------------------------
+
+def test_call_builds_argv_with_prompt_containing_load_bearing_clause(monkeypatch):
+    """The 'Do NOT end the turn' clause must survive into the spawned argv verbatim."""
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5)
+    asyncio.run(pol(None, player_id=3, turn=9))
+
+    joined = " ".join(captured["argv"])
+    assert "Do NOT end the turn — the host ends it for you." in joined
+    assert "player 3" in joined and "turn 9" in joined
+    assert "give a one-line summary" in joined
+    assert "STANDING PLAN" not in joined
+
+
+def test_call_uses_standing_plan_tail_instead_of_one_line_summary_when_memory_enabled(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(memory=MemoryOptions(enabled=True)),
+    )
+    asyncio.run(pol(None, player_id=3, turn=9))
+
+    joined = " ".join(captured["argv"])
+    assert "Do NOT end the turn — the host ends it for you." in joined
+    assert "STANDING PLAN:" in joined
+    assert "give a one-line summary" not in joined
+
+
+def test_call_prepends_condensed_playbook_when_enabled(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(playbook="condensed"),
+    )
+    asyncio.run(pol(None, player_id=3, turn=9))
+
+    from civ_mcp.arena.agent import load_playbook
+    joined = " ".join(captured["argv"])
+    assert load_playbook() in joined
+    # playbook text must precede the core turn instruction
+    assert joined.index(load_playbook()) < joined.index("Do NOT end the turn")

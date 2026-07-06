@@ -7,6 +7,7 @@ from pathlib import Path
 from civ_mcp.arena.briefing import Briefing, build_briefing
 from civ_mcp.arena.budget import briefing_budget, resolve_n_ctx
 from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.prompting import build_opening_prompt
 from civ_mcp.arena.registry import (
     TOOL_REGISTRY,
     dispatch as _registry_dispatch,
@@ -93,9 +94,24 @@ class LLMPolicy:
                 tool_schema_chars,
             )
             briefing = await build_briefing(gs, self.options.briefing, budget)
-        opening = f"It is turn {turn}. You control player {player_id}. Begin."
-        if briefing.text:
-            opening = f"{briefing.text}\n\n{opening}"
+        memory_block = ""
+        task_block = ""
+        include_standing_plan_instruction = (
+            self.options.memory.enabled or self.options.task_tracker.enabled
+        )
+        opening = build_opening_prompt(
+            player_id=player_id,
+            turn=turn,
+            briefing_text=briefing.text,
+            memory_block=memory_block,
+            task_block=task_block,
+            include_standing_plan_instruction=include_standing_plan_instruction,
+        )
+        prompt_injections = {
+            "memory": bool(memory_block),
+            "task_tracker": bool(task_block),
+            "standing_plan_instruction": include_standing_plan_instruction,
+        }
         messages = [{"role": "system", "content": self._system},
                     {"role": "user", "content": opening}]
         actions = []
@@ -128,6 +144,7 @@ class LLMPolicy:
                     "final_summary": reply.text or "",
                     "prompt_tokens": total_prompt_tokens,
                     "completion_tokens": total_completion_tokens,
+                    "prompt_injections": prompt_injections,
                 }}
             messages.append({"role": "assistant", "content": reply.text or "",
                              "tool_calls": [{"id": tc["id"], "type": "function",
@@ -190,4 +207,5 @@ class LLMPolicy:
             "final_summary": "",
             "prompt_tokens": total_prompt_tokens,
             "completion_tokens": total_completion_tokens,
+            "prompt_injections": prompt_injections,
         }}

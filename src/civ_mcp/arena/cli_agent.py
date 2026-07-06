@@ -1,7 +1,11 @@
 from __future__ import annotations
 import asyncio, json, os, signal, time
 
+from civ_mcp.arena.agent import load_playbook
+from civ_mcp.arena.briefing import Briefing, build_briefing
+from civ_mcp.arena.budget import DEFAULT_N_CTX, briefing_budget
 from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.prompting import build_opening_prompt
 
 # Four-layer lockdown for CLI civ security:
 # 1. --setting-sources project,local keeps project .mcp.json auto-discovery (the only headless
@@ -70,13 +74,19 @@ _CODEX_MCP_ENV_CONFIG = (
     '}'
 )
 
+# Core observe/act instruction. The "Do NOT end the turn" clause is load-bearing (verbatim) —
+# the host ends turns; if the CLI agent ends its own turn the coordinator handoff breaks.
+# The trailing wrap-up instruction is appended separately in __call__: a plain one-line-summary
+# ask when memory/task tracking are both disabled, or STANDING_PLAN_INSTRUCTION (shared with the
+# local policy via prompting.py) when either is enabled, so the CLI's final message carries a
+# machine-parseable STANDING PLAN block just like the local puppet's.
 _PROMPT = (
     "You are playing player {pid} (an AI civ) in the running Civilization VI game; it is "
     "turn {turn} and YOU are currently the active player. Use the civ6 tools to observe your "
     "situation and take a few sensible early-game actions (scout, move/settle a settler, set "
-    "city production and research). Do NOT end the turn — the host ends it for you. When done, "
-    "give a one-line summary."
+    "city production and research). Do NOT end the turn — the host ends it for you."
 )
+_PROMPT_SUMMARY_TAIL = " When done, give a one-line summary."
 
 class CLIAgentPolicy:
     needs_exclusive_tuner = True   # the CLI's civ6 MCP needs the single tuner slot
@@ -85,9 +95,12 @@ class CLIAgentPolicy:
         self.provider, self.cost, self.project_dir = provider, cost, project_dir
         self.model, self.timeout_s, self.max_turns = model, timeout_s, max_turns
         self.options = options if options is not None else CivOptions()
+        # CLI mode has no separate system message (unlike LLMPolicy's self._system), so the
+        # condensed playbook text — when requested — goes at the very top of the single prompt
+        # string built in __call__.
+        self._system_prefix = load_playbook() if self.options.playbook == "condensed" else ""
 
-    def _build_argv(self, player_id: int, turn: int) -> list[str]:
-        prompt = _PROMPT.format(pid=player_id, turn=turn)
+    def _build_argv(self, prompt: str) -> list[str]:
         if self.provider == "cli-claude":
             # Let Claude auto-discover the project .mcp.json. Live headless tests showed that
             # explicit --mcp-config does not expose the civ6 stdio server's tools to `claude -p`,
@@ -124,7 +137,7 @@ class CLIAgentPolicy:
         raise ValueError(f"unknown CLI provider {self.provider!r}")
 
     @staticmethod
-    def _parse_claude(stdout: str):
+    def _parse_claude(stdout: str, max_summary_chars: int = 500):
         obj = None
         for line in stdout.splitlines():
             line = line.strip()
@@ -142,12 +155,12 @@ class CLIAgentPolicy:
             except ValueError:
                 return ("(unparseable CLI output)", 0, 0, 0.0)
         u = obj.get("usage", {}) or {}
-        return (str(obj.get("result") or "")[:500],
+        return (str(obj.get("result") or "")[:max_summary_chars],
                 int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
                 float(obj.get("total_cost_usd") or 0.0))
 
     @staticmethod
-    def _parse_codex(stdout: str):
+    def _parse_codex(stdout: str, max_summary_chars: int = 500):
         summary = ""
         prompt_tokens = 0
         completion_tokens = 0
@@ -162,7 +175,7 @@ class CLIAgentPolicy:
             if obj.get("type") == "item.completed":
                 item = obj.get("item", {}) or {}
                 if item.get("type") == "agent_message":
-                    summary = str(item.get("text") or "")[:500]
+                    summary = str(item.get("text") or "")[:max_summary_chars]
             elif obj.get("type") == "turn.completed":
                 usage = obj.get("usage", {}) or {}
                 prompt_tokens = int(usage.get("input_tokens") or 0)
@@ -408,7 +421,42 @@ class CLIAgentPolicy:
             pass
 
     async def __call__(self, gs, player_id: int, turn: int) -> dict:
-        argv = self._build_argv(player_id, turn)
+        include_standing_plan_instruction = (
+            self.options.memory.enabled or self.options.task_tracker.enabled
+        )
+        memory_block = ""
+        task_block = ""
+        briefing = Briefing()
+        if self.options.briefing.enabled:
+            playbook_chars = len(self._system_prefix)
+            budget = briefing_budget(DEFAULT_N_CTX, self.options, playbook_chars, 0)
+            briefing = await build_briefing(gs, self.options.briefing, budget)
+        opening = build_opening_prompt(
+            player_id=player_id,
+            turn=turn,
+            briefing_text=briefing.text,
+            memory_block=memory_block,
+            task_block=task_block,
+            include_standing_plan_instruction=include_standing_plan_instruction,
+        )
+        if not include_standing_plan_instruction:
+            opening += _PROMPT_SUMMARY_TAIL
+        core = _PROMPT.format(pid=player_id, turn=turn)
+        prompt = f"{core}\n\n{opening}"
+        if self._system_prefix:
+            prompt = f"{self._system_prefix}\n\n{prompt}"
+        prompt_injections = {
+            "memory": bool(memory_block),
+            "task_tracker": bool(task_block),
+            "standing_plan_instruction": include_standing_plan_instruction,
+        }
+        # STANDING PLAN blocks (1-3 bullets + optional TASK lines) can exceed the plain
+        # one-line-summary clamp; widen it whenever memory/task tracking are in play so the
+        # block survives truncation for later extraction (extract_standing_plan).
+        max_summary_chars = 500
+        if include_standing_plan_instruction:
+            max_summary_chars = min(4000, max(1200, self.options.memory.max_chars))
+        argv = self._build_argv(prompt)
         # Layer-4 lockdown: disable run_lua/lifecycle tools server-side. Claude relays this
         # through .mcp.json; Codex receives the same values through inline mcp_servers.civ6.env.
         # The parent env is still set so direct project auto-discovery paths inherit it when they can.
@@ -441,6 +489,7 @@ class CLIAgentPolicy:
                 "invalid_tool_calls": [],  # timeout: no parsed steps to inspect
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
+                "prompt_injections": prompt_injections,
             }
             return result
         except BaseException:
@@ -462,13 +511,13 @@ class CLIAgentPolicy:
         if raw_dir:
             self._dump_raw(raw_dir, player_id, turn, stdout, stderr_full)
         if self.provider == "cli-codex":
-            summary, pt, ct, usd = self._parse_codex(stdout)
+            summary, pt, ct, usd = self._parse_codex(stdout, max_summary_chars)
             try:
                 steps = self._stream_steps_codex(stdout)
             except Exception:
                 steps = []
         else:
-            summary, pt, ct, usd = self._parse_claude(stdout)
+            summary, pt, ct, usd = self._parse_claude(stdout, max_summary_chars)
             try:
                 steps = self._stream_steps_claude(stdout)
             except Exception:
@@ -488,5 +537,6 @@ class CLIAgentPolicy:
             "invalid_tool_calls": self._detect_invalid_tool_calls(steps),
             "prompt_tokens": pt,
             "completion_tokens": ct,
+            "prompt_injections": prompt_injections,
         }
         return result
