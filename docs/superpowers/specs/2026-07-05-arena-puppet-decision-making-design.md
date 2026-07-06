@@ -1,7 +1,7 @@
 # Arena Puppet Decision-Making — Design Spec
 
 **Date:** 2026-07-05
-**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); slices 2–3 remain follow-ons.
+**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); Slice 2 implementation branch ready for review (2026-07-06, `arena-diplomacy-tools-slice2`); Slice 3 remains a follow-on.
 **Author:** riz + Claude (brainstorming-locals + superpowers:brainstorming)
 
 ## Motivation
