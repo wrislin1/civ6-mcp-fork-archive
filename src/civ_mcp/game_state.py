@@ -1719,6 +1719,12 @@ class GameState:
         return await execute_lua(self.conn, code, context)
 
 
+# Sentinel for a tuner action that produced no output lines. The arena task
+# tracker classifies action results against this exact string -- import it
+# rather than re-declaring the literal.
+ACTION_NO_RESPONSE = "Action completed (no response)."
+
+
 def _action_result(lines: list[str]) -> str:
     """Parse OK:/ERR: prefixed action responses.
 
@@ -1727,7 +1733,7 @@ def _action_result(lines: list[str]) -> str:
     spurious output before the actual result line.
     """
     if not lines:
-        return "Action completed (no response)."
+        return ACTION_NO_RESPONSE
     for line in lines:
         if line.startswith("OK:"):
             return line[3:]

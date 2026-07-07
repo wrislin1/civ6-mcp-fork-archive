@@ -171,6 +171,18 @@ def test_save_then_load_round_trip(tmp_path):
     assert loaded.tasks == (task,)
 
 
+def test_no_response_sentinel_shared_with_game_state():
+    """The tracker classifies results by comparing against game_state's
+    no-response wording; the sentinel must be one shared constant, pinned to
+    what _action_result actually returns, or a reword silently diverges."""
+    from civ_mcp.game_state import ACTION_NO_RESPONSE as gs_sentinel
+    from civ_mcp.game_state import _action_result
+    from civ_mcp.arena.task_tracker import ACTION_NO_RESPONSE
+
+    assert ACTION_NO_RESPONSE == gs_sentinel
+    assert _action_result([]) == ACTION_NO_RESPONSE
+
+
 def test_save_task_state_writes_expected_path(tmp_path):
     save_task_state(str(tmp_path), "run1", 3, [_task()])
 

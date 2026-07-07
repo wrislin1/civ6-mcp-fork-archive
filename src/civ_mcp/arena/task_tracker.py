@@ -23,13 +23,12 @@ from pathlib import Path
 from re import IGNORECASE, compile as re_compile
 from typing import Any, Sequence
 
+from civ_mcp.game_state import ACTION_NO_RESPONSE
 from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
 
 TASK_KINDS = {"settle", "builder_improve"}
-
-ACTION_NO_RESPONSE = "Action completed (no response)."
 FOUND_CITY_RETRY_LIMIT = "found_city_failed_retry_limit"
 SETTLE_NO_RESPONSE = "settle_no_response"
 SETTLE_NO_RESPONSE_RETRY_LIMIT = "settle_no_response_retry_limit"
