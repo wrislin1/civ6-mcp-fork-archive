@@ -26,9 +26,21 @@ SCHEMA_VERSION = 1
 # Public: cli_agent's summary clamp reuses this matcher (via
 # find_standing_plan_start) so "where does the plan start" can never drift
 # between extraction and clamping -- the two copies diverged once already.
+#
+# Two shapes match: a colon form with optional inline content ("STANDING
+# PLAN: settle east", "**STANDING PLAN:**", "STANDING PLAN (next 3 turns):"),
+# and a bare header alone on its line ("## STANDING PLAN", "**STANDING
+# PLAN**") -- models reformat the instructed "STANDING PLAN:" into markdown
+# headings, and missing those silently freezes memory on a stale plan. The
+# bare form requires end-of-line so prose mentioning a standing plan
+# mid-sentence never matches, and the strict prefix (bullets/#/emphasis only)
+# keeps format_memory_block's injected "== STANDING PLAN (...) ==" header
+# from re-matching on capture.
 STANDING_PLAN_RE = re.compile(
-    r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
-    r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)\s*(.*)$",
+    r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan"
+    r"(?:\s*\([^)]*\))?\s*"
+    r"(?:(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)\s*(?P<content>.*)"
+    r"|(?:[*_]{1,3})?\s*$)",
     re.IGNORECASE,
 )
 _BULLET_PREFIX_RE = re.compile(r"^\s*[-*\u2022]+\s+")
@@ -130,8 +142,9 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     """Extract a "STANDING PLAN:" block from a puppet's final-turn summary.
 
     Finds a case-insensitive ``STANDING PLAN`` marker, including common
-    markdown heading, bullet, and emphasis forms, and captures that line's
-    trailing content plus following non-empty lines. Stops at an unbulleted
+    markdown heading, bullet, and emphasis forms (with or without a trailing
+    colon, and with an optional parenthetical like "(next 3 turns)"), and
+    captures that line's trailing content plus following non-empty lines. Stops at an unbulleted
     known reflection header (case-insensitive), an unbulleted ALL-CAPS section
     header, a known bulleted reflection header such as ``- TACTICAL:``, or end
     of string. Left-edge markdown bullets are stripped per line. Returns ""
@@ -144,7 +157,7 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
         match = STANDING_PLAN_RE.match(line)
         if match:
             start_idx = idx
-            inline_content = match.group(1).strip()
+            inline_content = (match.group("content") or "").strip()
             break
 
     if start_idx is None:

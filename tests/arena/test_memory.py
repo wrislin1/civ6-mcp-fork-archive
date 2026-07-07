@@ -487,3 +487,56 @@ def test_extract_standing_plan_stops_at_unbulleted_planning_without_task_lines()
     )
 
     assert extract_standing_plan(summary, max_chars=1200) == "settle east"
+
+
+# ---------------------------------------------------------------------------
+# High-effort review fixes: no-colon and parenthetical marker forms
+# ---------------------------------------------------------------------------
+
+
+def test_extract_standing_plan_accepts_heading_without_colon():
+    text = "## STANDING PLAN\n- settle east\n- then monument\n"
+
+    assert extract_standing_plan(text, 1200) == "settle east\nthen monument"
+
+
+def test_extract_standing_plan_accepts_emphasis_without_colon():
+    text = "**STANDING PLAN**\n- settle east\n"
+
+    assert extract_standing_plan(text, 1200) == "settle east"
+
+
+def test_extract_standing_plan_accepts_bare_marker_line():
+    text = "STANDING PLAN\n- settle east\n"
+
+    assert extract_standing_plan(text, 1200) == "settle east"
+
+
+def test_extract_standing_plan_accepts_parenthetical_before_colon():
+    text = "STANDING PLAN (next 3 turns):\n- settle east\n"
+
+    assert extract_standing_plan(text, 1200) == "settle east"
+
+
+def test_bare_marker_requires_end_of_line_so_prose_does_not_match():
+    """'standing plan' mentioned mid-sentence (no colon, trailing prose) must
+    not be treated as the plan marker."""
+    text = "My standing plan remains unchanged from last turn.\n- filler\n"
+
+    assert extract_standing_plan(text, 1200) == ""
+
+
+def test_injected_memory_header_never_rematches_on_capture():
+    """format_memory_block's '== STANDING PLAN (...) ==' header must not match
+    the extraction regex, or a summary quoting the injected block would be
+    captured as a fresh plan."""
+    from civ_mcp.arena.memory import find_standing_plan_start
+
+    memory = StandingMemory(
+        schema_version=1, run_id="r", player_id=1, updated_turn=3,
+        text="settle east",
+    )
+    block = format_memory_block(memory, current_turn=4)
+
+    assert block.startswith("== STANDING PLAN (")
+    assert find_standing_plan_start(block) == -1
