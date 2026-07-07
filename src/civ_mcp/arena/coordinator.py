@@ -7,6 +7,7 @@ from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.budget import explicit_n_ctx
+from civ_mcp.arena.capabilities import build_caps_query, parse_caps
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.memory import (
     extract_standing_plan,
@@ -242,6 +243,30 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     )
                     if _policy_accepts_kwarg(pol, name)
                 }
+                # Capability snapshot (spec §1): once per puppet turn, cheap
+                # GameCore read. Signature-gated like every injected kwarg;
+                # ANY failure fails open (no kwarg -> agent uses full tier).
+                if _policy_accepts_kwarg(pol, "caps"):
+                    caps = None
+                    try:
+                        cap_lines = await conn.execute_read(
+                            build_caps_query(st.local)
+                        )
+                        caps = parse_caps(cap_lines)
+                        if caps is None:
+                            print(
+                                "[arena] capability snapshot unparseable; "
+                                "fail-open full toolset",
+                                file=sys.stderr,
+                            )
+                    except Exception as e:
+                        print(
+                            f"[arena] capability snapshot failed; "
+                            f"fail-open full toolset: {e!r}",
+                            file=sys.stderr,
+                        )
+                    if caps is not None:
+                        policy_kwargs["caps"] = caps
                 if (
                     exclusive
                     and opts.briefing.enabled
