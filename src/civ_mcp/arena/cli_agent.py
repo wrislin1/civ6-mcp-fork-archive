@@ -186,6 +186,8 @@ class CLIAgentPolicy:
                 obj = json.loads(stdout)
             except ValueError:
                 return ("(unparseable CLI output)", 0, 0, 0.0)
+            if not isinstance(obj, dict):
+                return ("(unparseable CLI output)", 0, 0, 0.0)
         u = obj.get("usage", {}) or {}
         text = str(obj.get("result") or "")
         summary = (
@@ -214,6 +216,8 @@ class CLIAgentPolicy:
             try:
                 obj = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(obj, dict):
                 continue
             if obj.get("type") == "item.completed":
                 item = obj.get("item", {}) or {}

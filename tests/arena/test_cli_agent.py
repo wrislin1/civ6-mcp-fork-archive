@@ -347,6 +347,30 @@ def test_parse_claude_null_fields():
     assert summary == "" and pt == 0 and ct == 0 and usd == 0.0
 
 
+def test_parse_claude_non_object_stdout_returns_sentinel():
+    """Whole-stdout JSON that parses to a non-dict (e.g. an aborted run emitting
+    'null') must degrade to the unparseable sentinel, not raise AttributeError."""
+    for stdout in ("null", "[1, 2]", '"just a string"'):
+        assert CLIAgentPolicy._parse_claude(stdout) == (
+            "(unparseable CLI output)", 0, 0, 0.0
+        )
+
+
+def test_parse_codex_ignores_non_object_json_lines():
+    """A valid-JSON non-object line in the codex stream must be skipped, not
+    crash the turn with AttributeError."""
+    blob = "\n".join([
+        "[1, 2]",
+        "null",
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Turn 4"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 12, "output_tokens": 3}}),
+    ])
+    summary, pt, ct, usd = CLIAgentPolicy._parse_codex(blob)
+    assert summary == "Turn 4"
+    assert pt == 12
+    assert ct == 3
+
+
 def test_parse_claude_stream_fixture_tuple_unchanged():
     """_parse_claude must return the same (summary, in, out, usd) on stream-json fixture
     as it would from a plain result object — the line-by-line scan finds the terminal
