@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from civ_mcp.arena.task_tracker import CANCEL_LINE_RE, TASK_LINE_RE
 from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
@@ -30,9 +31,6 @@ _STANDING_PLAN_RE = re.compile(
 _BULLET_PREFIX_RE = re.compile(r"^\s*[-*\u2022]+\s+")
 _HEADING_PREFIX_RE = re.compile(r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?")
 _HEADING_EMPHASIS_RE = re.compile(r"^(?:[*_]{1,3})?(.*?)(?:[*_]{1,3})?$")
-_TASK_OR_CANCEL_LINE_RE = re.compile(
-    r"^\s*[-*•]*\s*(?:TASK\s+|CANCEL\s+unit_id=-?\d+\s*$)", re.IGNORECASE
-)
 _BULLETED_SECTION_HEADERS = frozenset(
     {
         "TACTICAL",
@@ -205,7 +203,9 @@ def _has_task_line_before_next_header(lines: Sequence[str]) -> bool:
     for line in lines:
         if line.strip() == "":
             continue
-        if _TASK_OR_CANCEL_LINE_RE.match(line):
+        # Only a line the task parser would actually accept defers the
+        # terminator; prose that merely starts with "Task" must not.
+        if TASK_LINE_RE.match(line) or CANCEL_LINE_RE.match(line):
             return True
         if _is_section_header(line):
             return False

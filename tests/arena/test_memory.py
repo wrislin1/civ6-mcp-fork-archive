@@ -87,6 +87,23 @@ def test_save_memory_strips_leading_trailing_whitespace(tmp_path):
     assert saved.text == "hello there"
 
 
+def test_planning_header_terminates_before_task_like_prose():
+    """Ordinary prose starting with the word 'Task' is not a TASK line: it must
+    not defer the PLANNING terminator, or whole reflection sections get
+    swallowed into standing memory."""
+    summary = (
+        "STANDING PLAN:\n"
+        "- settle east\n"
+        "PLANNING:\n"
+        "Task list looks manageable; build a granary next.\n"
+        "HYPOTHESIS: barbarians attack by turn 30\n"
+    )
+
+    result = extract_standing_plan(summary, max_chars=4000)
+
+    assert result == "settle east"
+
+
 def test_extract_standing_plan_multiline_block():
     summary = (
         "TACTICAL: moved settler.\n"

@@ -262,6 +262,17 @@ def test_invalid_lines_are_ignored(line):
     assert parse_task_lines(line, turn=1) == []
 
 
+def test_parse_task_lines_accepts_bulleted_lines():
+    """Raw summaries carry markdown bullets; task parsing runs on the raw
+    summary (not the bullet-stripped captured plan), so the parser itself
+    must tolerate a leading bullet."""
+    tasks = parse_task_lines(
+        "- TASK settle unit_id=123 target=18,24\n• CANCEL unit_id=456", turn=5
+    )
+
+    assert [(t.kind, t.unit_id) for t in tasks] == [("settle", 123), ("cancel", 456)]
+
+
 def test_parse_task_lines_ignores_invalid_and_keeps_valid_lines():
     plan = "\n".join(
         [

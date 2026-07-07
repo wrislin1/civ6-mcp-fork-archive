@@ -844,6 +844,36 @@ async def test_final_summary_with_task_line_creates_persisted_task(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_task_line_beyond_capture_clamp_still_creates_task(tmp_path):
+    """TASK lines are parsed from the raw final summary, so a long Planning
+    section that pushes them past the standing-plan capture budget must not
+    silently drop them."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    filler = "\n".join(f"reflection detail line {i}" for i in range(400))
+    cfg = ArenaConfig(players=[PlayerSpec(5, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[5], run_id="taskclamp",
+                      transcript_dir=str(tmp_path))
+    pol = RecordingPolicy({
+        "summary": "ignored",
+        "transcript": {"final_summary": (
+            "STANDING PLAN:\n- march settler\nPLANNING:\n"
+            f"{filler}\nTASK settle unit_id=42 target=10,12\n"
+        )},
+    }, options=opts)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|5", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    path = task_path(str(tmp_path), "taskclamp", 5)
+    assert path.exists()
+    assert '"unit_id": 42' in path.read_text()
+
+
+@pytest.mark.asyncio
 async def test_pre_model_task_results_appear_in_log_and_transcript(tmp_path):
     """A pre-existing active task that completes during the deterministic pre-model
     phase shows up in both the coordinator log entry and the transcript record's

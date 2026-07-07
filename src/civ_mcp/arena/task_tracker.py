@@ -44,14 +44,19 @@ BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry
 # two turns (e.g. a popup blocking the async found-city op) to clear.
 MAX_TASK_FAILURES = 3
 
-_TASK_LINE_RE = re_compile(
-    r"^\s*TASK\s+(?P<kind>settle|builder_improve)\s+"
+# Public: memory.py's standing-plan terminator lookahead reuses these so
+# "does a real TASK/CANCEL line follow" and "what actually parses as a task"
+# can never disagree. Bullet-tolerant because they run on raw model summaries.
+TASK_LINE_RE = re_compile(
+    r"^\s*(?:[-*•]+\s+)?TASK\s+(?P<kind>settle|builder_improve)\s+"
     r"unit_id=(?P<unit_id>-?\d+)\s+"
     r"target=(?P<tx>-?\d+)\s*,\s*(?P<ty>-?\d+)"
     r"(?:\s+improvement=(?P<improvement>\S+))?\s*$",
     IGNORECASE,
 )
-_CANCEL_LINE_RE = re_compile(r"^\s*CANCEL\s+unit_id=(?P<unit_id>-?\d+)\s*$", IGNORECASE)
+CANCEL_LINE_RE = re_compile(
+    r"^\s*(?:[-*•]+\s+)?CANCEL\s+unit_id=(?P<unit_id>-?\d+)\s*$", IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -184,7 +189,7 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
     """
     parsed: list[UnitTask] = []
     for line in plan_text.splitlines():
-        match = _TASK_LINE_RE.match(line)
+        match = TASK_LINE_RE.match(line)
         if match:
             kind = match.group("kind").lower()
             unit_id = int(match.group("unit_id"))
@@ -207,7 +212,7 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
             )
             continue
 
-        match = _CANCEL_LINE_RE.match(line)
+        match = CANCEL_LINE_RE.match(line)
         if match:
             unit_id = int(match.group("unit_id"))
             parsed.append(

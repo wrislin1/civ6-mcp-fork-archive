@@ -208,6 +208,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 # Runs whenever standing-plan capture is enabled, since memory and
                 # task tracking both parse the same STANDING PLAN block.
                 captured_plan = ""
+                final_summary = ""
                 if opts.standing_plan_enabled:
                     final_summary = (
                         result.get("transcript", {}).get("final_summary")
@@ -228,7 +229,9 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         print(f"[arena] standing memory save failed: {e!r}", file=sys.stderr)
                 if opts.task_tracker.enabled and not task_tracker_error:
                     try:
-                        new_tasks = parse_task_lines(captured_plan, st.turn)
+                        # Parse from the raw summary, not the captured plan: the
+                        # capture clamp must never cost us a trailing TASK line.
+                        new_tasks = parse_task_lines(final_summary, st.turn)
                         merged = merge_tasks(updated_tasks, new_tasks, opts.task_tracker.max_tasks)
                         captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
                         active_tasks_after = captured_state.tasks
