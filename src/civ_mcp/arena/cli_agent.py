@@ -164,12 +164,12 @@ class CLIAgentPolicy:
         raise ValueError(f"unknown CLI provider {self.provider!r}")
 
     @staticmethod
-    def _parse_claude(
-        stdout: str,
-        max_summary_chars: int = 500,
-        *,
-        preserve_standing_plan: bool = True,
-    ):
+    def _parse_claude_raw(stdout: str):
+        """Extract the raw (unclamped) final text plus usage from claude output.
+
+        The raw text feeds the transcript's final_summary — the coordinator
+        parses TASK/CANCEL lines from it, so it must never be clamped here.
+        """
         obj = None
         for line in stdout.splitlines():
             line = line.strip()
@@ -190,23 +190,30 @@ class CLIAgentPolicy:
                 return ("(unparseable CLI output)", 0, 0, 0.0)
         u = obj.get("usage", {}) or {}
         text = str(obj.get("result") or "")
-        summary = (
-            _clamp_final_summary(text, max_summary_chars)
-            if preserve_standing_plan
-            else text[:max_summary_chars]
-        )
-        return (summary,
+        return (text,
                 int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
                 float(obj.get("total_cost_usd") or 0.0))
 
     @staticmethod
-    def _parse_codex(
+    def _parse_claude(
         stdout: str,
         max_summary_chars: int = 500,
         *,
         preserve_standing_plan: bool = True,
     ):
-        summary = ""
+        text, pt, ct, usd = CLIAgentPolicy._parse_claude_raw(stdout)
+        summary = (
+            _clamp_final_summary(text, max_summary_chars)
+            if preserve_standing_plan
+            else text[:max_summary_chars]
+        )
+        return (summary, pt, ct, usd)
+
+    @staticmethod
+    def _parse_codex_raw(stdout: str):
+        """Extract the raw (unclamped) final agent message plus usage from codex
+        output. See _parse_claude_raw for why the text must stay unclamped."""
+        text = ""
         prompt_tokens = 0
         completion_tokens = 0
         for line in stdout.splitlines():
@@ -223,16 +230,28 @@ class CLIAgentPolicy:
                 item = obj.get("item", {}) or {}
                 if item.get("type") == "agent_message":
                     text = str(item.get("text") or "")
-                    summary = (
-                        _clamp_final_summary(text, max_summary_chars)
-                        if preserve_standing_plan
-                        else text[:max_summary_chars]
-                    )
             elif obj.get("type") == "turn.completed":
                 usage = obj.get("usage", {}) or {}
                 prompt_tokens = int(usage.get("input_tokens") or 0)
                 completion_tokens = int(usage.get("output_tokens") or 0)
-        return (summary, prompt_tokens, completion_tokens, 0.0)
+        return (text, prompt_tokens, completion_tokens, 0.0)
+
+    @staticmethod
+    def _parse_codex(
+        stdout: str,
+        max_summary_chars: int = 500,
+        *,
+        preserve_standing_plan: bool = True,
+    ):
+        text, pt, ct, usd = CLIAgentPolicy._parse_codex_raw(stdout)
+        if not text:
+            return ("", pt, ct, usd)
+        summary = (
+            _clamp_final_summary(text, max_summary_chars)
+            if preserve_standing_plan
+            else text[:max_summary_chars]
+        )
+        return (summary, pt, ct, usd)
 
     @staticmethod
     def _stream_steps_claude(stdout: str) -> list:
@@ -574,25 +593,25 @@ class CLIAgentPolicy:
         if raw_dir:
             self._dump_raw(raw_dir, player_id, turn, stdout, stderr_full)
         if self.provider == "cli-codex":
-            summary, pt, ct, usd = self._parse_codex(
-                stdout,
-                max_summary_chars,
-                preserve_standing_plan=include_standing_plan_instruction,
-            )
+            raw_summary, pt, ct, usd = self._parse_codex_raw(stdout)
             try:
                 steps = self._stream_steps_codex(stdout)
             except Exception:
                 steps = []
         else:
-            summary, pt, ct, usd = self._parse_claude(
-                stdout,
-                max_summary_chars,
-                preserve_standing_plan=include_standing_plan_instruction,
-            )
+            raw_summary, pt, ct, usd = self._parse_claude_raw(stdout)
             try:
                 steps = self._stream_steps_claude(stdout)
             except Exception:
                 steps = []
+        # The compact summary clamps (and jumps to the STANDING PLAN header when
+        # over budget); the transcript's final_summary stays raw because the
+        # coordinator parses TASK/CANCEL lines and the standing plan from it.
+        summary = (
+            _clamp_final_summary(raw_summary, max_summary_chars)
+            if include_standing_plan_instruction
+            else raw_summary[:max_summary_chars]
+        )
         self.cost.record(player_id=player_id, model=(self.model or self.provider),
                          provider=self.provider, prompt_tokens=pt, completion_tokens=ct,
                          turn=turn, usd=usd)
@@ -602,7 +621,7 @@ class CLIAgentPolicy:
         result["transcript"] = {
             "steps": steps,
             "wall_clock_s": wall_s,
-            "final_summary": summary,
+            "final_summary": raw_summary,
             "cli_exit": proc.returncode,
             "cli_stderr_tail": stderr_tail,
             "invalid_tool_calls": self._detect_invalid_tool_calls(steps),

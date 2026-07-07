@@ -571,6 +571,78 @@ def test_call_success_attaches_transcript_codex(monkeypatch):
     assert len(tr["steps"]) >= 1
 
 
+def test_call_final_summary_is_raw_unclamped_claude(monkeypatch):
+    """The transcript's final_summary must be the model's raw text: the
+    coordinator parses TASK/CANCEL lines from it, so the clamp — which caps
+    length AND discards everything above the STANDING PLAN header — may only
+    shape the compact summary field, never what task capture sees."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True))
+    filler = "x" * (opts.standing_plan_summary_chars + 1000)
+    text = (
+        "TASK settle unit_id=5 target=1,2\n"
+        f"STANDING PLAN: go north\n{filler}"
+    )
+    payload = json.dumps(
+        {"type": "result", "result": text, "usage": {}, "total_cost_usd": 0}
+    )
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (payload.encode(), b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy("cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+                         options=opts)
+    result = asyncio.run(pol(None, player_id=2, turn=3))
+
+    assert result["transcript"]["final_summary"] == text
+    # The compact summary still clamps (jumping to the plan header).
+    assert result["summary"].startswith("STANDING PLAN:")
+    assert len(result["summary"]) <= opts.standing_plan_summary_chars
+
+
+def test_call_final_summary_is_raw_unclamped_codex(monkeypatch):
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True))
+    filler = "y" * (opts.standing_plan_summary_chars + 1000)
+    text = (
+        "TASK builder_improve unit_id=7 target=3,4 improvement=IMPROVEMENT_FARM\n"
+        f"STANDING PLAN: improve farms\n{filler}"
+    )
+    stream = "\n".join([
+        json.dumps({"type": "item.completed",
+                    "item": {"type": "agent_message", "text": text}}),
+        json.dumps({"type": "turn.completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 5}}),
+    ])
+
+    class FakeProc:
+        pid = 2
+        returncode = 0
+        async def communicate(self):
+            return (stream.encode(), b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy("cli-codex", FakeCost(), project_dir="/x", timeout_s=5,
+                         options=opts)
+    result = asyncio.run(pol(None, player_id=2, turn=3))
+
+    assert result["transcript"]["final_summary"] == text
+    assert result["summary"].startswith("STANDING PLAN:")
+    assert len(result["summary"]) <= opts.standing_plan_summary_chars
+
+
 def test_call_success_transcript_carries_token_counts(monkeypatch):
     """SUCCESS path: transcript must include prompt_tokens and completion_tokens (Finding 2)."""
     class FakeProc:
@@ -975,7 +1047,9 @@ def test_call_claude_summary_caps_large_memory_capture_at_configured_budget(monk
     result = asyncio.run(pol(None, player_id=1, turn=1))
 
     assert len(result["summary"]) == 6000
-    assert len(result["transcript"]["final_summary"]) == 6000
+    # final_summary stays raw: the coordinator parses TASK lines and the
+    # standing plan from it, and its own capture budget clamps downstream.
+    assert len(result["transcript"]["final_summary"]) == 6500
 
 
 def test_call_codex_standing_plan_survives_clamp_when_task_tracker_enabled(monkeypatch):
