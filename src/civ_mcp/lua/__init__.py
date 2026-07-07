@@ -67,6 +67,10 @@ from civ_mcp.lua.diplomacy import (  # noqa: F401
     parse_diplomacy_sessions,
     parse_pending_deals_response,
 )
+from civ_mcp.lua.climate import (  # noqa: F401
+    build_climate_query,
+    parse_climate_response,
+)
 from civ_mcp.lua.congress import (  # noqa: F401
     build_congress_submit,
     build_congress_vote,
@@ -155,6 +159,7 @@ from civ_mcp.lua.models import (  # noqa: F401
     BuilderTask,
     CityLoyalty,
     CityRow,
+    ClimateStatus,
     DiarySnapshot,
     BeliefInfo,
     CityInfo,
@@ -174,6 +179,7 @@ from civ_mcp.lua.models import (  # noqa: F401
     DiplomacyChoice,
     DiplomacyModifier,
     DiplomacySession,
+    DisasterEvent,
     DistrictPlacement,
     EnvoyStatus,
     FogBoundary,

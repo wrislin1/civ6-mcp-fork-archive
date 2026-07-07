@@ -2139,3 +2139,18 @@ def narrate_loyalty(rows: list[lq.CityLoyalty]) -> str:
             sign = "+" if amount >= 0 else ""
             out.append(f"    {name}: {sign}{amount:.2f}")
     return "\n".join(out)
+
+
+def narrate_climate(status: lq.ClimateStatus) -> str:
+    if status.phase < 0:
+        return ("Climate system unavailable (base-game ruleset or API not "
+                "present). No climate pressure to manage.")
+    out = [f"Climate change phase {status.phase}, sea level +{status.sea_level}, "
+           f"total CO2 {status.co2_total}"]
+    if status.disasters:
+        out.append("Active/recent disasters:")
+        for d in status.disasters:
+            out.append(f"  {d.kind} at ({d.x},{d.y}) turn {d.turn}")
+    else:
+        out.append("No active disasters.")
+    return "\n".join(out)

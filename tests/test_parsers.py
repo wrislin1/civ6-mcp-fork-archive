@@ -17,6 +17,7 @@ from civ_mcp.lua.map import parse_map_response
 from civ_mcp.lua.notifications import parse_end_turn_blocking
 from civ_mcp.lua.diplomacy import parse_gossip_response
 from civ_mcp.lua.cities import parse_loyalty_response
+from civ_mcp.lua.climate import parse_climate_response
 
 
 # ---------------------------------------------------------------------------
@@ -438,3 +439,32 @@ class TestParseLoyalty:
         rows = parse_loyalty_response(
             ["LOYSRC|999|orphan|1.0", "LOYAL|bad|X|a|b|c", "noise"])
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# parse_climate_response
+# ---------------------------------------------------------------------------
+
+
+class TestParseClimate:
+    def test_full_status(self):
+        lines = [
+            "CLIMATE|2|1|317",
+            "DISASTER|STORM_HURRICANE|14|22|43",
+            "DISASTER|RANDOM_EVENT_VOLCANO_ERUPTION|9|8|40",
+            "---END---",
+        ]
+        st = parse_climate_response(lines)
+        assert st.phase == 2 and st.sea_level == 1 and st.co2_total == 317
+        assert len(st.disasters) == 2
+        assert st.disasters[0].kind == "STORM_HURRICANE"
+        assert (st.disasters[0].x, st.disasters[0].y) == (14, 22)
+        assert st.disasters[1].turn == 40
+
+    def test_unavailable_climate_system(self):
+        st = parse_climate_response(["CLIMATE|-1|-1|-1"])
+        assert st.phase == -1 and st.disasters == []
+
+    def test_empty_is_unavailable(self):
+        st = parse_climate_response([])
+        assert st.phase == -1

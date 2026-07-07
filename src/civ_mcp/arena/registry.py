@@ -197,6 +197,11 @@ async def _loyalty_text(gs: Any, args: dict[str, Any]) -> str:
     return _render(await gs.get_loyalty(), nr.narrate_loyalty)
 
 
+async def _climate_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_climate(), nr.narrate_climate)
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1216,6 +1221,14 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         _loyalty_text,
+    ),
+    "get_climate": _tool(
+        "get_climate",
+        "Climate phase, sea level, CO2, active disasters. Rising sea levels "
+        "flood coastal tiles; storms pillage improvements.",
+        None,
+        (),
+        _climate_text,
     ),
 }
 

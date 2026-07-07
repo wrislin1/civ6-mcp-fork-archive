@@ -947,6 +947,21 @@ async def get_loyalty(ctx: Context) -> str:
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+async def get_climate(ctx: Context) -> str:
+    """Climate phase, sea level, CO2, and active disasters (Gathering Storm).
+
+    Rising phases flood coastal tiles and power disasters; check before
+    settling coasts or river floodplains.
+    """
+    gs = _get_game(ctx)
+
+    async def _run():
+        return nr.narrate_climate(await gs.get_climate())
+
+    return await _logged(ctx, "get_climate", {}, _run)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.
 

@@ -1188,3 +1188,13 @@ async def test_get_loyalty_registered_ungated():
         async def get_loyalty(self):
             return "Lahore: 72.5/100 (-3.25/turn)"
     assert "Lahore" in await dispatch(GS(), "get_loyalty", {})
+
+
+@pytest.mark.asyncio
+async def test_get_climate_registered_ungated():
+    assert TOOL_REGISTRY["get_climate"].requires is None
+
+    class GS:
+        async def get_climate(self):
+            return "Climate phase 2, sea level +1"
+    assert "phase" in await dispatch(GS(), "get_climate", {})

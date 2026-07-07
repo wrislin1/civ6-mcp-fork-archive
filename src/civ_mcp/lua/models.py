@@ -1312,3 +1312,19 @@ class CityLoyalty:
     max_loyalty: float
     per_turn: float
     sources: list[tuple[str, float]] = field(default_factory=list)
+
+
+@dataclass
+class DisasterEvent:
+    kind: str
+    x: int
+    y: int
+    turn: int
+
+
+@dataclass
+class ClimateStatus:
+    phase: int          # -1 = climate system unavailable (base game / API missing)
+    sea_level: int
+    co2_total: int
+    disasters: list[DisasterEvent] = field(default_factory=list)

@@ -214,6 +214,10 @@ class GameState:
         lines = await self.conn.execute_write(lq.build_loyalty_query())
         return lq.parse_loyalty_response(lines)
 
+    async def get_climate(self) -> lq.ClimateStatus:
+        lines = await self.conn.execute_write(lq.build_climate_query())
+        return lq.parse_climate_response(lines)
+
     async def get_tech_civics(self) -> lq.TechCivicStatus:
         lines = await self.conn.execute_read(lq.build_tech_civics_query())
         return lq.parse_tech_civics_response(lines)
