@@ -1232,3 +1232,14 @@ async def test_cli_policy_uses_explicit_context_budget_for_briefing(monkeypatch)
 
     assert captured["n_ctx"] == 8192
     assert captured["tool_schema_chars"] == 0
+
+
+def test_clamp_final_summary_preserves_bullet_point_standing_plan_marker():
+    # Parity with memory.py's marker regex, which accepts the • bullet:
+    # a plan tail starting "• STANDING PLAN:" must survive the clamp too.
+    text = "A" * 1500 + "\n\n• STANDING PLAN:\n- keep scout moving\n"
+
+    clamped = _clamp_final_summary(text, 1200)
+
+    assert clamped.startswith("• STANDING PLAN:")
+    assert "keep scout moving" in clamped

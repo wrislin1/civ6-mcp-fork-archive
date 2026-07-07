@@ -3,7 +3,7 @@ import asyncio, json, os, re, signal, time
 
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.briefing import Briefing
-from civ_mcp.arena.budget import DEFAULT_N_CTX
+from civ_mcp.arena.budget import explicit_n_ctx
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.prompt_context import maybe_build_briefing
 from civ_mcp.arena.prompting import build_opening_prompt
@@ -91,7 +91,7 @@ _PROMPT = (
 _PROMPT_SUMMARY_TAIL = " When done, give a one-line summary."
 
 _CLI_STANDING_PLAN_RE = re.compile(
-    r"^\s*(?:[-*]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
+    r"^\s*(?:[-*•]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
     r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)",
     re.IGNORECASE,
 )
@@ -480,15 +480,10 @@ class CLIAgentPolicy:
     ) -> dict:
         include_standing_plan_instruction = self.options.standing_plan_enabled
         playbook_chars = len(self._system_prefix)
-        n_ctx = (
-            DEFAULT_N_CTX
-            if self.options.context_budget == "auto"
-            else int(self.options.context_budget)
-        )
         briefing = await maybe_build_briefing(
             gs,
             self.options,
-            n_ctx=n_ctx,
+            n_ctx=explicit_n_ctx(self.options.context_budget),
             playbook_chars=playbook_chars,
             tool_schema_chars=0,
             supplied=briefing,

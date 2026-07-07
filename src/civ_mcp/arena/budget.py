@@ -6,6 +6,19 @@ from typing import Any
 DEFAULT_N_CTX = 16384
 CHARS_PER_TOKEN = 3
 
+
+def explicit_n_ctx(context_budget: Any) -> int:
+    """Resolve an operator-configured ``context_budget`` to an n_ctx value.
+
+    ``"auto"`` keeps the CLI default; an explicit value is the operator's
+    requested context budget. Shared by the coordinator's exclusive-policy
+    briefing pre-build and CLIAgentPolicy's own briefing construction so the
+    two call sites cannot drift.
+    """
+    if context_budget == "auto":
+        return DEFAULT_N_CTX
+    return int(context_budget)
+
 _COMPLETION_RESERVE_PER_STEP = 512
 _MARGIN_TOKENS = 1024
 

@@ -1183,3 +1183,31 @@ async def test_task_state_save_failure_does_not_abort_arena_turn(monkeypatch, tm
     assert result["puppet_turns_played"] == 1
     assert result["log"][0]["task_tracker"]["error"] == "OSError('read only')"
     assert sink.records[0]["task_tracker"]["error"] == "OSError('read only')"
+
+
+@pytest.mark.asyncio
+async def test_exclusive_cli_briefing_prebuild_uses_explicit_context_budget(monkeypatch):
+    from civ_mcp.arena import coordinator
+    from civ_mcp.arena.briefing import Briefing
+
+    captured = {}
+
+    async def fake_briefing(gs, options, *, n_ctx, playbook_chars, tool_schema_chars, supplied=None):
+        captured["n_ctx"] = n_ctx
+        return Briefing(text="PREBUILT", tokens=1, sections=["overview"])
+
+    monkeypatch.setattr(coordinator, "maybe_build_briefing", fake_briefing)
+    opts = CivOptions(context_budget=8192, briefing=BriefingOptions(enabled=True))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(7, "cli-claude", "")],
+        max_puppet_turns=1,
+        puppet_ids=[7],
+    )
+    conn = FakeConn()
+    conn._polls = iter([["LOCAL|7", "TURN|2", "ACTIVE|true", "LAST|1"]])
+    pol = RecordingPolicy({"summary": "cli ran"}, options=opts, needs_exclusive_tuner=True)
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1
+    assert captured["n_ctx"] == 8192

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
-from civ_mcp.arena.budget import DEFAULT_N_CTX
+from civ_mcp.arena.budget import explicit_n_ctx
 from civ_mcp.arena.config import CivOptions
 from civ_mcp.arena.memory import (
     extract_standing_plan,
@@ -188,7 +188,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     policy_kwargs["briefing"] = await maybe_build_briefing(
                         gs,
                         opts,
-                        n_ctx=DEFAULT_N_CTX,
+                        n_ctx=explicit_n_ctx(opts.context_budget),
                         playbook_chars=playbook_chars,
                         tool_schema_chars=0,
                     )
