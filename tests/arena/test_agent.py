@@ -565,3 +565,31 @@ def test_should_resolve_n_ctx_caps_default_retries():
     assert _should_resolve_n_ctx(131072, "upstream_props", "auto", 1) is False
     # A fixed (non-auto) budget never re-probes.
     assert _should_resolve_n_ctx(4096, "default", 8000, 1) is False
+
+
+@pytest.mark.asyncio
+async def test_max_steps_final_summary_keeps_last_assistant_text():
+    """Step exhaustion must not discard plan text emitted alongside tool calls."""
+    class ToolWithProseBackend:
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages, tools):
+            self.n += 1
+            return Reply(
+                text=f"step {self.n} thinking\nSTANDING PLAN\n- TASK settle unit_id=130 target=20,25",
+                tool_calls=[
+                    {"id": f"t{self.n}", "name": "fortify_unit", "arguments": '{"unit_index": 0}'}
+                ],
+                prompt_tokens=5,
+                completion_tokens=1,
+            )
+
+    gs, cost = FakeGS(), FakeCost()
+    pol = LLMPolicy(ToolWithProseBackend(), cost, max_steps=2)
+    out = await pol(gs, player_id=1, turn=1)
+
+    assert out["summary"] == "max_steps reached"
+    assert out["transcript"]["max_steps_reached"] is True
+    assert "STANDING PLAN" in out["transcript"]["final_summary"]
+    assert "step 2 thinking" in out["transcript"]["final_summary"]

@@ -132,6 +132,7 @@ class LLMPolicy:
         actions = []
         steps: list[dict] = []
         invalid_tool_calls: list[dict] = []
+        last_assistant_text = ""
         total_prompt_tokens = 0
         total_completion_tokens = 0
         wall_clock_start = time.time()
@@ -161,6 +162,11 @@ class LLMPolicy:
                     "completion_tokens": total_completion_tokens,
                     "prompt_injections": prompt_injections,
                 }}
+            if reply.text:
+                # Keep the newest assistant prose: on step exhaustion it is the
+                # only place a STANDING PLAN / TASK block can survive to the
+                # coordinator's capture pass.
+                last_assistant_text = reply.text
             messages.append({"role": "assistant", "content": reply.text or "",
                              "tool_calls": [{"id": tc["id"], "type": "function",
                               "function": {"name": tc["name"], "arguments": tc["arguments"]}}
@@ -219,7 +225,7 @@ class LLMPolicy:
             "n_ctx_source": self._n_ctx_source,
             "wall_clock_s": time.time() - wall_clock_start,
             "max_steps_reached": True,
-            "final_summary": "",
+            "final_summary": last_assistant_text,
             "prompt_tokens": total_prompt_tokens,
             "completion_tokens": total_completion_tokens,
             "prompt_injections": prompt_injections,
