@@ -50,7 +50,8 @@ def _tile(x, y, units=None):
 
 
 def _task(task_id="settle:65537", kind="settle", unit_id=65537, target_x=18, target_y=24,
-          created_turn=1, updated_turn=1, improvement="", status="active", last_result=""):
+          created_turn=1, updated_turn=1, improvement="", status="active", last_result="",
+          failure_count=0):
     return UnitTask(
         task_id=task_id,
         kind=kind,
@@ -62,6 +63,7 @@ def _task(task_id="settle:65537", kind="settle", unit_id=65537, target_x=18, tar
         improvement=improvement,
         status=status,
         last_result=last_result,
+        failure_count=failure_count,
     )
 
 
@@ -556,6 +558,7 @@ async def test_builder_improve_fails_after_repeated_invalid_improvement():
         target_y=19,
         improvement="IMPROVEMENT_FARM",
         last_result="blocked_improvement_not_valid",
+        failure_count=2,
     )
 
     updated, results = await run_pre_model_tasks(gs, [task])
@@ -578,6 +581,7 @@ async def test_settle_fails_after_repeated_found_city_error():
         target_x=18,
         target_y=24,
         last_result="Error: FOUND_FAILED",
+        failure_count=2,
     )
 
     updated, results = await run_pre_model_tasks(gs, [task])
@@ -635,6 +639,7 @@ async def test_builder_improve_no_response_fails_after_retry():
         target_y=19,
         improvement="IMPROVEMENT_MINE",
         last_result="improve_no_response",
+        failure_count=2,
     )
 
     updated, results = await run_pre_model_tasks(gs, [task])
@@ -643,6 +648,157 @@ async def test_builder_improve_no_response_fails_after_retry():
     assert updated[0].last_result == "improve_no_response_retry_limit"
     assert results[0]["status"] == "failed"
     assert results[0]["result"] == "improve_no_response_retry_limit"
+
+
+def test_merge_restated_task_preserves_failure_state():
+    """Restating an identical TASK line must not wipe accumulated failure strikes."""
+    existing = [
+        _task(
+            created_turn=3,
+            updated_turn=5,
+            last_result="Error: FOUND_FAILED",
+            failure_count=1,
+        )
+    ]
+    updates = parse_task_lines("TASK settle unit_id=65537 target=18,24", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert len(merged) == 1
+    assert merged[0].failure_count == 1
+    assert merged[0].last_result == "Error: FOUND_FAILED"
+    assert merged[0].created_turn == 3
+    assert merged[0].updated_turn == 6
+
+
+def test_merge_restated_task_with_new_target_resets_failure_state():
+    existing = [
+        _task(last_result="Error: FOUND_FAILED", failure_count=2)
+    ]
+    updates = parse_task_lines("TASK settle unit_id=65537 target=20,26", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert len(merged) == 1
+    assert merged[0].target_x == 20
+    assert merged[0].failure_count == 0
+    assert merged[0].last_result == ""
+
+
+def test_merge_restatement_does_not_resurrect_failed_task():
+    """A verbatim restatement of a task that just hit its failure budget must not
+    revive it — only a changed target (a genuinely new instruction) starts over."""
+    existing = [
+        _task(
+            status="failed",
+            last_result="found_city_failed_retry_limit",
+            failure_count=3,
+        )
+    ]
+    updates = parse_task_lines("TASK settle unit_id=65537 target=18,24", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert merged == ()
+
+
+@pytest.mark.asyncio
+async def test_settle_no_response_stays_active_for_retry():
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = FakeGS(units=[unit], found_city_result="Action completed (no response).")
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "settle_no_response"
+    assert updated[0].failure_count == 1
+    assert results[0]["status"] == "active"
+    assert results[0]["action"] == "found_city"
+    assert results[0]["result"] == "settle_no_response"
+
+
+@pytest.mark.asyncio
+async def test_settle_no_response_fails_at_failure_budget():
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = FakeGS(units=[unit], found_city_result="Action completed (no response).")
+    task = _task(
+        task_id="settle:65537",
+        unit_id=65537,
+        target_x=18,
+        target_y=24,
+        last_result="settle_no_response",
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "settle_no_response_retry_limit"
+    assert results[0]["status"] == "failed"
+    assert results[0]["result"] == "settle_no_response_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_builder_improve_error_fails_at_failure_budget():
+    unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=["IMPROVEMENT_MINE"],
+    )
+    gs = FakeGS(units=[unit], improve_tile_result="Error: improvement blocked")
+    task = _task(
+        task_id="builder_improve:65538",
+        kind="builder_improve",
+        unit_id=65538,
+        target_x=12,
+        target_y=19,
+        improvement="IMPROVEMENT_MINE",
+        last_result="Error: improvement blocked",
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "improve_error_retry_limit"
+    assert results[0]["status"] == "failed"
+    assert results[0]["result"] == "improve_error_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_settle_survives_repeated_identical_transient_errors_within_budget():
+    """Two byte-identical consecutive errors (e.g. a popup-blocked found_city) must
+    NOT permanently fail the task; the third attempt can still succeed."""
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+    error = "Error: FOUND_FAILED|Founding at 18,24 was requested but city did not appear."
+
+    first_gs = FakeGS(units=[unit], found_city_result=error)
+    updated, _ = await run_pre_model_tasks(first_gs, [task])
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+
+    second_gs = FakeGS(units=[unit], found_city_result=error)
+    updated, _ = await run_pre_model_tasks(second_gs, updated)
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 2
+
+    third_gs = FakeGS(units=[unit], found_city_result="FOUNDED|18,24")
+    updated, results = await run_pre_model_tasks(third_gs, updated)
+    assert updated[0].status == "complete"
+    assert results[0]["result"] == "FOUNDED|18,24"
+
+
+def test_task_state_round_trip_preserves_failure_count(tmp_path):
+    task = _task(last_result="Error: FOUND_FAILED", failure_count=2)
+    save_task_state(str(tmp_path), "run1", 4, [task])
+
+    loaded = load_task_state(str(tmp_path), "run1", 4)
+
+    assert loaded.tasks[0].failure_count == 2
 
 
 @pytest.mark.asyncio

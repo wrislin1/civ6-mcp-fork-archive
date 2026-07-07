@@ -31,8 +31,18 @@ TASK_KINDS = {"settle", "builder_improve"}
 
 ACTION_NO_RESPONSE = "Action completed (no response)."
 FOUND_CITY_RETRY_LIMIT = "found_city_failed_retry_limit"
+SETTLE_NO_RESPONSE = "settle_no_response"
+SETTLE_NO_RESPONSE_RETRY_LIMIT = "settle_no_response_retry_limit"
 IMPROVE_NO_RESPONSE = "improve_no_response"
 IMPROVE_NO_RESPONSE_RETRY_LIMIT = "improve_no_response_retry_limit"
+IMPROVE_ERROR_RETRY_LIMIT = "improve_error_retry_limit"
+BLOCKED_IMPROVEMENT_NOT_VALID = "blocked_improvement_not_valid"
+BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry_limit"
+
+# Consecutive at-target failures (of any kind) a task may accumulate before it
+# is marked failed. 3 leaves room for a transient blocker that persists across
+# two turns (e.g. a popup blocking the async found-city op) to clear.
+MAX_TASK_FAILURES = 3
 
 _TASK_LINE_RE = re_compile(
     r"^\s*TASK\s+(?P<kind>settle|builder_improve)\s+"
@@ -56,6 +66,7 @@ class UnitTask:
     improvement: str = ""
     status: str = "active"
     last_result: str = ""
+    failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -140,6 +151,7 @@ def _task_to_dict(task: UnitTask) -> dict[str, Any]:
         "improvement": task.improvement,
         "status": task.status,
         "last_result": task.last_result,
+        "failure_count": task.failure_count,
     }
 
 
@@ -155,6 +167,7 @@ def _task_from_dict(data: dict[str, Any]) -> UnitTask:
         improvement=data.get("improvement", ""),
         status=data.get("status", "active"),
         last_result=data.get("last_result", ""),
+        failure_count=data.get("failure_count", 0),
     )
 
 
@@ -224,7 +237,10 @@ def merge_tasks(
     """Upsert parsed ``updates`` onto ``existing`` tasks.
 
     - ``TASK`` updates (status != "cancelled") replace any existing task with
-      the same ``task_id``.
+      the same ``task_id``. A restatement (same kind/unit/target/improvement)
+      carries over the existing task's failure strikes instead of resetting
+      them, and cannot resurrect a task that already hit its failure budget --
+      only a changed target starts fresh.
     - ``CANCEL`` updates remove whichever existing task currently owns that
       ``unit_id`` (regardless of kind).
     - Tasks absent from ``updates`` persist unchanged.
@@ -243,13 +259,31 @@ def merge_tasks(
             ]:
                 del merged[task_id]
             continue
+        restated: UnitTask | None = None
         for task_id in [
             tid
             for tid, task in merged.items()
             if task.kind == update.kind
             and _task_unit_ids_equivalent(task.unit_id, update.unit_id)
         ]:
-            del merged[task_id]
+            task = merged.pop(task_id)
+            if (task.target_x, task.target_y, task.improvement) == (
+                update.target_x,
+                update.target_y,
+                update.improvement,
+            ):
+                restated = task
+        if restated is not None:
+            if restated.status == "failed":
+                # A verbatim restatement can't revive a task that exhausted its
+                # failure budget -- the model must change the target to retry.
+                continue
+            update = replace(
+                update,
+                created_turn=restated.created_turn,
+                last_result=restated.last_result,
+                failure_count=restated.failure_count,
+            )
         merged[update.task_id] = update
 
     # Cap ACTIVE tasks only: a freshly completed/lost task (which
@@ -390,6 +424,37 @@ def _touch_task(task: UnitTask, turn: int | None) -> UnitTask:
     return replace(task, updated_turn=turn)
 
 
+def _fail_or_retry(
+    task: UnitTask,
+    *,
+    action: str,
+    result_str: str,
+    limit_result: str,
+    turn: int | None,
+) -> tuple[UnitTask, dict[str, Any]]:
+    """Record a failed at-target attempt, escalating at the failure budget.
+
+    Consecutive at-target failures of any kind count against MAX_TASK_FAILURES
+    on the task itself (so the count survives merge_tasks restatements and does
+    not depend on error strings repeating verbatim); the attempt that reaches
+    the budget marks the task failed with ``limit_result``.
+    """
+    failures = task.failure_count + 1
+    if failures >= MAX_TASK_FAILURES:
+        new_task = replace(
+            task, status="failed", last_result=limit_result, failure_count=failures
+        )
+        return new_task, _result_dict(
+            task, status="failed", action=action, result=limit_result
+        )
+    new_task = _touch_task(
+        replace(task, last_result=result_str, failure_count=failures), turn
+    )
+    return new_task, _result_dict(
+        task, status="active", action=action, result=result_str
+    )
+
+
 def _unit_lookup_maps(units: Sequence[Any]) -> tuple[dict[int, Any], dict[int, Any]]:
     by_id = {unit.unit_id: unit for unit in units}
     by_index: dict[int, Any] = {}
@@ -432,21 +497,23 @@ async def _run_single_task(
         if at_target:
             result_str = await gs.found_city(unit.unit_index)
             if result_str.startswith("Error:"):
-                if task.last_result == result_str:
-                    new_task = replace(
-                        task,
-                        status="failed",
-                        last_result=FOUND_CITY_RETRY_LIMIT,
-                    )
-                    return new_task, _result_dict(
-                        task,
-                        status="failed",
-                        action="found_city",
-                        result=FOUND_CITY_RETRY_LIMIT,
-                    )
-                new_task = _touch_task(replace(task, last_result=result_str), turn)
-                return new_task, _result_dict(
-                    task, status="active", action="found_city", result=result_str
+                return _fail_or_retry(
+                    task,
+                    action="found_city",
+                    result_str=result_str,
+                    limit_result=FOUND_CITY_RETRY_LIMIT,
+                    turn=turn,
+                )
+            if result_str == ACTION_NO_RESPONSE:
+                # No output lines from the tuner is ambiguous, not success: a
+                # city may or may not exist. Retry (a founded city completes
+                # via unit_missing/lost next turn) rather than report complete.
+                return _fail_or_retry(
+                    task,
+                    action="found_city",
+                    result_str=SETTLE_NO_RESPONSE,
+                    limit_result=SETTLE_NO_RESPONSE_RETRY_LIMIT,
+                    turn=turn,
                 )
             new_task = replace(task, status="complete", last_result=result_str)
             return new_task, _result_dict(
@@ -472,56 +539,32 @@ async def _run_single_task(
         if task.improvement in unit.valid_improvements:
             result_str = await gs.improve_tile(unit.unit_index, task.improvement)
             if result_str.startswith("Error:"):
-                new_task = _touch_task(replace(task, last_result=result_str), turn)
-                return new_task, _result_dict(
-                    task, status="active", action="improve", result=result_str
+                return _fail_or_retry(
+                    task,
+                    action="improve",
+                    result_str=result_str,
+                    limit_result=IMPROVE_ERROR_RETRY_LIMIT,
+                    turn=turn,
                 )
             if result_str == ACTION_NO_RESPONSE:
-                if task.last_result == IMPROVE_NO_RESPONSE:
-                    new_task = replace(
-                        task,
-                        status="failed",
-                        last_result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
-                    )
-                    return new_task, _result_dict(
-                        task,
-                        status="failed",
-                        action="improve",
-                        result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
-                    )
-                new_task = _touch_task(replace(task, last_result=IMPROVE_NO_RESPONSE), turn)
-                return new_task, _result_dict(
+                return _fail_or_retry(
                     task,
-                    status="active",
                     action="improve",
-                    result=IMPROVE_NO_RESPONSE,
+                    result_str=IMPROVE_NO_RESPONSE,
+                    limit_result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
+                    turn=turn,
                 )
             new_task = replace(task, status="complete", last_result=result_str)
             return new_task, _result_dict(
                 task, status="complete", action="improve", result=result_str
             )
 
-        if task.last_result == "blocked_improvement_not_valid":
-            new_task = replace(
-                task,
-                status="failed",
-                last_result="blocked_improvement_not_valid_retry_limit",
-            )
-            return new_task, _result_dict(
-                task,
-                status="failed",
-                action="block",
-                result="blocked_improvement_not_valid_retry_limit",
-            )
-
-        new_task = _touch_task(
-            replace(task, last_result="blocked_improvement_not_valid"), turn
-        )
-        return new_task, _result_dict(
+        return _fail_or_retry(
             task,
-            status="active",
             action="block",
-            result="blocked_improvement_not_valid",
+            result_str=BLOCKED_IMPROVEMENT_NOT_VALID,
+            limit_result=BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT,
+            turn=turn,
         )
 
     if await _visible_hostile_nearby(
