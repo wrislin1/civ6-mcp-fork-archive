@@ -33,7 +33,7 @@ def _unit(unit_id, unit_index, x, y, moves_remaining=2.0, valid_improvements=Non
     )
 
 
-def _tile(x, y, units=None):
+def _tile(x, y, units=None, improvement=None, is_pillaged=False):
     return lq.TileInfo(
         x=x,
         y=y,
@@ -43,9 +43,10 @@ def _tile(x, y, units=None):
         is_hills=False,
         is_river=False,
         is_coastal=False,
-        improvement=None,
+        improvement=improvement,
         owner_id=-1,
         units=units,
+        is_pillaged=is_pillaged,
     )
 
 
@@ -190,16 +191,23 @@ def test_save_task_state_writes_expected_path(tmp_path):
     assert expected.exists()
 
 
-def test_save_task_state_drops_completed_and_lost_tasks(tmp_path):
+def test_save_task_state_persists_completed_and_lost_tombstones(tmp_path):
+    """Complete/lost tasks must survive on disk like failed ones: standing
+    memory can echo a stale TASK line for up to max_age_turns, and without the
+    tombstone the echo would resurrect the resolved task on a later turn."""
     active = _task(task_id="settle:1", unit_id=1, status="active")
     lost = _task(task_id="settle:2", unit_id=2, status="lost")
     done = _task(task_id="settle:3", unit_id=3, status="complete")
 
     saved = save_task_state(str(tmp_path), "run1", 0, [active, lost, done])
 
-    assert saved.tasks == (active,)
+    assert saved.tasks == (active, lost, done)
     loaded = load_task_state(str(tmp_path), "run1", 0)
-    assert loaded.tasks == (active,)
+    assert {t.task_id: t.status for t in loaded.tasks} == {
+        "settle:1": "active",
+        "settle:2": "lost",
+        "settle:3": "complete",
+    }
 
 
 def test_save_task_state_persists_failed_tombstones(tmp_path):
@@ -450,9 +458,13 @@ def test_merge_cap_never_evicts_active_task_for_completed_one():
 
     merged = merge_tasks(existing, [], max_tasks=2)
 
-    # Both active tasks survive; the completed one is dropped, not [B, C].
-    assert {t.task_id for t in merged} == {"settle:1", "settle:2"}
-    assert all(t.status == "active" for t in merged)
+    # Both active tasks survive; the completed one rides along as a tombstone
+    # outside the cap (not [B, C] with A evicted).
+    assert {t.task_id: t.status for t in merged} == {
+        "settle:1": "active",
+        "settle:2": "active",
+        "settle:3": "complete",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -766,7 +778,9 @@ def test_merge_restatement_does_not_resurrect_completed_task():
 
     merged = merge_tasks(existing, updates, max_tasks=8)
 
-    assert merged == ()
+    # The tombstone survives (so later-turn echoes stay blocked too) but the
+    # echo must not re-activate it.
+    assert [(t.task_id, t.status) for t in merged] == [("settle:65537", "complete")]
 
 
 def test_merge_restatement_does_not_resurrect_lost_task():
@@ -777,7 +791,7 @@ def test_merge_restatement_does_not_resurrect_lost_task():
 
     merged = merge_tasks(existing, updates, max_tasks=8)
 
-    assert merged == ()
+    assert [(t.task_id, t.status) for t in merged] == [("settle:65537", "lost")]
 
 
 def test_merge_restated_task_keeps_original_identity():
@@ -1688,3 +1702,152 @@ async def test_future_dated_failed_tombstone_is_dropped_after_rollback():
 
     assert updated == ()  # tombstone removed from state entirely
     assert gs.move_unit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# High-effort review fixes: parse tolerance, tombstones, blocked-hostile
+# budget, already-built completion
+# ---------------------------------------------------------------------------
+
+
+def test_parse_task_line_tolerates_trailing_punctuation():
+    tasks = parse_task_lines("- TASK settle unit_id=123 target=17,22.", 5)
+
+    assert len(tasks) == 1
+    assert (tasks[0].target_x, tasks[0].target_y) == (17, 22)
+
+
+def test_parse_cancel_line_tolerates_trailing_punctuation():
+    tasks = parse_task_lines("CANCEL unit_id=123.", 5)
+
+    assert len(tasks) == 1
+    assert tasks[0].kind == "cancel"
+
+
+def test_parse_task_line_normalizes_improvement_tokens():
+    """Bare names, quoted enums, and trailing punctuation must all normalize
+    to the game-DB IMPROVEMENT_* form or the task can never match
+    valid_improvements and strikes out despite being buildable."""
+    tasks = parse_task_lines(
+        "TASK builder_improve unit_id=5 target=3,4 improvement=Farm.\n"
+        'TASK builder_improve unit_id=6 target=5,6 improvement="IMPROVEMENT_MINE"\n',
+        5,
+    )
+
+    assert [t.improvement for t in tasks] == ["IMPROVEMENT_FARM", "IMPROVEMENT_MINE"]
+
+
+def test_completed_tombstone_survives_save_load_and_blocks_later_echo(tmp_path):
+    """The standing-memory block can echo a resolved TASK line turns later; the
+    persisted tombstone must keep blocking the resurrection across save/load."""
+    done = _task(task_id="settle:65537", unit_id=65537, status="complete")
+    save_task_state(str(tmp_path), "run1", 0, [done])
+
+    loaded = load_task_state(str(tmp_path), "run1", 0)
+    updates = parse_task_lines("TASK settle unit_id=65537 target=18,24", 9)
+    merged = merge_tasks(loaded.tasks, updates, max_tasks=8)
+
+    assert [(t.task_id, t.status) for t in merged] == [("settle:65537", "complete")]
+
+
+@pytest.mark.asyncio
+async def test_visible_hostile_block_counts_against_failure_budget():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(1, 1): [_tile(1, 1, units=["Barbarian WARRIOR"])]},
+    )
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "blocked_visible_hostile"
+    assert updated[0].failure_count == 1
+
+
+@pytest.mark.asyncio
+async def test_visible_hostile_block_fails_task_at_budget():
+    """A stationary hostile (e.g. a camp garrison) must exhaust the failure
+    budget rather than re-block every turn forever holding a cap slot."""
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(1, 1): [_tile(1, 1, units=["Barbarian WARRIOR"])]},
+    )
+    task = _task(
+        task_id="settle:65537", unit_id=65537, target_x=18, target_y=24,
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "blocked_visible_hostile_retry_limit"
+    assert results[0]["result"] == "blocked_visible_hostile_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_at_target_improve_completes_when_improvement_already_built():
+    """A no-response improve that actually landed leaves the improvement built
+    and absent from valid_improvements next turn -- that is completion, not a
+    blocked_improvement_not_valid strike."""
+    unit = _unit(unit_id=65537, unit_index=1, x=12, y=19, valid_improvements=[])
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(12, 19): [_tile(12, 19, improvement="IMPROVEMENT_FARM")]},
+    )
+    task = _task(
+        task_id="builder_improve:65537", kind="builder_improve", unit_id=65537,
+        target_x=12, target_y=19, improvement="IMPROVEMENT_FARM",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "complete"
+    assert updated[0].last_result == "improvement_already_built"
+    assert results[0]["result"] == "improvement_already_built"
+    assert gs.improve_tile_calls == []
+
+
+@pytest.mark.asyncio
+async def test_at_target_improve_still_strikes_when_tile_lacks_improvement():
+    unit = _unit(unit_id=65537, unit_index=1, x=12, y=19, valid_improvements=[])
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={(12, 19): [_tile(12, 19)]},
+    )
+    task = _task(
+        task_id="builder_improve:65537", kind="builder_improve", unit_id=65537,
+        target_x=12, target_y=19, improvement="IMPROVEMENT_FARM",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "blocked_improvement_not_valid"
+    assert updated[0].failure_count == 1
+
+
+@pytest.mark.asyncio
+async def test_at_target_improve_pillaged_improvement_does_not_complete():
+    """A pillaged matching improvement is not a completion -- the builder
+    should fall through to the normal strike/retry path."""
+    unit = _unit(unit_id=65537, unit_index=1, x=12, y=19, valid_improvements=[])
+    gs = FakeGS(
+        units=[unit],
+        map_tiles={
+            (12, 19): [
+                _tile(12, 19, improvement="IMPROVEMENT_FARM", is_pillaged=True)
+            ]
+        },
+    )
+    task = _task(
+        task_id="builder_improve:65537", kind="builder_improve", unit_id=65537,
+        target_x=12, target_y=19, improvement="IMPROVEMENT_FARM",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "blocked_improvement_not_valid"

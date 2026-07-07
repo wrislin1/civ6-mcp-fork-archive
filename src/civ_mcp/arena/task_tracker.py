@@ -37,6 +37,9 @@ IMPROVE_NO_RESPONSE_RETRY_LIMIT = "improve_no_response_retry_limit"
 IMPROVE_ERROR_RETRY_LIMIT = "improve_error_retry_limit"
 BLOCKED_IMPROVEMENT_NOT_VALID = "blocked_improvement_not_valid"
 BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry_limit"
+BLOCKED_VISIBLE_HOSTILE = "blocked_visible_hostile"
+BLOCKED_VISIBLE_HOSTILE_RETRY_LIMIT = "blocked_visible_hostile_retry_limit"
+IMPROVEMENT_ALREADY_BUILT = "improvement_already_built"
 TASK_EXCEPTION_RETRY_LIMIT = "task_exception_retry_limit"
 MOVE_ERROR_RETRY_LIMIT = "move_error_retry_limit"
 MOVE_BLOCKED_RETRY_LIMIT = "move_blocked_retry_limit"
@@ -45,6 +48,7 @@ MOVE_NO_RESPONSE_RETRY_LIMIT = "move_no_response_retry_limit"
 UNRECOGNIZED_RESULT_RETRY_LIMIT = "unrecognized_result_retry_limit"
 UNITS_FETCH_FAILED = "units_fetch_failed"
 DROPPED_FUTURE_DATED = "dropped_future_dated"
+SKIPPED_NO_MOVES = "skipped_no_moves"
 
 # Success prefixes per at-target action: _action_result falls back to the raw
 # tuner lines when no OK:/ERR: line is present, so "not an error" is not
@@ -60,16 +64,20 @@ MAX_TASK_FAILURES = 3
 
 # Public: memory.py's standing-plan terminator lookahead reuses these so
 # "does a real TASK/CANCEL line follow" and "what actually parses as a task"
-# can never disagree. Bullet-tolerant because they run on raw model summaries.
+# can never disagree. Bullet-tolerant because they run on raw model summaries,
+# and tolerant of trailing sentence punctuation for the same reason: a model
+# ending its bullet "target=17,22." must not silently lose the task. The
+# improvement token excludes punctuation (instead of \S+) so that trailing
+# period lands in the punctuation tail, not inside the improvement name.
 TASK_LINE_RE = re_compile(
     r"^\s*(?:[-*•]+\s+)?TASK\s+(?P<kind>settle|builder_improve)\s+"
     r"unit_id=(?P<unit_id>-?\d+)\s+"
     r"target=\(?\s*(?P<tx>-?\d+)\s*,\s*(?P<ty>-?\d+)\s*\)?"
-    r"(?:\s+improvement=(?P<improvement>\S+))?\s*$",
+    r"(?:\s+improvement=(?P<improvement>[\w\"'`-]+))?[\s.,;:!]*$",
     IGNORECASE,
 )
 CANCEL_LINE_RE = re_compile(
-    r"^\s*(?:[-*•]+\s+)?CANCEL\s+unit_id=(?P<unit_id>-?\d+)\s*$", IGNORECASE
+    r"^\s*(?:[-*•]+\s+)?CANCEL\s+unit_id=(?P<unit_id>-?\d+)[\s.,;:!]*$", IGNORECASE
 )
 
 
@@ -138,15 +146,20 @@ def load_task_state(transcript_dir: str, run_id: str, player_id: int) -> TaskSta
 def save_task_state(
     transcript_dir: str, run_id: str, player_id: int, tasks: Sequence[UnitTask]
 ) -> TaskState:
-    """Persist the active tasks plus failed tombstones for a player.
+    """Persist the active tasks plus resolved tombstones for a player.
 
-    Failed tasks are kept on disk so merge_tasks' restatement guard still sees
-    them on later turns -- without the tombstone a verbatim restatement would
-    re-arm the full failure budget every turn. Completed/lost tasks are
-    naturally terminal and are dropped. Write is atomic best-effort: a sibling
+    Resolved tasks (failed/complete/lost) are kept on disk so merge_tasks'
+    restatement guard still sees them on later turns -- without the tombstone
+    a verbatim restatement would re-arm a failed task's full failure budget,
+    or resurrect a completed/lost task the standing-memory block still echoes
+    (the injected plan can carry a stale TASK line for up to max_age_turns).
+    Tombstones are bounded: at most one per task_id, cleared by a changed
+    target or an explicit CANCEL. Write is atomic best-effort: a sibling
     temp file is written first, then swapped into place via Path.replace().
     """
-    persisted = tuple(t for t in tasks if t.status in ("active", "failed"))
+    persisted = tuple(
+        t for t in tasks if t.status in ("active", "failed", "complete", "lost")
+    )
     state = TaskState(
         schema_version=SCHEMA_VERSION, run_id=run_id, player_id=player_id, tasks=persisted
     )
@@ -214,8 +227,12 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
             # case-sensitively (e.g. "IMPROVEMENT_FARM"); the TASK regex is
             # IGNORECASE, so normalize here or a lowercase token never matches
             # unit.valid_improvements and the task strikes out despite being
-            # buildable.
-            improvement = (match.group("improvement") or "").upper()
+            # buildable. Models also quote enum values and drop the
+            # IMPROVEMENT_ prefix ("Farm", '"IMPROVEMENT_FARM"') -- both
+            # normalize to tokens that could never match otherwise.
+            improvement = (match.group("improvement") or "").strip("\"'`").upper()
+            if improvement and not improvement.startswith("IMPROVEMENT_"):
+                improvement = f"IMPROVEMENT_{improvement}"
             if kind == "builder_improve" and not improvement:
                 continue
             parsed.append(
@@ -279,9 +296,10 @@ def merge_tasks(
     - ``CANCEL`` updates remove whichever existing task currently owns that
       ``unit_id`` (regardless of kind).
     - Tasks absent from ``updates`` persist unchanged.
-    - Only ``active`` tasks appear in the output; the newest ``max_tasks`` of
-      them (by ``updated_turn``) are kept. A non-active task (completed/lost/
-      cancelled) can never occupy a cap slot and evict an active one.
+    - Only ``active`` tasks count against the cap; the newest ``max_tasks`` of
+      them (by ``updated_turn``) are kept. Resolved tasks (failed/complete/
+      lost) ride along as tombstones outside the cap so the restatement guard
+      keeps working on later turns.
     """
     merged: dict[str, UnitTask] = {task.task_id: task for task in existing}
 
@@ -328,17 +346,21 @@ def merge_tasks(
     # Cap ACTIVE tasks only: a freshly completed/lost task (which
     # run_pre_model_tasks returns in `existing`, carrying its original
     # updated_turn) must never occupy a cap slot and evict an in-progress
-    # active task. Completed/lost/cancelled tasks are dropped from the output;
-    # failed tasks survive as tombstones (outside the cap) so the restatement
-    # guard keeps working on later turns. A tombstone clears when the model
-    # changes the target or explicitly CANCELs the unit.
+    # active task. Resolved tasks (failed/complete/lost) survive as tombstones
+    # (outside the cap) so the restatement guard keeps working on later turns
+    # -- the standing-memory block can echo a stale TASK line for up to
+    # max_age_turns, and without the tombstone the echo would resurrect the
+    # task. A tombstone clears when the model changes the target or explicitly
+    # CANCELs the unit.
     ordered = sorted(merged.values(), key=lambda task: task.updated_turn)
     active = [task for task in ordered if task.status == "active"]
     if max_tasks > 0 and len(active) > max_tasks:
         active = active[-max_tasks:]
     kept = {task.task_id for task in active}
     return tuple(
-        task for task in ordered if task.task_id in kept or task.status == "failed"
+        task
+        for task in ordered
+        if task.task_id in kept or task.status in ("failed", "complete", "lost")
     )
 
 
@@ -461,6 +483,24 @@ async def _visible_hostile_nearby(
     )
 
 
+async def _target_tile_has_improvement(gs: Any, task: UnitTask) -> bool:
+    """True when the task's target tile already carries its improvement, unpillaged.
+
+    Conservative on any failure: an unreadable tile must fall through to the
+    normal strike path, never fabricate a completion.
+    """
+    try:
+        tiles = await gs.get_map_area(task.target_x, task.target_y, 0)
+    except Exception:
+        return False
+    for tile in tiles:
+        if (tile.x, tile.y) == (task.target_x, task.target_y):
+            return tile.improvement == task.improvement and not getattr(
+                tile, "is_pillaged", False
+            )
+    return False
+
+
 def _touch_task(task: UnitTask, turn: int | None) -> UnitTask:
     if turn is None:
         return task
@@ -557,9 +597,17 @@ async def _advance_toward_target(
     if await _visible_hostile_nearby(
         gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
     ):
-        new_task = _touch_task(replace(task, last_result="blocked_visible_hostile"), turn)
-        return new_task, _result_dict(
-            task, status="active", action="block", result="blocked_visible_hostile"
+        # A hostile camped near the path/target (e.g. a barbarian camp
+        # garrison) may never leave: without a strike a permanently blocked
+        # task would re-block every turn forever, holding a cap slot for the
+        # rest of the run. The budget keeps the task active for a transient
+        # passer-by and fails it when the blocker persists.
+        return _fail_or_retry(
+            task,
+            action="block",
+            result_str=BLOCKED_VISIBLE_HOSTILE,
+            limit_result=BLOCKED_VISIBLE_HOSTILE_RETRY_LIMIT,
+            turn=turn,
         )
 
     result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
@@ -632,9 +680,9 @@ async def _run_single_task(
         )
 
     if unit.moves_remaining <= 0:
-        new_task = _touch_task(replace(task, last_result="skipped_no_moves"), turn)
+        new_task = _touch_task(replace(task, last_result=SKIPPED_NO_MOVES), turn)
         return new_task, _result_dict(
-            task, status="active", action="skip", result="skipped_no_moves"
+            task, status="active", action="skip", result=SKIPPED_NO_MOVES
         )
 
     at_target = (unit.x, unit.y) == (task.target_x, task.target_y)
@@ -667,6 +715,20 @@ async def _run_single_task(
                 no_response_limit=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
                 error_limit=IMPROVE_ERROR_RETRY_LIMIT,
                 turn=turn,
+            )
+
+        # The improvement dropping out of valid_improvements is exactly what a
+        # silently-succeeded improve looks like one turn later: a no-response
+        # attempt (popup ate the tuner output) that actually landed leaves the
+        # improvement built and therefore no longer offered. Check the tile
+        # before striking so completed work isn't reported as blocked.
+        if await _target_tile_has_improvement(gs, task):
+            new_task = replace(
+                task, status="complete", last_result=IMPROVEMENT_ALREADY_BUILT
+            )
+            return new_task, _result_dict(
+                task, status="complete", action="improve",
+                result=IMPROVEMENT_ALREADY_BUILT,
             )
 
         return _fail_or_retry(
