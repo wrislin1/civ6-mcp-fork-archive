@@ -1216,6 +1216,55 @@ async def test_task_state_save_failure_does_not_abort_arena_turn(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_pre_model_save_failure_does_not_drop_turn_task_capture(monkeypatch, tmp_path):
+    """A transient pre-model save failure must not discard the TASK lines the
+    model emits this turn: post-turn capture still parses and persists them."""
+    from civ_mcp.arena import coordinator
+
+    real_save = coordinator.save_task_state
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk full")
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator, "save_task_state", flaky)
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(5, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[5],
+        run_id="task-flaky-save",
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {
+            "summary": "ignored",
+            "transcript": {
+                "final_summary": "STANDING PLAN:\nTASK settle unit_id=42 target=10,12\n"
+            },
+        },
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|5", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    path = task_path(str(tmp_path), "task-flaky-save", 5)
+    assert path.exists()
+    assert '"unit_id": 42' in path.read_text()
+    # the transient pre-model error is still surfaced
+    assert result["log"][0]["task_tracker"]["error"] == "OSError('disk full')"
+
+
+@pytest.mark.asyncio
 async def test_exclusive_cli_briefing_prebuild_uses_explicit_context_budget(monkeypatch):
     from civ_mcp.arena import coordinator
     from civ_mcp.arena.briefing import Briefing

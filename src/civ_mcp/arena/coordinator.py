@@ -149,15 +149,22 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 task_results: list = []
                 active_tasks_after: tuple = ()
                 task_block = ""
+                # Latest task set that is safe to merge captured TASK lines onto.
+                # None only when the load itself failed (no trustworthy base) --
+                # a later pre-model failure (save, formatting) must not cost us
+                # the TASK/CANCEL lines the model emits this turn.
+                task_capture_base: tuple | None = None
                 if opts.task_tracker.enabled:
                     try:
                         task_state = load_task_state(transcript_dir, run_id, st.local)
                         active_tasks_before = tuple(
                             t for t in task_state.tasks if t.status == "active"
                         )
+                        task_capture_base = active_tasks_before
                         updated_tasks, task_results = await run_pre_model_tasks(
                             gs, active_tasks_before, turn=st.turn
                         )
+                        task_capture_base = updated_tasks
                         pre_model_state = save_task_state(
                             transcript_dir, run_id, st.local, updated_tasks
                         )
@@ -168,7 +175,6 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                             max_tasks=opts.task_tracker.max_tasks,
                         )
                     except Exception as e:
-                        active_tasks_before = ()
                         updated_tasks = ()
                         task_results = []
                         active_tasks_after = ()
@@ -227,12 +233,12 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     except Exception as e:
                         memory_error = repr(e)
                         print(f"[arena] standing memory save failed: {e!r}", file=sys.stderr)
-                if opts.task_tracker.enabled and not task_tracker_error:
+                if opts.task_tracker.enabled and task_capture_base is not None:
                     try:
                         # Parse from the raw summary, not the captured plan: the
                         # capture clamp must never cost us a trailing TASK line.
                         new_tasks = parse_task_lines(final_summary, st.turn)
-                        merged = merge_tasks(updated_tasks, new_tasks, opts.task_tracker.max_tasks)
+                        merged = merge_tasks(task_capture_base, new_tasks, opts.task_tracker.max_tasks)
                         captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
                         active_tasks_after = captured_state.tasks
                     except Exception as e:
