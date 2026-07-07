@@ -175,7 +175,11 @@ def format_memory_block(
         return ""
     age: int | None = None
     if current_turn is not None:
-        age = max(0, current_turn - memory.updated_turn)
+        age = current_turn - memory.updated_turn
+        if age < 0:
+            # Future-dated: an earlier save was reloaded, so this plan belongs
+            # to an abandoned timeline. Never inject it as fresh.
+            return ""
         if max_age_turns is not None and age > max_age_turns:
             return ""
 

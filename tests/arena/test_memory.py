@@ -431,6 +431,23 @@ def test_format_memory_block_includes_memory_at_max_age_boundary():
     assert result == "== STANDING PLAN (captured turn 5, 10 turns old) ==\nKeep marching."
 
 
+def test_format_memory_block_omits_future_dated_memory():
+    """Memory captured at a later turn than the current one means an earlier
+    save was reloaded: the plan describes an abandoned future and must not be
+    injected as fresh."""
+    memory = StandingMemory(
+        schema_version=1,
+        run_id="run1",
+        player_id=0,
+        updated_turn=50,
+        text="Attack Rome with the army we built by turn 48.",
+    )
+
+    result = format_memory_block(memory, current_turn=30, max_age_turns=10)
+
+    assert result == ""
+
+
 def test_format_memory_block_returns_empty_for_none():
     assert format_memory_block(None) == ""
 
