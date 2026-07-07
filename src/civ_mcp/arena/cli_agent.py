@@ -480,10 +480,15 @@ class CLIAgentPolicy:
     ) -> dict:
         include_standing_plan_instruction = self.options.standing_plan_enabled
         playbook_chars = len(self._system_prefix)
+        n_ctx = (
+            DEFAULT_N_CTX
+            if self.options.context_budget == "auto"
+            else int(self.options.context_budget)
+        )
         briefing = await maybe_build_briefing(
             gs,
             self.options,
-            n_ctx=DEFAULT_N_CTX,
+            n_ctx=n_ctx,
             playbook_chars=playbook_chars,
             tool_schema_chars=0,
             supplied=briefing,

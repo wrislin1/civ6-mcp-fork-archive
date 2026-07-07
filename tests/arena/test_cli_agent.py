@@ -6,7 +6,7 @@ import signal
 import pytest
 
 from civ_mcp.arena.cli_agent import CLIAgentPolicy, _clamp_final_summary
-from civ_mcp.arena.config import CivOptions, MemoryOptions, TaskTrackerOptions
+from civ_mcp.arena.config import BriefingOptions, CivOptions, MemoryOptions, TaskTrackerOptions
 
 def _prompt(pid=2, turn=3):
     """Build a representative prompt string for _build_argv tests that don't care
@@ -1177,3 +1177,58 @@ def test_call_uses_supplied_empty_briefing_without_rebuilding(monkeypatch):
 
     assert result["summary"] == "ok"
     assert result["transcript"]["briefing_errors"] == ["empty prebuild"]
+
+
+@pytest.mark.asyncio
+async def test_cli_policy_uses_explicit_context_budget_for_briefing(monkeypatch):
+    from civ_mcp.arena import cli_agent
+    from civ_mcp.arena.briefing import Briefing
+
+    captured = {}
+
+    async def fake_briefing(gs, options, *, n_ctx, playbook_chars, tool_schema_chars, supplied=None):
+        captured["n_ctx"] = n_ctx
+        captured["playbook_chars"] = playbook_chars
+        captured["tool_schema_chars"] = tool_schema_chars
+        captured["supplied"] = supplied
+        return Briefing(text="", tokens=0, sections=[])
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self):
+            return (
+                json.dumps({
+                    "type": "result",
+                    "subtype": "success",
+                    "result": "ok",
+                    "usage": {},
+                    "total_cost_usd": 0.0,
+                }).encode(),
+                b"",
+            )
+
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(cli_agent, "maybe_build_briefing", fake_briefing)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude",
+        FakeCost(),
+        project_dir="/x",
+        timeout_s=5,
+        options=CivOptions(
+            context_budget=8192,
+            briefing=BriefingOptions(enabled=True),
+        ),
+    )
+
+    await pol(None, player_id=3, turn=7)
+
+    assert captured["n_ctx"] == 8192
+    assert captured["tool_schema_chars"] == 0
