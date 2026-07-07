@@ -23,7 +23,10 @@ from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SCHEMA_VERSION = 1
 
-_STANDING_PLAN_RE = re.compile(
+# Public: cli_agent's summary clamp reuses this matcher (via
+# find_standing_plan_start) so "where does the plan start" can never drift
+# between extraction and clamping -- the two copies diverged once already.
+STANDING_PLAN_RE = re.compile(
     r"^\s*(?:[-*\u2022]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
     r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)\s*(.*)$",
     re.IGNORECASE,
@@ -138,7 +141,7 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     start_idx = None
     inline_content = ""
     for idx, line in enumerate(lines):
-        match = _STANDING_PLAN_RE.match(line)
+        match = STANDING_PLAN_RE.match(line)
         if match:
             start_idx = idx
             inline_content = match.group(1).strip()
@@ -190,6 +193,16 @@ def format_memory_block(
         elif age != 0:
             suffix += f", {age} turns old"
     return f"== STANDING PLAN ({suffix}) ==\n{memory.text}"
+
+
+def find_standing_plan_start(text: str) -> int:
+    """Char offset of the first standing-plan header line in text, or -1."""
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if STANDING_PLAN_RE.match(line):
+            return offset
+        offset += len(line)
+    return -1
 
 
 def _clamp(text: str, max_chars: int) -> str:

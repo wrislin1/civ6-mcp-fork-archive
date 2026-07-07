@@ -5,6 +5,7 @@ from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.briefing import Briefing
 from civ_mcp.arena.budget import explicit_n_ctx
 from civ_mcp.arena.config import CivOptions
+from civ_mcp.arena.memory import find_standing_plan_start
 from civ_mcp.arena.prompt_context import maybe_build_briefing
 from civ_mcp.arena.prompting import build_opening_prompt
 
@@ -90,26 +91,12 @@ _PROMPT = (
 )
 _PROMPT_SUMMARY_TAIL = " When done, give a one-line summary."
 
-_CLI_STANDING_PLAN_RE = re.compile(
-    r"^\s*(?:[-*•]+\s+)?(?:#{1,6}\s*)?(?:[*_]{1,3})?\s*standing plan\s*"
-    r"(?::\s*(?:[*_]{1,3})?|(?:[*_]{1,3})\s*:)",
-    re.IGNORECASE,
-)
-
-
-def _find_standing_plan_start(text: str) -> int:
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        if _CLI_STANDING_PLAN_RE.match(line):
-            return offset
-        offset += len(line)
-    return -1
-
-
 def _clamp_final_summary(text: str, max_summary_chars: int) -> str:
+    # memory.find_standing_plan_start shares extraction's exact matcher, so a
+    # plan this clamp preserves is always one extract_standing_plan can find.
     if len(text) <= max_summary_chars:
         return text
-    plan_start = _find_standing_plan_start(text)
+    plan_start = find_standing_plan_start(text)
     if plan_start >= 0:
         return text[plan_start : plan_start + max_summary_chars].strip()
     return text[:max_summary_chars]
