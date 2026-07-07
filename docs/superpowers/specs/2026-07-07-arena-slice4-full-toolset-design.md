@@ -15,9 +15,10 @@ new game-system tools, with era/state gating and the noted completion-cap raise.
 Two structural facts anchor the design:
 
 1. **Two tool layers.** In-process `local` civs get tools from the arena registry
-   (`src/civ_mcp/arena/registry.py`, 72 tools today); `cli-claude`/`cli-codex` civs get
-   the real MCP server toolset (76 tools, minus the `run_lua` sandbox removal). Parity
-   and gating are registry-layer work; each NEW system tool lands in **both** layers.
+   (`src/civ_mcp/arena/registry.py`); `cli-claude`/`cli-codex` civs get the real MCP
+   server toolset (minus the `run_lua` sandbox removal). Exact tool counts drift and
+   are test-backed, not restated here. Parity and gating are registry-layer work;
+   each NEW system tool lands in **both** layers.
 2. **Context is not a constraint.** gemma4-26b runs at `--ctx-size 131072` on both
    gateways (verified in `/opt/brothereye/infra/llama-swap/config.*.yaml`); current
    prompts are ~12–16k tokens. Gating exists for invalid-call churn and attention
@@ -40,14 +41,28 @@ Two structural facts anchor the design:
   `HasTech` / `HasCivic` / unit-class checks — emitting one line:
   `CAPS|spies=0|government=1|religious_unit=0|gp_unit=0|corps=0|army=0|air=0|archaeology=0|great_works=0`
   parsed into a flags dict.
-- `ToolDef` gains optional `requires: str | None` naming a snapshot flag.
-  `openai_tools(names, caps)` drops tools whose flag is false; no flag = always exposed.
-- `resolve_tools("full")` semantics unchanged (all registered names); gating filters at
-  schema-build time, so pinned-list A/B configs and `tools: full` both gate uniformly.
+- `ToolDef` gains optional `requires: str | None` naming a snapshot flag. A single
+  `filter_tools(names, caps) -> tuple[str, ...]` drops names whose flag is false
+  (no flag = always exposed).
+- **The filtered list is the agent's only tool vocabulary.** `LLMPolicy` computes
+  `visible_tool_names = filter_tools(self._tool_names, caps)` once per turn and uses
+  it for all three consumers: the schema build (`openai_tools(visible_tool_names)`),
+  invalid-call classification (`agent.py:175`), and the `_dispatch(..., allowed=...)`
+  execution allowlist (`agent.py:186`). Filtering only the schema would leave gated
+  tools silently callable.
+- `resolve_tools("full")` semantics unchanged (all registered names); gating filters
+  downstream of resolution, so pinned-list A/B configs and `tools: full` gate uniformly.
 
 **Fail-open.** Snapshot failure (Lua error, parse failure, disconnect) degrades to the
 FULL toolset with a stderr `[arena]` log line — an ungated tool costs churn; an
 over-closed gate silently removes an ability. Mirrors the degrade-not-abort doctrine.
+
+**Gate principle: action tools gate on *executable-now* state** — the unlock AND the
+game objects the action needs — so an exposed tool can always be legally invoked.
+Unlock-only gates (e.g. a flight tech with no aircraft) would re-introduce exactly the
+invalid-call churn gating exists to remove. Discoverability is not lost: production
+lists and the playbook carry the "build toward it" knowledge; the tool appears on the
+turn after the prerequisite unit/object exists (the snapshot is per-turn).
 
 **Gate table.**
 
@@ -57,12 +72,12 @@ over-closed gate silently removes an ability. Mirrors the degrade-not-abort doct
 | `government` | `change_government` | CIVIC_CODE_OF_LAWS |
 | `religious_unit` | `spread_religion` | owns ≥1 missionary/apostle/inquisitor |
 | `gp_unit` | `activate_great_person` | owns ≥1 Great Person unit |
-| `corps` | `form_corps` | CIVIC_NATIONALISM |
-| `army` | `form_army` | CIVIC_MOBILIZATION |
-| `air` | `rebase_unit` | TECH_FLIGHT or owns ≥1 air unit |
-| `archaeology` | `excavate_artifact` | TECH_NATURAL_HISTORY |
-| `great_works` | `get_great_works`, `move_great_work` | owns ≥1 great work |
-| *(none)* | readouts: strategic map, notifications, gossip, loyalty, climate | always exposed |
+| `corps` | `form_corps` | CIVIC_NATIONALISM **and** owns ≥2 same-type land military units |
+| `army` | `form_army` | CIVIC_MOBILIZATION **and** owns ≥1 corps-formation unit |
+| `air` | `rebase_unit` | owns ≥1 air unit |
+| `archaeology` | `excavate_artifact` | owns ≥1 archaeologist with ≥1 charge (Natural History is a **civic** — CIVIC_NATURAL_HISTORY — and is implied by ownership) |
+| `great_works` | `move_great_work` | owns ≥1 great work |
+| *(none)* | readouts: strategic map, notifications, gossip, loyalty, climate, `get_great_works` (slot visibility matters before the first work exists) | always exposed |
 
 **CLI civs are not gated** (they see MCP server tools directly). Acceptable: frontier
 models handle "not yet unlocked" replies gracefully; gating's target is small local
@@ -74,6 +89,16 @@ Newly exposed to `local` civs: `get_spies`, `spy_action` (single tool, action en
 mirroring the server), `change_government`, `spread_religion`, `activate_great_person`,
 `get_strategic_map`, `get_notifications`.
 
+**Naming note.** `activate_great_person` and `spread_religion` are **local flat
+wrappers over existing GameState methods** (`gs.activate_great_person`,
+`gs.spread_religion`); the MCP server reaches those same methods through
+`unit_action(action="activate"|"spread_religion")`. The flat form is a small-model
+ergonomics choice, not name-for-name server parity. All new unit-taking registry
+tools accept the composite `unit_id` and convert via `_unit_index()`
+(`registry.py:152`), matching the existing wrapper convention — this locks in for
+`activate_great_person`, `spread_religion`, `form_corps`, `form_army`, `rebase_unit`,
+and `excavate_artifact`.
+
 Deliberately NOT exposed to puppets, with reasons recorded here:
 - `end_turn` — the coordinator owns turn-end (`finish_units` + `restore_local`).
 - `get_diary` — puppets use standing memory (Slice 3), not the human diary.
@@ -81,8 +106,11 @@ Deliberately NOT exposed to puppets, with reasons recorded here:
   `restart_and_load`, `load_save_from_menu`, `load_game_save`) — game-lifecycle control
   stays with the operator.
 - `run_lua` — the decisive sandbox layer stays removed.
-- `dismiss_popup` — puppets don't render popups; autoresolve + the orphan-session sweep
-  (`7875728`) own blocking UI.
+- `dismiss_popup` — not registered in the arena registry (local civs); autoresolve +
+  the orphan-session sweep (`7875728`) own blocking UI. The server-side CLI-civ
+  toolset still includes it today (`_ARENA_PUPPET_TOOLS` at `server.py:378` removes
+  only lifecycle, `end_turn`, `run_lua`) — left unchanged; CLI-civ gating is out of
+  scope.
 
 ## Section 3 — New D Systems
 
@@ -100,8 +128,9 @@ cheapest-first so value lands early:
 3. **Climate & disasters** — `get_climate`: climate phase, sea level, active/recent
    disasters with tile positions (`Game.GetClimate` area; greenfield, live probing).
    Always on.
-4. **Great Works** — `get_great_works` (works, slots, theming status per building) +
-   `move_great_work(work_id, target_city, building, slot)`. Gated `great_works`.
+4. **Great Works** — `get_great_works` (works, slots, theming status per building;
+   always-on readout) + `move_great_work(work_id, target_city, building, slot)`,
+   gated `great_works` (owns ≥1 great work).
 5. **Formations** — `form_corps(unit_id, merge_unit_id)`, `form_army(unit_id, merge_unit_id)`
    via `UnitCommandTypes.FORM_CORPS` / `FORM_ARMY`. Gated `corps` / `army`.
 6. **Air operations** — `rebase_unit(unit_id, x, y)`; air attacks reuse the existing
@@ -111,19 +140,40 @@ cheapest-first so value lands early:
 
 **Live-verification protocol.** Systems 1, 3, 4–7 depend on Lua APIs only confirmable
 against a running game, and the watcher owns the single FireTuner connection until the
-current 50-turn run ends. Therefore: implementation + tests build against *recorded
-fixtures* (offline-testable); a separate per-system **live-probe checklist** task batch
-runs when the box frees up. An API that doesn't pan out live degrades its tool to
-readout-only or gets cut with a note in the spec — never silently faked.
+current 50-turn run ends. Therefore: Lua builders, parsers, GameState methods, and
+tools build in-branch against *synthetic fixtures* (offline-testable) — but a
+synthetic fixture proves the parser, **not that the Civ API exists**. The slice's
+merge gate is the per-system **live-probe checklist**: no greenfield-backed tool
+reaches a live run until its probe has captured a real fixture, or the spec records a
+degrade/cut decision for it. (Live runs only ever execute the box's merged `main`, so
+holding the branch unmerged enforces this mechanically.) An API that doesn't pan out
+live degrades its tool to readout-only or gets cut with a note here — never silently
+faked. Parity tools (Section 2) are exempt: their GameState methods are already
+live-proven via the MCP server.
 
 ## Section 4 — Completion Cap
 
 `MAX_COMPLETION_TOKENS` 3072 → **6144** in `src/civ_mcp/arena/backends.py`; the
 `test_caps_are_bounded` upper bound widens to 8192. Rationale: largest observed legit
 step ~1,900 tokens; one live step hit 3,072 (truncated tool call → gateway 500 → the
-`37a48ef` crash). 6144 ≈ 3× observed max; a runaway step stalls ~3 min worst case at
-local speeds. No experiment-config changes: `tools: full` auto-includes new registry
-entries; pinned-list configs unaffected.
+`37a48ef` crash). 6144 ≈ 3× observed max.
+
+**Timeout/retry interplay.** The 3072-era comment "the timeout should essentially
+never fire" no longer holds: at local speeds (~25–35 tok/s on a 3090) a 6144-token
+generation runs 3–4 minutes, past `REQUEST_TIMEOUT_S = 120`. Decisions:
+
+- `REQUEST_TIMEOUT_S` 120 → **300**, so the token cap — not the clock — bounds a
+  legitimate long step.
+- **Timeout-class failures are not retried** (`openai.APITimeoutError` re-raises
+  immediately): a 300-second timeout at this cap means runaway generation, and
+  resampling a runaway 3× would stall one seat ~15 minutes. Other transient classes
+  (gateway 500 on malformed tool JSON, llama-swap 503 during model load, network
+  blips) keep the existing 3-attempt retry.
+- Worst-case single-step stall: ~5 min (one 300 s attempt), then the coordinator's
+  degrade guard skips the turn.
+
+No experiment-config changes: `tools: full` auto-includes new registry entries;
+pinned-list configs unaffected.
 
 ## Section 5 — Metrics, Vocab, Playbook
 
@@ -132,6 +182,32 @@ entries; pinned-list configs unaffected.
 - Playbook (condensed): 1–2 lines per new system (when to form corps, rebase logic,
   dig priority, theming).
 - **No new briefing sections** — sensorium/digest work is roadmap B, out of scope.
+
+## Section 6 — File Map
+
+| File | Role in this slice |
+|---|---|
+| `src/civ_mcp/arena/capabilities.py` (new) | `build_caps_query()` Lua + `parse_caps()` → flags dict; fail-open default |
+| `src/civ_mcp/arena/registry.py` | `ToolDef.requires`, `filter_tools(names, caps)`, parity + system ToolDefs |
+| `src/civ_mcp/arena/agent.py` | per-turn `visible_tool_names` used for schema, invalid-call classification, and dispatch |
+| `src/civ_mcp/arena/coordinator.py` | fires the caps snapshot each puppet turn; passes caps to the policy |
+| `src/civ_mcp/arena/backends.py` | 6144 cap, 300 s timeout, no-retry-on-timeout |
+| `src/civ_mcp/arena/vocab.py` + `analyze.py` | tool-name mirrors/counters + mirror-consistency test |
+| `src/civ_mcp/arena/playbook.md` | 1–2 lines per new system |
+| `src/civ_mcp/lua/diplomacy.py` | gossip & grievances builder/parser |
+| `src/civ_mcp/lua/cities.py` | loyalty-detail builder/parser |
+| `src/civ_mcp/lua/climate.py` (new) | climate/disasters builder/parser |
+| `src/civ_mcp/lua/great_works.py` (new) | great-works query + move builders/parsers |
+| `src/civ_mcp/lua/units.py` | form-corps/army, rebase, excavate builders |
+| `src/civ_mcp/lua/models.py` | new dataclasses (gossip, loyalty, climate, great works) |
+| `src/civ_mcp/lua/__init__.py` | re-exports for all new builders/parsers/models |
+| `src/civ_mcp/game_state.py` | one method per new tool |
+| `src/civ_mcp/narrate.py` | narrators for the new readouts |
+| `src/civ_mcp/server.py` | MCP tools for the 7 systems |
+| `tests/arena/test_capabilities.py` (new) | CAPS parser, gate table, fail-open |
+| `tests/arena/test_registry.py`, `tests/arena/test_agent.py` | gating + parity + composite-id coverage |
+| `tests/test_parsers.py` | new-domain parser fixture tests |
+| this spec | live-probe results / degrade-cut decisions recorded here |
 
 ## Out of Scope
 
@@ -143,7 +219,9 @@ entries; pinned-list configs unaffected.
 ## Success Criteria
 
 1. A `tools: full` local civ's per-turn schema set contains only tools its game state
-   can execute; the same civ at Flight+Nationalism sees air + corps tools appear.
+   can execute, and gated names are also refused at dispatch (one visible list feeds
+   schema, classification, and dispatch). The same civ sees `form_corps` appear at
+   Nationalism + a same-type pair, and `rebase_unit` appear with its first aircraft.
 2. All parity tools callable by a local civ in a live run (spy mission, government
    change, religion spread, GP activation observed in transcripts).
 3. Each new system tool returns real data against a live game (probe checklist passed)
