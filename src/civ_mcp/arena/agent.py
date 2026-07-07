@@ -12,6 +12,7 @@ from civ_mcp.arena.prompting import build_opening_prompt
 from civ_mcp.arena.registry import (
     TOOL_REGISTRY,
     dispatch as _registry_dispatch,
+    filter_tools,
     openai_tools,
     resolve_tools,
 )
@@ -81,7 +82,13 @@ class LLMPolicy:
         memory_block: str = "",
         task_block: str = "",
         briefing: Briefing | None = None,
+        caps: dict | None = None,
     ) -> dict:
+        # One visible list feeds schema, invalid-call classification, AND the
+        # dispatch allowlist (spec §1): filtering only the schema would leave
+        # gated tools silently callable. caps=None fails open to the full tier.
+        visible_names = filter_tools(self._tool_names, caps)
+        tools_schema = openai_tools(visible_names)
         briefing_was_supplied = briefing is not None
         if (
             self.options.briefing.enabled
@@ -103,7 +110,7 @@ class LLMPolicy:
         tool_schema_chars = 0
         if self.options.briefing.enabled and not briefing_was_supplied:
             playbook_chars = len(self._system) - len(SYSTEM)
-            tool_schema_chars = len(json.dumps(self._tools))
+            tool_schema_chars = len(json.dumps(tools_schema))
         n_ctx = self._n_ctx if self._n_ctx is not None else DEFAULT_N_CTX
         briefing = await maybe_build_briefing(
             gs,
@@ -138,7 +145,7 @@ class LLMPolicy:
         wall_clock_start = time.time()
         for _ in range(self.max_steps):
             ts_start = time.time()
-            reply = await self.backend.chat(messages, self._tools)
+            reply = await self.backend.chat(messages, tools_schema)
             self.cost.record(player_id=player_id, model=getattr(self.backend, "model", "?"),
                              provider="local", prompt_tokens=reply.prompt_tokens,
                              completion_tokens=reply.completion_tokens, turn=turn)
@@ -172,9 +179,15 @@ class LLMPolicy:
                               "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                              for tc in reply.tool_calls]})
             for tc in reply.tool_calls:
-                if tc["name"] not in self._tool_names:
-                    reason = "out_of_tier" if tc["name"] in TOOL_REGISTRY else "unknown_tool"
-                    invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
+                if tc["name"] not in visible_names:
+                    if tc["name"] in self._tool_names:
+                        reason = "gated"
+                    elif tc["name"] in TOOL_REGISTRY:
+                        reason = "out_of_tier"
+                    else:
+                        reason = "unknown_tool"
+                    invalid_tool_calls.append({"tool_name": tc["name"],
+                                               "arguments": tc["arguments"],
                                                "reason": reason})
                 else:
                     try:
@@ -183,7 +196,7 @@ class LLMPolicy:
                         invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                    "reason": "bad_arguments"})
                 try:
-                    result = await _dispatch(gs, tc["name"], tc["arguments"], self._tool_names)
+                    result = await _dispatch(gs, tc["name"], tc["arguments"], visible_names)
                 except Exception as e:
                     result = f"ERROR: {e!r}"
                 # transcript step (uses same result object, before truncation)

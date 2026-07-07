@@ -593,3 +593,59 @@ async def test_max_steps_final_summary_keeps_last_assistant_text():
     assert out["transcript"]["max_steps_reached"] is True
     assert "STANDING PLAN" in out["transcript"]["final_summary"]
     assert "step 2 thinking" in out["transcript"]["final_summary"]
+
+
+# ---------------------------------------------------------------------------
+# Task 6: caps gating schema, classification, and dispatch
+# ---------------------------------------------------------------------------
+
+class FakeBackendCapturesTools:
+    """Records the tools schema passed to chat; calls a gated tool once."""
+    def __init__(self):
+        self.n = 0
+        self.seen_tools = None
+
+    async def chat(self, messages, tools):
+        self.n += 1
+        self.seen_tools = tools
+        if self.n == 1:
+            return Reply(text=None, tool_calls=[
+                {"id": "1", "name": "get_spies", "arguments": "{}"}],
+                prompt_tokens=5, completion_tokens=5)
+        return Reply(text="done", tool_calls=[], prompt_tokens=1, completion_tokens=1)
+
+
+class FakeGSSpies(FakeGS):
+    def __init__(self):
+        super().__init__()
+        self.spy_calls = 0
+    async def get_spies(self):
+        self.spy_calls += 1
+        return "1 spy"
+
+
+@pytest.mark.asyncio
+async def test_caps_gate_schema_classification_and_dispatch():
+    gs, be, cost = FakeGSSpies(), FakeBackendCapturesTools(), FakeCost()
+    opts = CivOptions(max_steps=3, tools=["fortify_unit", "get_spies"])
+    pol = LLMPolicy(be, cost, options=opts)
+    out = await pol(gs, player_id=1, turn=2, caps={"spies": False})
+    # schema: gated tool absent
+    names = {t["function"]["name"] for t in be.seen_tools}
+    assert names == {"fortify_unit"}
+    # dispatch: gated tool never executed
+    assert gs.spy_calls == 0
+    # classification: recorded as gated, not unknown/out_of_tier
+    invalid = out["transcript"]["invalid_tool_calls"]
+    assert invalid == [{"tool_name": "get_spies", "arguments": "{}", "reason": "gated"}]
+
+
+@pytest.mark.asyncio
+async def test_no_caps_means_full_tier_unchanged():
+    gs, be, cost = FakeGSSpies(), FakeBackendCapturesTools(), FakeCost()
+    opts = CivOptions(max_steps=3, tools=["fortify_unit", "get_spies"])
+    pol = LLMPolicy(be, cost, options=opts)
+    await pol(gs, player_id=1, turn=2)          # caps omitted -> fail open
+    names = {t["function"]["name"] for t in be.seen_tools}
+    assert names == {"fortify_unit", "get_spies"}
+    assert gs.spy_calls == 1
