@@ -1379,10 +1379,10 @@ for pid = 0, 63 do
         end)
         local theirs, mine = 0, 0
         pcall(function()
-            theirs = Players[pid]:GetDiplomaticAI():GetGrievancesAgainst(me)
+            theirs = Players[pid]:GetDiplomacy():GetGrievancesAgainst(me)
         end)
         pcall(function()
-            mine = Players[me]:GetDiplomaticAI():GetGrievancesAgainst(pid)
+            mine = Players[me]:GetDiplomacy():GetGrievancesAgainst(pid)
         end)
         print("GRIEV|" .. pid .. "|" .. name .. "|" .. theirs .. "|" .. mine)
         pcall(function()
