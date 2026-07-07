@@ -62,6 +62,13 @@ IMPROVE_SUCCESS_PREFIXES = ("IMPROVING|", "REPAIRING|")
 # blocking the async found-city op) to clear.
 MAX_TASK_FAILURES = 3
 
+# The three terminal task statuses. save_task_state persists them as
+# tombstones, merge_tasks keeps them outside the active cap so the restatement
+# guard keeps recognizing them, and analyze buckets its metrics by the same
+# set. Single source of truth so a new terminal status can't be added at one
+# site and missed at another.
+RESOLVED_STATUSES = frozenset({"failed", "complete", "lost"})
+
 # Public: memory.py's standing-plan terminator lookahead reuses these so
 # "does a real TASK/CANCEL line follow" and "what actually parses as a task"
 # can never disagree. Bullet-tolerant because they run on raw model summaries,
@@ -158,7 +165,7 @@ def save_task_state(
     temp file is written first, then swapped into place via Path.replace().
     """
     persisted = tuple(
-        t for t in tasks if t.status in ("active", "failed", "complete", "lost")
+        t for t in tasks if t.status == "active" or t.status in RESOLVED_STATUSES
     )
     state = TaskState(
         schema_version=SCHEMA_VERSION, run_id=run_id, player_id=player_id, tasks=persisted
@@ -360,7 +367,7 @@ def merge_tasks(
     return tuple(
         task
         for task in ordered
-        if task.task_id in kept or task.status in ("failed", "complete", "lost")
+        if task.task_id in kept or task.status in RESOLVED_STATUSES
     )
 
 

@@ -21,7 +21,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from civ_mcp.arena.task_tracker import (
+    BLOCKED_VISIBLE_HOSTILE,
     DROPPED_FUTURE_DATED,
+    RESOLVED_STATUSES,
     SKIPPED_NO_MOVES,
     UNITS_FETCH_FAILED,
 )
@@ -194,9 +196,9 @@ def _classify_task_results(rec: dict) -> dict[str, int]:
         if entry.get("result") not in _NON_ATTEMPT_RESULTS:
             counts["attempts"] += 1
         status = entry.get("status")
-        if status in ("complete", "lost", "failed"):
+        if status in RESOLVED_STATUSES:
             counts[status] += 1
-        if entry.get("result") == "blocked_visible_hostile":
+        if entry.get("result") == BLOCKED_VISIBLE_HOSTILE:
             counts["blocked_visible_hostile"] += 1
     return counts
 
