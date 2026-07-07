@@ -500,3 +500,10 @@ def test_build_move_great_work_substitutes_args():
     lua = build_move_great_work(17, 65793, "BUILDING_MUSEUM_ART", 2)
     assert "17" in lua and "65793" in lua and "BUILDING_MUSEUM_ART" in lua
     assert "OK:" in lua and "ERR:" in lua
+
+
+def test_build_move_great_work_rejects_suspicious_building():
+    for bad in ('BUILDING_X"; print(1) --', "BUILDING X", "BUILDING_X'y",
+                "b]u[ilding"):
+        with pytest.raises(ValueError):
+            build_move_great_work(17, 65793, bad, 2)
