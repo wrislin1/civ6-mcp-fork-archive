@@ -1612,3 +1612,79 @@ def test_parse_task_lines_accepts_parenthesized_target():
 
     assert len(tasks) == 1
     assert (tasks[0].target_x, tasks[0].target_y) == (20, 25)
+
+
+def test_parse_task_lines_uppercases_improvement():
+    """The TASK regex is IGNORECASE; a lowercase improvement token must be
+    normalized to the game-DB enum case or it never matches valid_improvements."""
+    tasks = parse_task_lines(
+        "TASK builder_improve unit_id=7 target=12,19 improvement=improvement_farm",
+        turn=4,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].improvement == "IMPROVEMENT_FARM"
+
+
+@pytest.mark.asyncio
+async def test_lowercase_improvement_task_executes_instead_of_striking():
+    unit = _unit(
+        unit_id=65537, unit_index=1, x=12, y=19,
+        valid_improvements=["IMPROVEMENT_FARM"],
+    )
+    gs = FakeGS(units=[unit], improve_tile_result="IMPROVING|IMPROVEMENT_FARM|12,19")
+    (task,) = parse_task_lines(
+        "TASK builder_improve unit_id=65537 target=12,19 improvement=improvement_farm",
+        turn=3,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=3)
+
+    assert gs.improve_tile_calls == [(1, "IMPROVEMENT_FARM")]
+    assert updated[0].status == "complete"
+    assert results[0]["result"] != "blocked_improvement_not_valid"
+
+
+@pytest.mark.asyncio
+async def test_move_no_response_accrues_failure_strike():
+    """A move producing no tuner output is ambiguous, not progress: without a
+    strike a silently-failing move would retry forever with failure_count 0."""
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit], move_unit_result="Action completed (no response).")
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+    assert updated[0].last_result == "move_no_response"
+
+
+@pytest.mark.asyncio
+async def test_move_no_response_fails_at_failure_budget():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit], move_unit_result="Action completed (no response).")
+    task = _task(
+        task_id="settle:65537", unit_id=65537, target_x=18, target_y=24,
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "failed"
+    assert results[0]["result"] == "move_no_response_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_future_dated_failed_tombstone_is_dropped_after_rollback():
+    """A failed tombstone from an abandoned (rolled-back) timeline must be
+    dropped, or its restatement guard blocks a legitimate re-issue of the
+    identical TASK line on the new timeline."""
+    unit = _unit(unit_id=65537, unit_index=1, x=10, y=10)
+    gs = FakeGS(units=[unit])
+    tombstone = _task(updated_turn=60, status="failed", failure_count=3)
+
+    updated, results = await run_pre_model_tasks(gs, [tombstone], turn=50)
+
+    assert updated == ()  # tombstone removed from state entirely
+    assert gs.move_unit_calls == []

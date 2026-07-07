@@ -94,7 +94,12 @@ class ScriptedPolicy:
 
 def _policy_accepts_kwarg(policy, name: str) -> bool:
     try:
-        signature = inspect.signature(getattr(policy, "__call__"))
+        # Introspect the callable itself, not policy.__call__: for a plain
+        # function policy, `.__call__` is a method-wrapper whose signature is
+        # (*args, **kwargs), which would spuriously report every kwarg as
+        # accepted and then raise TypeError at the call site. inspect.signature
+        # on the object unwraps bound methods / functions / partials correctly.
+        signature = inspect.signature(policy)
     except (TypeError, ValueError):
         return False
     return any(
@@ -116,6 +121,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
         # standing plans and tasks across unrelated runs.
         from civ_mcp.run_id import generate_run_id
 
+        # A fresh id per call is intentional: an empty run_id means "isolated
+        # run", so two calls must NOT share a memory/task directory. This id is
+        # used for the state paths AND the transcript record below (via the
+        # local run_id), so records stay joinable to the state dir without
+        # mutating config.
         run_id = generate_run_id()
     played, log = 0, []
     _tx_on = transcript is not None and getattr(transcript, "enabled", True)
@@ -248,7 +258,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         final_summary,
                         opts.standing_plan_capture_chars,
                     )
-                if opts.memory.enabled and captured_plan and not memory_error:
+                # Save even when the turn-start load/format failed: save_memory
+                # is a full atomic overwrite with no dependence on the loaded
+                # object, so persisting the model's fresh plan both keeps it and
+                # self-heals a poison file. Gating on `not memory_error` instead
+                # discarded the new plan and left the bad file to fail every
+                # subsequent turn.
+                if opts.memory.enabled and captured_plan:
                     try:
                         save_memory(
                             transcript_dir, run_id, st.local, st.turn, captured_plan,
@@ -277,10 +293,16 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     for k, v in result.items()
                     if k not in ("transcript", "promotion_sweep")
                 }
+                # Report what actually reached the model, not what was loaded:
+                # the kwarg gate strips memory_block for a policy whose __call__
+                # doesn't accept it, and analyze.behavior_metrics counts these
+                # as standing-memory turns -- so a stripped block must read as
+                # not injected.
+                injected_block = policy_kwargs.get("memory_block", "")
                 _standing_memory_fields = {
                     "loaded": bool(memory),
-                    "injected": bool(memory_block),
-                    "injected_chars": len(memory_block),
+                    "injected": bool(injected_block),
+                    "injected_chars": len(injected_block),
                     "captured_chars": len(captured_plan),
                     "error": memory_error,
                 }
@@ -312,7 +334,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     record = {
                         **payload,
                         "schema_version": 1,
-                        "run_id":   getattr(config, "run_id", ""),
+                        "run_id":   run_id,
                         "ts":       datetime.now(timezone.utc).isoformat(),
                         "player_id": st.local,
                         "turn":     st.turn,

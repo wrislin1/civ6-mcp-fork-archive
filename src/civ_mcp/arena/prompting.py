@@ -10,12 +10,17 @@ consistently (Slice 3).
 """
 from __future__ import annotations
 
+# The example task lines use non-numeric placeholders (<unit_id>, <x>, <y>)
+# on purpose: this instruction is injected into every prompt, and a model that
+# echoes the example verbatim must NOT create a real task. Placeholders don't
+# match TASK_LINE_RE (which requires digits), so only lines the model fills in
+# with real ids/coords parse. Do not replace them with concrete numbers.
 STANDING_PLAN_INSTRUCTION = """End your final response with:
 STANDING PLAN:
 - One to three short bullets for next turn.
-- Optional task lines, for example:
-  TASK settle unit_id=123 target=18,24
-  TASK builder_improve unit_id=456 target=12,19 improvement=IMPROVEMENT_FARM
+- Optional task lines, using your real unit ids and target coordinates, e.g.:
+  TASK settle unit_id=<unit_id> target=<x>,<y>
+  TASK builder_improve unit_id=<unit_id> target=<x>,<y> improvement=IMPROVEMENT_FARM
 """
 
 

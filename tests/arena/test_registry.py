@@ -989,11 +989,14 @@ async def test_dispatch_resolve_city_capture_accepts_valid_actions():
             calls.append(action)
             return f"OK:{action.upper()}"
 
-    for action in ("keep", "raze", "liberate_founder", "liberate_previous"):
+    # "reject" (free a disloyal loyalty-flip city) must be accepted too: it is a
+    # valid server.py/lua directive, and omitting it left arena puppets unable
+    # to resolve a loyalty flip.
+    for action in ("keep", "reject", "raze", "liberate_founder", "liberate_previous"):
         text = await dispatch(FakeGS(), "resolve_city_capture", {"action": action})
         assert text == f"OK:{action.upper()}"
 
-    assert calls == ["keep", "raze", "liberate_founder", "liberate_previous"]
+    assert calls == ["keep", "reject", "raze", "liberate_founder", "liberate_previous"]
 
 
 @pytest.mark.asyncio

@@ -227,7 +227,10 @@ async def _queue_wc_votes_text(gs: Any, args: dict[str, Any]) -> str:
     return await gs.queue_wc_votes(coerced)
 
 
-_CITY_CAPTURE_ACTIONS = ("keep", "raze", "liberate_founder", "liberate_previous")
+# Must match the actions server.py city_action and lua/cities.py accept --
+# "reject" (free a disloyal loyalty-flip city) was missing, so an arena puppet
+# could never resolve a loyalty flip.
+_CITY_CAPTURE_ACTIONS = ("keep", "reject", "raze", "liberate_founder", "liberate_previous")
 
 
 async def _resolve_city_capture_text(gs: Any, args: dict[str, Any]) -> str:

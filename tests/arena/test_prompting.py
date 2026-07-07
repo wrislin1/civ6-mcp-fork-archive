@@ -1,6 +1,14 @@
 import pytest
 
 from civ_mcp.arena.prompting import STANDING_PLAN_INSTRUCTION, build_opening_prompt
+from civ_mcp.arena.task_tracker import parse_task_lines
+
+
+def test_standing_plan_instruction_examples_are_echo_safe():
+    """The instruction is injected into every prompt; a model that echoes the
+    example task lines verbatim must create NO tasks. The examples use
+    non-numeric placeholders (<unit_id>, <x>) that TASK_LINE_RE cannot match."""
+    assert parse_task_lines(STANDING_PLAN_INSTRUCTION, turn=1) == []
 
 
 # ---------------------------------------------------------------------------

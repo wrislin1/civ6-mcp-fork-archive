@@ -1374,3 +1374,28 @@ async def test_empty_run_id_does_not_share_memory_across_runs(tmp_path):
     await run_arena(FakeConn(), FakeGS(), cfg, policy=pol2)
 
     assert pol2.calls[0]["memory_block"] == ""
+
+
+def test_policy_accepts_kwarg_handles_bare_function_signature():
+    """A plain-function policy's `.__call__` is a method-wrapper reporting
+    (*args, **kwargs); introspecting it would spuriously accept every kwarg and
+    then raise TypeError at the call site. Introspecting the callable itself
+    must report the real signature."""
+    from civ_mcp.arena.coordinator import _policy_accepts_kwarg
+
+    async def bare(gs, player_id, turn):
+        return {"summary": ""}
+
+    async def flexible(gs, player_id, turn, **kwargs):
+        return {"summary": ""}
+
+    assert _policy_accepts_kwarg(bare, "memory_block") is False
+    assert _policy_accepts_kwarg(bare, "briefing") is False
+    assert _policy_accepts_kwarg(flexible, "memory_block") is True
+
+    class Explicit:
+        async def __call__(self, gs, player_id, turn, memory_block=""):
+            return {"summary": ""}
+
+    assert _policy_accepts_kwarg(Explicit(), "memory_block") is True
+    assert _policy_accepts_kwarg(Explicit(), "task_block") is False

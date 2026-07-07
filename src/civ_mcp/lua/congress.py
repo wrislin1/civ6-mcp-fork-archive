@@ -221,13 +221,26 @@ def build_register_wc_voter(votes: list[dict] | None = None) -> str:
             option A, target 0.
     """
     # Build the Lua table literal for agent vote preferences
+    # Every field is interpolated bare into Lua source below, so coerce to int
+    # here or a stray string value (e.g. from the server's json.loads path,
+    # which does no validation) would splice into the executed Lua chunk. This
+    # single choke point protects every caller, not just the arena registry
+    # which validates separately.
+    def _as_int(value: object, default: int) -> int:
+        if isinstance(value, bool) or value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     if votes:
         entries = []
         for v in votes:
-            h = v.get("hash", v.get("resolution_hash", 0))
-            o = v.get("option", 1)
-            t = v.get("target", v.get("target_index", 0))
-            n = v.get("votes", v.get("num_votes", 5))
+            h = _as_int(v.get("hash", v.get("resolution_hash", 0)), 0)
+            o = _as_int(v.get("option", 1), 1)
+            t = _as_int(v.get("target", v.get("target_index", 0)), 0)
+            n = _as_int(v.get("votes", v.get("num_votes", 5)), 5)
             entries.append(f'["{h}"] = {{o={o}, t={t}, v={n}}}')
         prefs_lua = "{" + ", ".join(entries) + "}"
     else:

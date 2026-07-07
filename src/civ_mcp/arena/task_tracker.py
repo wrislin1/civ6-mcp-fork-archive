@@ -40,6 +40,8 @@ BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry
 TASK_EXCEPTION_RETRY_LIMIT = "task_exception_retry_limit"
 MOVE_ERROR_RETRY_LIMIT = "move_error_retry_limit"
 MOVE_BLOCKED_RETRY_LIMIT = "move_blocked_retry_limit"
+MOVE_NO_RESPONSE = "move_no_response"
+MOVE_NO_RESPONSE_RETRY_LIMIT = "move_no_response_retry_limit"
 UNRECOGNIZED_RESULT_RETRY_LIMIT = "unrecognized_result_retry_limit"
 UNITS_FETCH_FAILED = "units_fetch_failed"
 DROPPED_FUTURE_DATED = "dropped_future_dated"
@@ -208,7 +210,12 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
         if match:
             kind = match.group("kind").lower()
             unit_id = int(match.group("unit_id"))
-            improvement = match.group("improvement") or ""
+            # Improvement names are game-DB enums the Lua layer compares
+            # case-sensitively (e.g. "IMPROVEMENT_FARM"); the TASK regex is
+            # IGNORECASE, so normalize here or a lowercase token never matches
+            # unit.valid_improvements and the task strikes out despite being
+            # buildable.
+            improvement = (match.group("improvement") or "").upper()
             if kind == "builder_improve" and not improvement:
                 continue
             parsed.append(
@@ -578,6 +585,18 @@ async def _advance_toward_target(
             limit_result=MOVE_BLOCKED_RETRY_LIMIT,
             turn=turn,
         )
+    if not result_str or result_str == ACTION_NO_RESPONSE:
+        # No tuner output from a move is ambiguous, not progress (a popup may
+        # have eaten the op). Strike the budget so a silently-failing move can't
+        # retry forever with failure_count stuck at 0, mirroring the at-target
+        # no-response handling.
+        return _fail_or_retry(
+            task,
+            action="move",
+            result_str=MOVE_NO_RESPONSE,
+            limit_result=MOVE_NO_RESPONSE_RETRY_LIMIT,
+            turn=turn,
+        )
     new_task = _touch_task(replace(task, last_result=result_str), turn)
     return new_task, _result_dict(task, status="active", action="move", result=result_str)
 
@@ -694,16 +713,18 @@ async def run_pre_model_tasks(
     pre: list[UnitTask] = []
     drop_results: list[dict[str, Any]] = []
     for task in tasks:
-        if (
-            task.status == "active"
-            and task.kind in TASK_KINDS
-            and turn is not None
-            and task.updated_turn > turn
-        ):
+        is_future = turn is not None and task.updated_turn > turn
+        if is_future and task.status == "active" and task.kind in TASK_KINDS:
             pre.append(replace(task, status="lost", last_result=DROPPED_FUTURE_DATED))
             drop_results.append(
                 _result_dict(task, status="lost", action="skip", result=DROPPED_FUTURE_DATED)
             )
+        elif is_future:
+            # A resolved tombstone (e.g. failed) from the abandoned timeline:
+            # drop it from state entirely. Left in place its restatement guard
+            # would block a legitimate re-issue of the identical TASK line on
+            # the new timeline, where the failure never happened.
+            continue
         else:
             pre.append(task)
     tasks = pre
@@ -785,8 +806,11 @@ def format_task_block(
     if active:
         lines.append("ACTIVE TASKS:")
         for task in active:
-            # Bare x,y (no parens) so a model copying this block emits lines
-            # TASK_LINE_RE parses.
+            # Informational recap only -- these lines are NOT valid TASK syntax
+            # (no leading TASK keyword), so copying one verbatim will not
+            # re-issue or retarget the task. To change a task the model must
+            # emit a real "TASK <kind> unit_id=... target=..." line per
+            # STANDING_PLAN_INSTRUCTION. Bare x,y (no parens) mirror that syntax.
             detail = f"- {task.task_id} unit_id={task.unit_id} target={task.target_x},{task.target_y}"
             if task.improvement:
                 detail += f" improvement={task.improvement}"
