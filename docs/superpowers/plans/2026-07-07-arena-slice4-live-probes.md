@@ -22,6 +22,11 @@ branch checkout with a direct connection:
     asyncio.run(main())
     EOF
 
+> **Caps-snapshot probe exception:** `build_caps_query` is not exported via
+> `civ_mcp.lua` — import it directly and use the read context:
+> `from civ_mcp.arena.capabilities import build_caps_query` then
+> `lines = await conn.execute_read(build_caps_query(<pid>))`.
+
 For each probe: paste the real output lines into the matching parser test as a
 fixture (replacing/augmenting the synthetic one), re-run the suite, and tick
 the box. If an API errors, either fix the Lua from the live error, or record
