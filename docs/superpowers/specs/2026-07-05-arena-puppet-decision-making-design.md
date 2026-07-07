@@ -1,7 +1,7 @@
 # Arena Puppet Decision-Making — Design Spec
 
 **Date:** 2026-07-05
-**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); Slice 2 implemented + hardened (2026-07-06, through `2dfc3d4`); Slice 3 (standing memory + deterministic low-risk task tracker + behavior tools) planned and implemented by this document (Tasks 1-9, see `docs/superpowers/plans/2026-07-06-arena-standing-memory-task-tracker-slice3.md`) — A/B testing is complete; next live validation is 8 civs with 3 LLM puppets (seats 1, 3, 5) and 4 regular AI civs. Slice 4 (broader deterministic autonomy) is deferred until that live test produces behavior results.
+**Status:** Slice 1 implemented + hardened (2026-07-06, through `dc7f7e3`); Slice 2 implemented + hardened (2026-07-06, through `2dfc3d4`); Slice 3 (standing memory + deterministic low-risk task tracker + behavior tools) implemented + hardened (2026-07-07, through `1f9914c`; Tasks 1-9 in `docs/superpowers/plans/2026-07-06-arena-standing-memory-task-tracker-slice3.md`, post-slice code-review hardening pass in `docs/superpowers/plans/2026-07-07-arena-slice3-code-review-fixes.md`) — A/B testing is complete; next live validation is 8 civs with 3 LLM puppets (seats 1, 3, 5) and 4 regular AI civs. Slice 4 (broader deterministic autonomy) is deferred until that live test produces behavior results.
 **Author:** riz + Claude (brainstorming-locals + superpowers:brainstorming)
 
 ## Motivation
