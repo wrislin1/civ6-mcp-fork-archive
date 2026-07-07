@@ -162,6 +162,30 @@ def _task_tracker_active(rec: dict) -> bool:
     return bool(_task_tracker_pre_model_results(rec))
 
 
+def _classify_task_results(rec: dict) -> dict[str, int]:
+    """Per-record task-result counts.
+
+    Single owner of the status/result classification so behavior_metrics'
+    global section and analyze()'s per-player accumulators can never disagree
+    on what counts as complete/lost/failed/blocked.
+    """
+    counts = {
+        "attempts": 0,
+        "complete": 0,
+        "lost": 0,
+        "failed": 0,
+        "blocked_visible_hostile": 0,
+    }
+    for entry in _task_tracker_pre_model_results(rec):
+        counts["attempts"] += 1
+        status = entry.get("status")
+        if status in ("complete", "lost", "failed"):
+            counts[status] += 1
+        if entry.get("result") == "blocked_visible_hostile":
+            counts["blocked_visible_hostile"] += 1
+    return counts
+
+
 def behavior_metrics(transcript_records: list[dict]) -> dict:
     """Aggregate NEUTRAL behavior/performance metrics across all transcript records.
 
@@ -198,17 +222,12 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
         if _task_tracker_active(rec):
             task_tracker_turns += 1
 
-        for entry in _task_tracker_pre_model_results(rec):
-            task_pre_model_actions += 1
-            status = entry.get("status")
-            if status == "complete":
-                task_completed += 1
-            elif status == "lost":
-                task_lost += 1
-            elif status == "failed":
-                task_failed += 1
-            if entry.get("result") == "blocked_visible_hostile":
-                task_blocked_visible_hostile += 1
+        task_counts = _classify_task_results(rec)
+        task_pre_model_actions += task_counts["attempts"]
+        task_completed += task_counts["complete"]
+        task_lost += task_counts["lost"]
+        task_failed += task_counts["failed"]
+        task_blocked_visible_hostile += task_counts["blocked_visible_hostile"]
 
     return {
         "standing_memory_turns": standing_memory_turns,
@@ -592,17 +611,12 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                 mem_injected_turns += 1
             if _standing_memory_captured(rec):
                 mem_captured_turns += 1
-            for entry in _task_tracker_pre_model_results(rec):
-                task_attempts += 1
-                status = entry.get("status")
-                if status == "complete":
-                    task_completions += 1
-                elif status == "lost":
-                    task_lost_count += 1
-                elif status == "failed":
-                    task_failed_count += 1
-                if entry.get("result") == "blocked_visible_hostile":
-                    task_blocked += 1
+            task_counts = _classify_task_results(rec)
+            task_attempts += task_counts["attempts"]
+            task_completions += task_counts["complete"]
+            task_lost_count += task_counts["lost"]
+            task_failed_count += task_counts["failed"]
+            task_blocked += task_counts["blocked_visible_hostile"]
             gp_calls += _count_tool_calls(steps, _GREAT_PEOPLE_TOOLS)
             trade_calls += _count_tool_calls(steps, _TRADE_ROUTE_TOOLS)
             religion_wc_calls += _count_tool_calls(steps, _RELIGION_WC_TOOLS)

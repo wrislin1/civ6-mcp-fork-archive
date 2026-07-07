@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, re, signal, time
+import asyncio, json, os, signal, time
 
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.briefing import Briefing
