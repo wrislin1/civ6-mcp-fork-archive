@@ -874,6 +874,41 @@ async def test_task_line_beyond_capture_clamp_still_creates_task(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_tombstone_blocks_restatement_across_turns(tmp_path):
+    """A task that exhausted its failure budget on an earlier turn must stay
+    blocked when the model restates it verbatim on a later turn: the tombstone
+    is persisted, loaded into the capture base, and wins over the restatement."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    cfg = ArenaConfig(players=[PlayerSpec(5, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[5], run_id="tombtest",
+                      transcript_dir=str(tmp_path))
+    tombstone = UnitTask(
+        task_id="settle:42", kind="settle", unit_id=42, target_x=10, target_y=12,
+        created_turn=1, updated_turn=1, status="failed",
+        last_result="found_city_failed_retry_limit", failure_count=3,
+    )
+    save_task_state(str(tmp_path), "tombtest", 5, [tombstone])
+    pol = RecordingPolicy({
+        "summary": "ignored",
+        "transcript": {"final_summary": (
+            "STANDING PLAN:\n- keep trying\nTASK settle unit_id=42 target=10,12\n"
+        )},
+    }, options=opts)
+
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|5", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    from civ_mcp.arena.task_tracker import load_task_state
+    state = load_task_state(str(tmp_path), "tombtest", 5)
+    assert [t.status for t in state.tasks] == ["failed"]
+    assert state.tasks[0].failure_count == 3
+
+
+@pytest.mark.asyncio
 async def test_pre_model_task_results_appear_in_log_and_transcript(tmp_path):
     """A pre-existing active task that completes during the deterministic pre-model
     phase shows up in both the coordinator log entry and the transcript record's

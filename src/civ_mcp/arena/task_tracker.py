@@ -127,14 +127,17 @@ def load_task_state(transcript_dir: str, run_id: str, player_id: int) -> TaskSta
 def save_task_state(
     transcript_dir: str, run_id: str, player_id: int, tasks: Sequence[UnitTask]
 ) -> TaskState:
-    """Persist only the active tasks for a player and return the saved state.
+    """Persist the active tasks plus failed tombstones for a player.
 
-    Write is atomic best-effort: a sibling temp file is written first, then
-    swapped into place via Path.replace().
+    Failed tasks are kept on disk so merge_tasks' restatement guard still sees
+    them on later turns -- without the tombstone a verbatim restatement would
+    re-arm the full failure budget every turn. Completed/lost tasks are
+    naturally terminal and are dropped. Write is atomic best-effort: a sibling
+    temp file is written first, then swapped into place via Path.replace().
     """
-    active = tuple(t for t in tasks if t.status == "active")
+    persisted = tuple(t for t in tasks if t.status in ("active", "failed"))
     state = TaskState(
-        schema_version=SCHEMA_VERSION, run_id=run_id, player_id=player_id, tasks=active
+        schema_version=SCHEMA_VERSION, run_id=run_id, player_id=player_id, tasks=persisted
     )
     path = task_path(transcript_dir, run_id, player_id)
     payload = {
@@ -309,14 +312,18 @@ def merge_tasks(
     # Cap ACTIVE tasks only: a freshly completed/lost task (which
     # run_pre_model_tasks returns in `existing`, carrying its original
     # updated_turn) must never occupy a cap slot and evict an in-progress
-    # active task. Non-active tasks are dropped from the output entirely --
-    # save_task_state persists active-only anyway, and the brief specifies
-    # keeping active tasks (cancelled/completed/lost do not survive merge).
+    # active task. Completed/lost/cancelled tasks are dropped from the output;
+    # failed tasks survive as tombstones (outside the cap) so the restatement
+    # guard keeps working on later turns. A tombstone clears when the model
+    # changes the target or explicitly CANCELs the unit.
     ordered = sorted(merged.values(), key=lambda task: task.updated_turn)
     active = [task for task in ordered if task.status == "active"]
     if max_tasks > 0 and len(active) > max_tasks:
         active = active[-max_tasks:]
-    return tuple(active)
+    kept = {task.task_id for task in active}
+    return tuple(
+        task for task in ordered if task.task_id in kept or task.status == "failed"
+    )
 
 
 def _result_dict(task: UnitTask, *, status: str, action: str, result: str) -> dict[str, Any]:

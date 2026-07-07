@@ -178,15 +178,34 @@ def test_save_task_state_writes_expected_path(tmp_path):
     assert expected.exists()
 
 
-def test_save_task_state_persists_only_active_tasks(tmp_path):
+def test_save_task_state_drops_completed_and_lost_tasks(tmp_path):
     active = _task(task_id="settle:1", unit_id=1, status="active")
     lost = _task(task_id="settle:2", unit_id=2, status="lost")
+    done = _task(task_id="settle:3", unit_id=3, status="complete")
 
-    saved = save_task_state(str(tmp_path), "run1", 0, [active, lost])
+    saved = save_task_state(str(tmp_path), "run1", 0, [active, lost, done])
 
     assert saved.tasks == (active,)
     loaded = load_task_state(str(tmp_path), "run1", 0)
     assert loaded.tasks == (active,)
+
+
+def test_save_task_state_persists_failed_tombstones(tmp_path):
+    """Failed tasks must survive on disk: the restatement guard can only block
+    a verbatim re-emission on later turns if the failed record is still there."""
+    active = _task(task_id="settle:1", unit_id=1, status="active")
+    failed = _task(
+        task_id="settle:2", unit_id=2, status="failed",
+        last_result="found_city_failed_retry_limit", failure_count=3,
+    )
+
+    save_task_state(str(tmp_path), "run1", 0, [active, failed])
+
+    loaded = load_task_state(str(tmp_path), "run1", 0)
+    assert {t.task_id: t.status for t in loaded.tasks} == {
+        "settle:1": "active",
+        "settle:2": "failed",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -776,8 +795,10 @@ def test_merge_restated_task_keeps_original_identity():
 
 
 def test_merge_restatement_does_not_resurrect_failed_task():
-    """A verbatim restatement of a task that just hit its failure budget must not
-    revive it — only a changed target (a genuinely new instruction) starts over."""
+    """A verbatim restatement of a task that hit its failure budget must not
+    revive it — only a changed target (a genuinely new instruction) starts over.
+    The tombstone itself survives the merge so the guard keeps working on
+    every later turn."""
     existing = [
         _task(
             status="failed",
@@ -789,7 +810,42 @@ def test_merge_restatement_does_not_resurrect_failed_task():
 
     merged = merge_tasks(existing, updates, max_tasks=8)
 
-    assert merged == ()
+    assert [t.status for t in merged] == ["failed"]
+
+
+def test_merge_keeps_failed_tombstones_in_output():
+    existing = (_task(status="failed", failure_count=3),)
+
+    merged = merge_tasks(existing, [], max_tasks=8)
+
+    assert merged == existing
+
+
+def test_merge_changed_target_clears_failed_tombstone():
+    existing = (_task(status="failed", failure_count=3),)
+    updates = parse_task_lines("TASK settle unit_id=65537 target=20,26", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert len(merged) == 1
+    assert merged[0].status == "active"
+    assert merged[0].target_x == 20
+    assert merged[0].failure_count == 0
+
+
+def test_merge_cap_ignores_failed_tombstones():
+    existing = (
+        _task(task_id="settle:1", unit_id=1, updated_turn=1),
+        _task(task_id="settle:2", unit_id=2, updated_turn=2),
+        _task(
+            task_id="settle:9", unit_id=9, updated_turn=9,
+            status="failed", failure_count=3,
+        ),
+    )
+
+    merged = merge_tasks(existing, [], max_tasks=2)
+
+    assert {t.task_id for t in merged} == {"settle:1", "settle:2", "settle:9"}
 
 
 @pytest.mark.asyncio

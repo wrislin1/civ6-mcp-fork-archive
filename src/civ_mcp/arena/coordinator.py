@@ -157,18 +157,25 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 if opts.task_tracker.enabled:
                     try:
                         task_state = load_task_state(transcript_dir, run_id, st.local)
+                        # Loaded state carries failed tombstones alongside active
+                        # tasks; both must reach run_pre_model_tasks (which skips
+                        # non-active) and the capture merge, or the restatement
+                        # guard loses its memory of exhausted tasks.
+                        loaded_tasks = task_state.tasks
                         active_tasks_before = tuple(
-                            t for t in task_state.tasks if t.status == "active"
+                            t for t in loaded_tasks if t.status == "active"
                         )
-                        task_capture_base = active_tasks_before
+                        task_capture_base = loaded_tasks
                         updated_tasks, task_results = await run_pre_model_tasks(
-                            gs, active_tasks_before, turn=st.turn
+                            gs, loaded_tasks, turn=st.turn
                         )
                         task_capture_base = updated_tasks
                         pre_model_state = save_task_state(
                             transcript_dir, run_id, st.local, updated_tasks
                         )
-                        active_tasks_after = pre_model_state.tasks
+                        active_tasks_after = tuple(
+                            t for t in pre_model_state.tasks if t.status == "active"
+                        )
                         task_block = format_task_block(
                             updated_tasks,
                             task_results,
@@ -240,7 +247,9 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         new_tasks = parse_task_lines(final_summary, st.turn)
                         merged = merge_tasks(task_capture_base, new_tasks, opts.task_tracker.max_tasks)
                         captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
-                        active_tasks_after = captured_state.tasks
+                        active_tasks_after = tuple(
+                            t for t in captured_state.tasks if t.status == "active"
+                        )
                     except Exception as e:
                         task_tracker_error = repr(e)
                         print(f"[arena] task tracker capture failed: {e!r}", file=sys.stderr)
