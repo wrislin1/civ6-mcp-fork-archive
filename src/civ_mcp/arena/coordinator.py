@@ -129,12 +129,20 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 # pre-model task follow-through. This MUST happen before the exclusive
                 # disconnect below: it uses `gs`, which is backed by the live `conn` —
                 # a CLI turn's exclusive disconnect leaves no connection for these reads.
-                memory = load_memory(transcript_dir, run_id, st.local) if opts.memory.enabled else None
-                memory_block = format_memory_block(
-                    memory,
-                    current_turn=st.turn,
-                    max_age_turns=opts.memory.max_age_turns,
-                )
+                memory_error = ""
+                task_tracker_error = ""
+                try:
+                    memory = load_memory(transcript_dir, run_id, st.local) if opts.memory.enabled else None
+                    memory_block = format_memory_block(
+                        memory,
+                        current_turn=st.turn,
+                        max_age_turns=opts.memory.max_age_turns,
+                    )
+                except Exception as e:
+                    memory = None
+                    memory_block = ""
+                    memory_error = repr(e)
+                    print(f"[arena] standing memory load failed: {e!r}", file=sys.stderr)
 
                 active_tasks_before: tuple = ()
                 updated_tasks: tuple = ()
@@ -142,22 +150,31 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 active_tasks_after: tuple = ()
                 task_block = ""
                 if opts.task_tracker.enabled:
-                    task_state = load_task_state(transcript_dir, run_id, st.local)
-                    active_tasks_before = tuple(
-                        t for t in task_state.tasks if t.status == "active"
-                    )
-                    updated_tasks, task_results = await run_pre_model_tasks(
-                        gs, active_tasks_before, turn=st.turn
-                    )
-                    pre_model_state = save_task_state(
-                        transcript_dir, run_id, st.local, updated_tasks
-                    )
-                    active_tasks_after = pre_model_state.tasks
-                    task_block = format_task_block(
-                        updated_tasks,
-                        task_results,
-                        max_tasks=opts.task_tracker.max_tasks,
-                    )
+                    try:
+                        task_state = load_task_state(transcript_dir, run_id, st.local)
+                        active_tasks_before = tuple(
+                            t for t in task_state.tasks if t.status == "active"
+                        )
+                        updated_tasks, task_results = await run_pre_model_tasks(
+                            gs, active_tasks_before, turn=st.turn
+                        )
+                        pre_model_state = save_task_state(
+                            transcript_dir, run_id, st.local, updated_tasks
+                        )
+                        active_tasks_after = pre_model_state.tasks
+                        task_block = format_task_block(
+                            updated_tasks,
+                            task_results,
+                            max_tasks=opts.task_tracker.max_tasks,
+                        )
+                    except Exception as e:
+                        active_tasks_before = ()
+                        updated_tasks = ()
+                        task_results = []
+                        active_tasks_after = ()
+                        task_block = ""
+                        task_tracker_error = repr(e)
+                        print(f"[arena] task tracker pre-model failed: {e!r}", file=sys.stderr)
 
                 policy_kwargs = {"memory_block": memory_block, "task_block": task_block}
                 if (
@@ -200,16 +217,24 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         final_summary,
                         opts.standing_plan_capture_chars,
                     )
-                if opts.memory.enabled and captured_plan:
-                    save_memory(
-                        transcript_dir, run_id, st.local, st.turn, captured_plan,
-                        opts.memory.max_chars,
-                    )
-                if opts.task_tracker.enabled:
-                    new_tasks = parse_task_lines(captured_plan, st.turn)
-                    merged = merge_tasks(updated_tasks, new_tasks, opts.task_tracker.max_tasks)
-                    captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
-                    active_tasks_after = captured_state.tasks
+                if opts.memory.enabled and captured_plan and not memory_error:
+                    try:
+                        save_memory(
+                            transcript_dir, run_id, st.local, st.turn, captured_plan,
+                            opts.memory.max_chars,
+                        )
+                    except Exception as e:
+                        memory_error = repr(e)
+                        print(f"[arena] standing memory save failed: {e!r}", file=sys.stderr)
+                if opts.task_tracker.enabled and not task_tracker_error:
+                    try:
+                        new_tasks = parse_task_lines(captured_plan, st.turn)
+                        merged = merge_tasks(updated_tasks, new_tasks, opts.task_tracker.max_tasks)
+                        captured_state = save_task_state(transcript_dir, run_id, st.local, merged)
+                        active_tasks_after = captured_state.tasks
+                    except Exception as e:
+                        task_tracker_error = repr(e)
+                        print(f"[arena] task tracker capture failed: {e!r}", file=sys.stderr)
 
                 state_after = await _overview_snapshot(gs) if _tx_on else None
                 _log_entry = {
@@ -222,11 +247,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     "injected": bool(memory_block),
                     "injected_chars": len(memory_block),
                     "captured_chars": len(captured_plan),
+                    "error": memory_error,
                 }
                 _task_tracker_fields = {
                     "active_before": len(active_tasks_before),
                     "pre_model_results": task_results,
                     "active_after": len(active_tasks_after),
+                    "error": task_tracker_error,
                 }
                 log.append({
                     "player": st.local,

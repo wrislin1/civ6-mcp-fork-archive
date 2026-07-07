@@ -1105,3 +1105,81 @@ async def test_task_tracker_only_uses_task_capture_budget_not_memory_default(tmp
 
     path = task_path(str(tmp_path), run_id, player_id)
     assert '"unit_id": 42' in path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_memory_save_failure_does_not_abort_arena_turn(monkeypatch, tmp_path):
+    from civ_mcp.arena import coordinator
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(coordinator, "save_memory", boom)
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(4, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[4],
+        run_id="mem-save-failure",
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {
+            "summary": "ignored",
+            "transcript": {"final_summary": "STANDING PLAN:\n- keep exploring\n"},
+        },
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|4", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    sink = FakeSink()
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol, transcript=sink)
+
+    assert result["puppet_turns_played"] == 1
+    assert result["log"][0]["standing_memory"]["error"] == "OSError('disk full')"
+    assert sink.records[0]["standing_memory"]["error"] == "OSError('disk full')"
+
+
+@pytest.mark.asyncio
+async def test_task_state_save_failure_does_not_abort_arena_turn(monkeypatch, tmp_path):
+    from civ_mcp.arena import coordinator
+
+    def boom(*args, **kwargs):
+        raise OSError("read only")
+
+    monkeypatch.setattr(coordinator, "save_task_state", boom)
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    cfg = ArenaConfig(
+        players=[PlayerSpec(5, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[5],
+        run_id="task-save-failure",
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {
+            "summary": "ignored",
+            "transcript": {
+                "final_summary": "STANDING PLAN:\nTASK settle unit_id=42 target=10,12\n"
+            },
+        },
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([
+        ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],
+        ["LOCAL|5", "TURN|2", "ACTIVE|true", "LAST|1"],
+    ])
+    sink = FakeSink()
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol, transcript=sink)
+
+    assert result["puppet_turns_played"] == 1
+    assert result["log"][0]["task_tracker"]["error"] == "OSError('read only')"
+    assert sink.records[0]["task_tracker"]["error"] == "OSError('read only')"
