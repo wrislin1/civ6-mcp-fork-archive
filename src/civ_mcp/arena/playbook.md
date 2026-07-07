@@ -145,3 +145,18 @@ Monitor World Congress and religion state, but only cast votes or lock in belief
 choices after reading the relevant tool's actual output (get_world_congress,
 get_religion_beliefs, etc.) for that turn -- do not guess resolutions or beliefs
 from memory.
+
+## Espionage and government
+Once spies unlock, get_spies shows missions; travel first, end turn, then launch.
+Change government when a new tier unlocks (first switch per tier is free).
+
+## Grievances, loyalty, climate
+get_gossip shows grievances - high grievances against you predict war. get_loyalty
+flags cities trending to revolt: assign a governor or fix amenities the same turn.
+get_climate warns of floods/storms - avoid settling low coast in late game.
+
+## Formations, air, archaeology, great works
+Two same-type units adjacent -> form_corps (+10 CS) once Nationalism unlocks; a
+corps + one more -> form_army after Mobilization. Rebase air units forward as the
+front moves. Archaeologists dig antiquity sites (excavate_artifact) to fill museum
+slots; group matching great works in one building (move_great_work) for theming.

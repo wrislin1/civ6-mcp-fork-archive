@@ -1676,3 +1676,20 @@ def test_classify_task_results_excludes_non_attempt_bookkeeping():
 
     assert counts["attempts"] == 1
     assert counts["lost"] == 1
+
+
+def test_counter_frozensets_only_name_real_tools():
+    """analyze.py's category counters hold literal tool-name frozensets; a
+    renamed/removed registry tool would silently drop out of its counter.
+    Server-only names (unit_action verbs, mcp__civ6__ tools) are exempt."""
+    from civ_mcp.arena import analyze
+    from civ_mcp.arena.registry import TOOL_REGISTRY
+
+    SERVER_ONLY = {"unit_action"}  # CLI civs route these via the MCP server
+    for setname in ("_GREAT_PEOPLE_TOOLS", "_TRADE_ROUTE_TOOLS",
+                    "_RELIGION_WC_TOOLS"):
+        names = getattr(analyze, setname)
+        local_names = {n for n in names
+                       if not n.startswith(analyze.MCP_CIV6_PREFIX)} - SERVER_ONLY
+        unknown = local_names - set(TOOL_REGISTRY)
+        assert not unknown, f"{setname} names not in registry: {unknown}"
