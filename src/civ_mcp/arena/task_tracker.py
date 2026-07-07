@@ -39,6 +39,16 @@ BLOCKED_IMPROVEMENT_NOT_VALID = "blocked_improvement_not_valid"
 BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry_limit"
 TASK_EXCEPTION_RETRY_LIMIT = "task_exception_retry_limit"
 MOVE_ERROR_RETRY_LIMIT = "move_error_retry_limit"
+MOVE_BLOCKED_RETRY_LIMIT = "move_blocked_retry_limit"
+UNRECOGNIZED_RESULT_RETRY_LIMIT = "unrecognized_result_retry_limit"
+UNITS_FETCH_FAILED = "units_fetch_failed"
+DROPPED_FUTURE_DATED = "dropped_future_dated"
+
+# Success prefixes per at-target action: _action_result falls back to the raw
+# tuner lines when no OK:/ERR: line is present, so "not an error" is not
+# evidence of success -- only these shapes are.
+SETTLE_SUCCESS_PREFIXES = ("FOUNDED|",)
+IMPROVE_SUCCESS_PREFIXES = ("IMPROVING|", "REPAIRING|")
 
 # Failed attempts (at-target errors/no-responses, move errors, raised
 # exceptions) a task may accumulate before it is marked failed. 3 leaves room
@@ -52,7 +62,7 @@ MAX_TASK_FAILURES = 3
 TASK_LINE_RE = re_compile(
     r"^\s*(?:[-*•]+\s+)?TASK\s+(?P<kind>settle|builder_improve)\s+"
     r"unit_id=(?P<unit_id>-?\d+)\s+"
-    r"target=(?P<tx>-?\d+)\s*,\s*(?P<ty>-?\d+)"
+    r"target=\(?\s*(?P<tx>-?\d+)\s*,\s*(?P<ty>-?\d+)\s*\)?"
     r"(?:\s+improvement=(?P<improvement>\S+))?\s*$",
     IGNORECASE,
 )
@@ -487,6 +497,7 @@ def _resolve_at_target_action(
     result_str: str,
     *,
     action: str,
+    success_prefixes: tuple[str, ...],
     no_response_result: str,
     no_response_limit: str,
     error_limit: str,
@@ -495,7 +506,9 @@ def _resolve_at_target_action(
     """Classify an at-target action result into error/no-response/complete.
 
     No output lines from the tuner is ambiguous, not success: the action may
-    or may not have happened. Retry (a consumed unit completes the task via
+    or may not have happened. The same goes for a result matching no known
+    success prefix (_action_result returns the raw tuner lines when no OK:/ERR:
+    line is found). Retry (a consumed unit completes the task via
     unit_missing/lost next turn) rather than report complete.
     """
     if result_str.startswith("Error:"):
@@ -512,6 +525,15 @@ def _resolve_at_target_action(
             action=action,
             result_str=no_response_result,
             limit_result=no_response_limit,
+            turn=turn,
+        )
+    if not result_str.startswith(success_prefixes):
+        flat = " / ".join(result_str.splitlines())[:160]
+        return _fail_or_retry(
+            task,
+            action=action,
+            result_str=f"unrecognized:{flat}",
+            limit_result=UNRECOGNIZED_RESULT_RETRY_LIMIT,
             turn=turn,
         )
     new_task = replace(task, status="complete", last_result=result_str)
@@ -542,6 +564,18 @@ async def _advance_toward_target(
             action="move",
             result_str=result_str,
             limit_result=MOVE_ERROR_RETRY_LIMIT,
+            turn=turn,
+        )
+    if "|BLOCKED" in result_str:
+        # move_unit reports a unit that ended where it started as an OK-shaped
+        # "MOVING_TO...|BLOCKED (reason)" string; that is zero progress and
+        # must strike the budget or a permanently blocked path (closed
+        # borders, occupied destination) retries every turn forever.
+        return _fail_or_retry(
+            task,
+            action="move",
+            result_str=result_str,
+            limit_result=MOVE_BLOCKED_RETRY_LIMIT,
             turn=turn,
         )
     new_task = _touch_task(replace(task, last_result=result_str), turn)
@@ -593,6 +627,7 @@ async def _run_single_task(
                 task,
                 result_str,
                 action="found_city",
+                success_prefixes=SETTLE_SUCCESS_PREFIXES,
                 no_response_result=SETTLE_NO_RESPONSE,
                 no_response_limit=SETTLE_NO_RESPONSE_RETRY_LIMIT,
                 error_limit=FOUND_CITY_RETRY_LIMIT,
@@ -608,6 +643,7 @@ async def _run_single_task(
                 task,
                 result_str,
                 action="improve",
+                success_prefixes=IMPROVE_SUCCESS_PREFIXES,
                 no_response_result=IMPROVE_NO_RESPONSE,
                 no_response_limit=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
                 error_limit=IMPROVE_ERROR_RETRY_LIMIT,
@@ -651,16 +687,43 @@ async def run_pre_model_tasks(
     A per-task exception is caught and recorded as ``error:<repr>`` without
     aborting the remaining tasks; it counts against the task's failure budget.
     """
+    # Tasks written on a later turn than the game is at now belong to an
+    # abandoned timeline (the run was rolled back to an earlier save); drop
+    # them before execution -- memory's format_memory_block refuses injection
+    # on the same age < 0 signal.
+    pre: list[UnitTask] = []
+    drop_results: list[dict[str, Any]] = []
+    for task in tasks:
+        if (
+            task.status == "active"
+            and task.kind in TASK_KINDS
+            and turn is not None
+            and task.updated_turn > turn
+        ):
+            pre.append(replace(task, status="lost", last_result=DROPPED_FUTURE_DATED))
+            drop_results.append(
+                _result_dict(task, status="lost", action="skip", result=DROPPED_FUTURE_DATED)
+            )
+        else:
+            pre.append(task)
+    tasks = pre
+
     executable = [
         task for task in tasks if task.status == "active" and task.kind in TASK_KINDS
     ]
     if not executable:
-        return tuple(tasks), []
+        return tuple(tasks), drop_results
 
     try:
         units = await gs.get_units()
-    except Exception:  # pragma: no cover - defensive, mirrors per-task guard
-        units = []
+    except Exception:
+        # A failed fetch says nothing about any individual task: resolving
+        # tasks against an empty unit list would mark every one lost on a
+        # single transient tuner error. Leave them untouched for next turn.
+        return tuple(tasks), drop_results + [
+            _result_dict(task, status="active", action="skip", result=UNITS_FETCH_FAILED)
+            for task in executable
+        ]
     units_by_id, units_by_index = _unit_lookup_maps(units)
     if any(
         _task_needs_hostile_context(
@@ -698,7 +761,7 @@ async def run_pre_model_tasks(
         updated.append(new_task)
         results.append(result)
 
-    return tuple(updated), results
+    return tuple(updated), drop_results + results
 
 
 def format_task_block(
@@ -722,7 +785,9 @@ def format_task_block(
     if active:
         lines.append("ACTIVE TASKS:")
         for task in active:
-            detail = f"- {task.task_id} unit_id={task.unit_id} target=({task.target_x},{task.target_y})"
+            # Bare x,y (no parens) so a model copying this block emits lines
+            # TASK_LINE_RE parses.
+            detail = f"- {task.task_id} unit_id={task.unit_id} target={task.target_x},{task.target_y}"
             if task.improvement:
                 detail += f" improvement={task.improvement}"
             if task.last_result:

@@ -76,7 +76,7 @@ class FakeGS:
         map_tiles=None,
         found_city_result="FOUNDED|18,24",
         move_unit_result="MOVING_TO|18,24",
-        improve_tile_result="IMPROVED",
+        improve_tile_result="IMPROVING|IMPROVEMENT_FARM|12,19",
         diplomacy=None,
         units_calls=0,
         threat_scan=None,
@@ -1473,3 +1473,142 @@ def test_format_task_block_omits_non_active_tasks():
     block = format_task_block(tasks, [])
 
     assert block == ""
+
+
+# ---------------------------------------------------------------------------
+# Review-fix regressions: fetch failure, blocked moves, unrecognized results,
+# future-dated tasks after rollback, prompt-block/parser round-trip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_units_fetch_failure_leaves_tasks_untouched():
+    class RaisingUnitsGS(FakeGS):
+        async def get_units(self):
+            raise ConnectionError("tuner hiccup")
+
+    task = _task(failure_count=1, last_result="MOVING_TO|18,24")
+    gs = RaisingUnitsGS(units=[])
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=5)
+
+    assert updated == (task,)
+    assert len(results) == 1
+    assert results[0]["status"] == "active"
+    assert results[0]["result"] == "units_fetch_failed"
+
+
+@pytest.mark.asyncio
+async def test_blocked_move_accrues_failure_strike():
+    unit = _unit(unit_id=65537, unit_index=1, x=10, y=10)
+    gs = FakeGS(
+        units=[unit],
+        move_unit_result="MOVING_TO|18,24|from:10,10|now_at:10,10|BLOCKED (no valid path)",
+    )
+    task = _task()
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=5)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+    assert results[0]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_blocked_move_fails_at_budget():
+    unit = _unit(unit_id=65537, unit_index=1, x=10, y=10)
+    gs = FakeGS(
+        units=[unit],
+        move_unit_result="MOVING_TO|18,24|from:10,10|now_at:10,10|BLOCKED (no valid path)",
+    )
+    task = _task(failure_count=2)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=5)
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "move_blocked_retry_limit"
+    assert results[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_found_city_result_retries_instead_of_completing():
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = FakeGS(
+        units=[unit],
+        found_city_result="LuaEvent: ShowIngameUI\nBulkHide debug spam",
+    )
+    task = _task()
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=5)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+    assert results[0]["result"].startswith("unrecognized:")
+    assert "\n" not in results[0]["result"]
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_improve_result_fails_at_budget():
+    unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=["IMPROVEMENT_FARM"],
+    )
+    gs = FakeGS(units=[unit], improve_tile_result="WARN:REPAIR_ATTEMPTED|verify next turn")
+    task = _task(
+        task_id="builder_improve:65538",
+        kind="builder_improve",
+        unit_id=65538,
+        target_x=12,
+        target_y=19,
+        improvement="IMPROVEMENT_FARM",
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=5)
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "unrecognized_result_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_future_dated_task_dropped_after_rollback():
+    unit = _unit(unit_id=65537, unit_index=1, x=10, y=10)
+    gs = FakeGS(units=[unit])
+    task = _task(updated_turn=60)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=50)
+
+    assert updated[0].status == "lost"
+    assert updated[0].last_result == "dropped_future_dated"
+    assert results[0]["result"] == "dropped_future_dated"
+    assert gs.move_unit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_same_turn_task_is_not_future_dated():
+    unit = _unit(unit_id=65537, unit_index=1, x=10, y=10)
+    gs = FakeGS(units=[unit])
+    task = _task(updated_turn=50)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=50)
+
+    assert updated[0].status == "active"
+    assert gs.move_unit_calls == [(1, 18, 24)]
+
+
+def test_format_task_block_target_round_trips_through_parser():
+    block = format_task_block((_task(),), [])
+    assert "target=18,24" in block
+
+    reparsed = parse_task_lines("TASK settle unit_id=65537 target=18,24", turn=7)
+    assert len(reparsed) == 1
+
+
+def test_parse_task_lines_accepts_parenthesized_target():
+    tasks = parse_task_lines("TASK settle unit_id=130 target=(20,25)", turn=3)
+
+    assert len(tasks) == 1
+    assert (tasks[0].target_x, tasks[0].target_y) == (20, 25)
