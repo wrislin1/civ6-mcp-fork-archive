@@ -187,6 +187,11 @@ async def _activate_great_person_text(gs: Any, args: dict[str, Any]) -> str:
     return await gs.activate_great_person(_unit_index(args["unit_id"]))
 
 
+async def _gossip_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_gossip(), nr.narrate_gossip)
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1190,6 +1195,14 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         _activate_great_person_text,
         verb="activate_great_person",
         requires="gp_unit",
+    ),
+    "get_gossip": _tool(
+        "get_gossip",
+        "Grievances both directions per met civ plus recent gossip. Grievances "
+        "predict AI hostility; check before wars and World Congress votes.",
+        None,
+        (),
+        _gossip_text,
     ),
 }
 

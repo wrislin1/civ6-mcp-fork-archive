@@ -1287,3 +1287,18 @@ class BuilderInfo:
     y: int
     charges: int
     moves: float
+
+
+@dataclass
+class GrievanceRow:
+    player_id: int
+    name: str
+    they_hold_against_me: int
+    i_hold_against_them: int
+
+
+@dataclass
+class GossipEntry:
+    about_player: int
+    turn: int
+    text: str

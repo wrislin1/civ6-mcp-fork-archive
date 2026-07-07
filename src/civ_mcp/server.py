@@ -918,6 +918,20 @@ async def get_diplomacy(ctx: Context) -> str:
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+async def get_gossip(ctx: Context) -> str:
+    """Grievances (both directions) per met civ, plus recent gossip about them.
+
+    Grievances predict AI hostility; check when planning war, peace, or World Congress votes.
+    """
+    gs = _get_game(ctx)
+
+    async def _run():
+        return nr.narrate_gossip(await gs.get_gossip())
+
+    return await _logged(ctx, "get_gossip", {}, _run)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.
 

@@ -15,6 +15,7 @@ from civ_mcp.lua.units import (
 from civ_mcp.lua.cities import parse_cities_response
 from civ_mcp.lua.map import parse_map_response
 from civ_mcp.lua.notifications import parse_end_turn_blocking
+from civ_mcp.lua.diplomacy import parse_gossip_response
 
 
 # ---------------------------------------------------------------------------
@@ -372,3 +373,38 @@ class TestParseEndTurnBlocking:
 
     def test_empty_lines(self):
         assert parse_end_turn_blocking([]) == []
+
+
+# ---------------------------------------------------------------------------
+# parse_gossip_response
+# ---------------------------------------------------------------------------
+
+
+class TestParseGossip:
+    def test_grievances_and_gossip(self):
+        lines = [
+            "GRIEV|1|Gilgamesh|30|0",
+            "GRIEV|3|Gandhi|0|15",
+            "GOSSIP|1|41|Gilgamesh started building the Pyramids.",
+            "---END---",
+        ]
+        grievances, gossip = parse_gossip_response(lines)
+        assert len(grievances) == 2
+        assert grievances[0].player_id == 1
+        assert grievances[0].name == "Gilgamesh"
+        assert grievances[0].they_hold_against_me == 30
+        assert grievances[1].i_hold_against_them == 15
+        assert len(gossip) == 1
+        assert gossip[0].about_player == 1
+        assert gossip[0].turn == 41
+        assert "Pyramids" in gossip[0].text
+
+    def test_gossip_lines_optional(self):
+        """The gossip-log API is a live-probe candidate; grievances alone parse."""
+        grievances, gossip = parse_gossip_response(["GRIEV|1|Gilgamesh|5|5"])
+        assert len(grievances) == 1 and gossip == []
+
+    def test_malformed_rows_skipped(self):
+        grievances, gossip = parse_gossip_response(
+            ["GRIEV|x|bad|row", "GOSSIP|notanint|q|t", "junk"])
+        assert grievances == [] and gossip == []

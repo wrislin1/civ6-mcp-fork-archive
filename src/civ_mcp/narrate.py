@@ -2102,3 +2102,22 @@ def narrate_move_discoveries(
     else:
         lines.append(f"Revealed {total_new} new tiles (no notable features)")
     return "\n".join(lines)
+
+
+def narrate_gossip(
+    data: tuple[list[lq.GrievanceRow], list[lq.GossipEntry]],
+) -> str:
+    grievances, gossip = data
+    if not grievances and not gossip:
+        return "No grievances and no gossip: you have met no other majors yet."
+    out = ["=== GRIEVANCES ==="]
+    for g in grievances:
+        out.append(
+            f"{g.name} (player {g.player_id}): holds {g.they_hold_against_me} "
+            f"against you; you hold {g.i_hold_against_them} against them"
+        )
+    if gossip:
+        out.append("=== RECENT GOSSIP ===")
+        for e in gossip[-20:]:
+            out.append(f"[T{e.turn}] (about player {e.about_player}) {e.text}")
+    return "\n".join(out)

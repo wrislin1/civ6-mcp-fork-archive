@@ -205,6 +205,11 @@ class GameState:
         lines = await self.conn.execute_write(lq.build_diplomacy_query())
         return lq.parse_diplomacy_response(lines)
 
+    async def get_gossip(self) -> tuple[list[lq.GrievanceRow], list[lq.GossipEntry]]:
+        # InGame context: DiplomaticAI/gossip access
+        lines = await self.conn.execute_write(lq.build_gossip_query())
+        return lq.parse_gossip_response(lines)
+
     async def get_tech_civics(self) -> lq.TechCivicStatus:
         lines = await self.conn.execute_read(lq.build_tech_civics_query())
         return lq.parse_tech_civics_response(lines)

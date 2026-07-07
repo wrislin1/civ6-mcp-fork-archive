@@ -1168,3 +1168,13 @@ def test_every_requires_flag_exists_in_snapshot():
     from civ_mcp.arena.capabilities import CAP_FLAGS
     used = {t.requires for t in TOOL_REGISTRY.values() if t.requires is not None}
     assert used <= set(CAP_FLAGS), used - set(CAP_FLAGS)
+
+
+@pytest.mark.asyncio
+async def test_get_gossip_registered_ungated():
+    assert TOOL_REGISTRY["get_gossip"].requires is None
+
+    class GS:
+        async def get_gossip(self):
+            return "Gilgamesh holds 30 grievances against you"
+    assert "grievances" in await dispatch(GS(), "get_gossip", {})

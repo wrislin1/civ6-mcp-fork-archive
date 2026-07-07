@@ -10,6 +10,8 @@ from civ_mcp.lua.models import (
     DealOptions,
     DiplomacyModifier,
     DiplomacySession,
+    GossipEntry,
+    GrievanceRow,
     PendingDeal,
     TestTradeItem,
     TestTradeResult,
@@ -1362,3 +1364,66 @@ def parse_pending_deals_response(lines: list[str]) -> list[PendingDeal]:
                 else:
                     deals[pid].items_from_them.append(item)
     return list(deals.values())
+
+
+_GOSSIP_LUA = """
+local me = Game.GetLocalPlayer()
+local myDiplo = Players[me]:GetDiplomacy()
+for pid = 0, 63 do
+    local pl = Players[pid]
+    if pid ~= me and pl and pl:IsAlive() and pl:IsMajor()
+            and myDiplo:HasMet(pid) then
+        local name = "Unknown"
+        pcall(function()
+            name = Locale.Lookup(PlayerConfigurations[pid]:GetLeaderName())
+        end)
+        local theirs, mine = 0, 0
+        pcall(function()
+            theirs = Players[pid]:GetDiplomaticAI():GetGrievancesAgainst(me)
+        end)
+        pcall(function()
+            mine = Players[me]:GetDiplomaticAI():GetGrievancesAgainst(pid)
+        end)
+        print("GRIEV|" .. pid .. "|" .. name .. "|" .. theirs .. "|" .. mine)
+        pcall(function()
+            -- PROBE(live): gossip-log query API (Task 15). Gossip normally
+            -- arrives as push events; if no retroactive query exists this
+            -- block prints nothing and the tool degrades to grievances-only
+            -- (degrade decision recorded in the spec).
+            local gm = Game.GetGossipManager()
+            local turn = Game.GetCurrentGameTurn()
+            for _, entry in ipairs(gm:GetRecentVisibleGossipStrings(me, pid)) do
+                print("GOSSIP|" .. pid .. "|" .. turn .. "|" .. tostring(entry))
+            end
+        end)
+    end
+end
+print("{SENTINEL}")
+"""
+
+
+def build_gossip_query() -> str:
+    """InGame context: grievances both directions per met major + gossip log."""
+    return _GOSSIP_LUA.replace("{SENTINEL}", SENTINEL)
+
+
+def parse_gossip_response(
+    lines: list[str],
+) -> tuple[list[GrievanceRow], list[GossipEntry]]:
+    grievances: list[GrievanceRow] = []
+    gossip: list[GossipEntry] = []
+    for line in lines:
+        parts = line.split("|")
+        try:
+            if parts[0] == "GRIEV" and len(parts) >= 5:
+                grievances.append(GrievanceRow(
+                    player_id=int(parts[1]), name=parts[2],
+                    they_hold_against_me=int(parts[3]),
+                    i_hold_against_them=int(parts[4])))
+            elif parts[0] == "GOSSIP" and len(parts) >= 4:
+                gossip.append(GossipEntry(
+                    about_player=int(parts[1]), turn=int(parts[2]),
+                    text="|".join(parts[3:])))
+        except (ValueError, IndexError):
+            continue
+    return grievances, gossip
