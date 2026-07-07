@@ -475,6 +475,62 @@ def _fail_or_retry(
     )
 
 
+def _resolve_at_target_action(
+    task: UnitTask,
+    result_str: str,
+    *,
+    action: str,
+    no_response_result: str,
+    no_response_limit: str,
+    error_limit: str,
+    turn: int | None,
+) -> tuple[UnitTask, dict[str, Any]]:
+    """Classify an at-target action result into error/no-response/complete.
+
+    No output lines from the tuner is ambiguous, not success: the action may
+    or may not have happened. Retry (a consumed unit completes the task via
+    unit_missing/lost next turn) rather than report complete.
+    """
+    if result_str.startswith("Error:"):
+        return _fail_or_retry(
+            task,
+            action=action,
+            result_str=result_str,
+            limit_result=error_limit,
+            turn=turn,
+        )
+    if result_str == ACTION_NO_RESPONSE:
+        return _fail_or_retry(
+            task,
+            action=action,
+            result_str=no_response_result,
+            limit_result=no_response_limit,
+            turn=turn,
+        )
+    new_task = replace(task, status="complete", last_result=result_str)
+    return new_task, _result_dict(task, status="complete", action=action, result=result_str)
+
+
+async def _advance_toward_target(
+    gs: Any,
+    task: UnitTask,
+    unit: Any,
+    owner_context: _HostileOwnerContext,
+    turn: int | None,
+) -> tuple[UnitTask, dict[str, Any]]:
+    if await _visible_hostile_nearby(
+        gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
+    ):
+        new_task = _touch_task(replace(task, last_result="blocked_visible_hostile"), turn)
+        return new_task, _result_dict(
+            task, status="active", action="block", result="blocked_visible_hostile"
+        )
+
+    result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
+    new_task = _touch_task(replace(task, last_result=result_str), turn)
+    return new_task, _result_dict(task, status="active", action="move", result=result_str)
+
+
 def _unit_lookup_maps(units: Sequence[Any]) -> tuple[dict[int, Any], dict[int, Any]]:
     by_id = {unit.unit_id: unit for unit in units}
     by_index: dict[int, Any] = {}
@@ -516,67 +572,29 @@ async def _run_single_task(
     if task.kind == "settle":
         if at_target:
             result_str = await gs.found_city(unit.unit_index)
-            if result_str.startswith("Error:"):
-                return _fail_or_retry(
-                    task,
-                    action="found_city",
-                    result_str=result_str,
-                    limit_result=FOUND_CITY_RETRY_LIMIT,
-                    turn=turn,
-                )
-            if result_str == ACTION_NO_RESPONSE:
-                # No output lines from the tuner is ambiguous, not success: a
-                # city may or may not exist. Retry (a founded city completes
-                # via unit_missing/lost next turn) rather than report complete.
-                return _fail_or_retry(
-                    task,
-                    action="found_city",
-                    result_str=SETTLE_NO_RESPONSE,
-                    limit_result=SETTLE_NO_RESPONSE_RETRY_LIMIT,
-                    turn=turn,
-                )
-            new_task = replace(task, status="complete", last_result=result_str)
-            return new_task, _result_dict(
-                task, status="complete", action="found_city", result=result_str
+            return _resolve_at_target_action(
+                task,
+                result_str,
+                action="found_city",
+                no_response_result=SETTLE_NO_RESPONSE,
+                no_response_limit=SETTLE_NO_RESPONSE_RETRY_LIMIT,
+                error_limit=FOUND_CITY_RETRY_LIMIT,
+                turn=turn,
             )
-
-        if await _visible_hostile_nearby(
-            gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
-        ):
-            new_task = _touch_task(
-                replace(task, last_result="blocked_visible_hostile"), turn
-            )
-            return new_task, _result_dict(
-                task, status="active", action="block", result="blocked_visible_hostile"
-            )
-
-        result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
-        new_task = _touch_task(replace(task, last_result=result_str), turn)
-        return new_task, _result_dict(task, status="active", action="move", result=result_str)
+        return await _advance_toward_target(gs, task, unit, owner_context, turn)
 
     # task.kind == "builder_improve"
     if at_target:
         if task.improvement in unit.valid_improvements:
             result_str = await gs.improve_tile(unit.unit_index, task.improvement)
-            if result_str.startswith("Error:"):
-                return _fail_or_retry(
-                    task,
-                    action="improve",
-                    result_str=result_str,
-                    limit_result=IMPROVE_ERROR_RETRY_LIMIT,
-                    turn=turn,
-                )
-            if result_str == ACTION_NO_RESPONSE:
-                return _fail_or_retry(
-                    task,
-                    action="improve",
-                    result_str=IMPROVE_NO_RESPONSE,
-                    limit_result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
-                    turn=turn,
-                )
-            new_task = replace(task, status="complete", last_result=result_str)
-            return new_task, _result_dict(
-                task, status="complete", action="improve", result=result_str
+            return _resolve_at_target_action(
+                task,
+                result_str,
+                action="improve",
+                no_response_result=IMPROVE_NO_RESPONSE,
+                no_response_limit=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
+                error_limit=IMPROVE_ERROR_RETRY_LIMIT,
+                turn=turn,
             )
 
         return _fail_or_retry(
@@ -587,17 +605,7 @@ async def _run_single_task(
             turn=turn,
         )
 
-    if await _visible_hostile_nearby(
-        gs, unit.x, unit.y, task.target_x, task.target_y, owner_context
-    ):
-        new_task = _touch_task(replace(task, last_result="blocked_visible_hostile"), turn)
-        return new_task, _result_dict(
-            task, status="active", action="block", result="blocked_visible_hostile"
-        )
-
-    result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
-    new_task = _touch_task(replace(task, last_result=result_str), turn)
-    return new_task, _result_dict(task, status="active", action="move", result=result_str)
+    return await _advance_toward_target(gs, task, unit, owner_context, turn)
 
 
 def _empty_hostile_owner_context() -> _HostileOwnerContext:
