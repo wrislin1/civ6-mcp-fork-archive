@@ -569,6 +569,83 @@ async def test_builder_improve_fails_after_repeated_invalid_improvement():
 
 
 @pytest.mark.asyncio
+async def test_settle_fails_after_repeated_found_city_error():
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = FakeGS(units=[unit], found_city_result="Error: FOUND_FAILED")
+    task = _task(
+        task_id="settle:65537",
+        unit_id=65537,
+        target_x=18,
+        target_y=24,
+        last_result="Error: FOUND_FAILED",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "found_city_failed_retry_limit"
+    assert results[0]["status"] == "failed"
+    assert results[0]["action"] == "found_city"
+    assert results[0]["result"] == "found_city_failed_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_builder_improve_no_response_stays_active_for_retry():
+    unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=["IMPROVEMENT_MINE"],
+    )
+    gs = FakeGS(units=[unit], improve_tile_result="Action completed (no response).")
+    task = _task(
+        task_id="builder_improve:65538",
+        kind="builder_improve",
+        unit_id=65538,
+        target_x=12,
+        target_y=19,
+        improvement="IMPROVEMENT_MINE",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "active"
+    assert updated[0].last_result == "improve_no_response"
+    assert results[0]["status"] == "active"
+    assert results[0]["action"] == "improve"
+    assert results[0]["result"] == "improve_no_response"
+
+
+@pytest.mark.asyncio
+async def test_builder_improve_no_response_fails_after_retry():
+    unit = _unit(
+        unit_id=65538,
+        unit_index=2,
+        x=12,
+        y=19,
+        valid_improvements=["IMPROVEMENT_MINE"],
+    )
+    gs = FakeGS(units=[unit], improve_tile_result="Action completed (no response).")
+    task = _task(
+        task_id="builder_improve:65538",
+        kind="builder_improve",
+        unit_id=65538,
+        target_x=12,
+        target_y=19,
+        improvement="IMPROVEMENT_MINE",
+        last_result="improve_no_response",
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task])
+
+    assert updated[0].status == "failed"
+    assert updated[0].last_result == "improve_no_response_retry_limit"
+    assert results[0]["status"] == "failed"
+    assert results[0]["result"] == "improve_no_response_retry_limit"
+
+
+@pytest.mark.asyncio
 async def test_visible_hostile_at_current_position_blocks_movement():
     unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
     gs = FakeGS(

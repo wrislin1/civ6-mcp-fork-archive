@@ -29,6 +29,11 @@ SCHEMA_VERSION = 1
 
 TASK_KINDS = {"settle", "builder_improve"}
 
+ACTION_NO_RESPONSE = "Action completed (no response)."
+FOUND_CITY_RETRY_LIMIT = "found_city_failed_retry_limit"
+IMPROVE_NO_RESPONSE = "improve_no_response"
+IMPROVE_NO_RESPONSE_RETRY_LIMIT = "improve_no_response_retry_limit"
+
 _TASK_LINE_RE = re_compile(
     r"^\s*TASK\s+(?P<kind>settle|builder_improve)\s+"
     r"unit_id=(?P<unit_id>-?\d+)\s+"
@@ -427,7 +432,19 @@ async def _run_single_task(
         if at_target:
             result_str = await gs.found_city(unit.unit_index)
             if result_str.startswith("Error:"):
-                new_task = replace(task, last_result=result_str)
+                if task.last_result == result_str:
+                    new_task = replace(
+                        task,
+                        status="failed",
+                        last_result=FOUND_CITY_RETRY_LIMIT,
+                    )
+                    return new_task, _result_dict(
+                        task,
+                        status="failed",
+                        action="found_city",
+                        result=FOUND_CITY_RETRY_LIMIT,
+                    )
+                new_task = _touch_task(replace(task, last_result=result_str), turn)
                 return new_task, _result_dict(
                     task, status="active", action="found_city", result=result_str
                 )
@@ -458,6 +475,26 @@ async def _run_single_task(
                 new_task = _touch_task(replace(task, last_result=result_str), turn)
                 return new_task, _result_dict(
                     task, status="active", action="improve", result=result_str
+                )
+            if result_str == ACTION_NO_RESPONSE:
+                if task.last_result == IMPROVE_NO_RESPONSE:
+                    new_task = replace(
+                        task,
+                        status="failed",
+                        last_result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
+                    )
+                    return new_task, _result_dict(
+                        task,
+                        status="failed",
+                        action="improve",
+                        result=IMPROVE_NO_RESPONSE_RETRY_LIMIT,
+                    )
+                new_task = _touch_task(replace(task, last_result=IMPROVE_NO_RESPONSE), turn)
+                return new_task, _result_dict(
+                    task,
+                    status="active",
+                    action="improve",
+                    result=IMPROVE_NO_RESPONSE,
                 )
             new_task = replace(task, status="complete", last_result=result_str)
             return new_task, _result_dict(
