@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from civ_mcp import narrate as nr
 
@@ -18,6 +18,9 @@ class ToolDef:
     # tools. The registry is the single source of truth for the tool->verb map;
     # arena.vocab.LOCAL_TOOL_VERBS mirrors it (test-enforced) to stay import-light.
     verb: str = ""
+    # Capability-snapshot flag gating this tool's exposure (spec §1);
+    # None = always exposed. Flag names live in arena.capabilities.CAP_FLAGS.
+    requires: str | None = None
 
 
 def _int_param(
@@ -283,6 +286,7 @@ def _tool(
     call: Callable[[Any, dict[str, Any]], Awaitable[str]],
     *,
     verb: str = "",
+    requires: str | None = None,
 ) -> ToolDef:
     return ToolDef(
         name=name,
@@ -291,6 +295,7 @@ def _tool(
         required=tuple(required),
         call=call,
         verb=verb,
+        requires=requires,
     )
 
 
@@ -1120,6 +1125,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         _spies_text,
+        requires="spies",
     ),
     "get_strategic_map": _tool(
         "get_strategic_map",
@@ -1153,6 +1159,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("unit_id", "action", "target_x", "target_y"),
         _spy_action_text,
         verb="spy_action",
+        requires="spies",
     ),
     "change_government": _tool(
         "change_government",
@@ -1162,6 +1169,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("government_type",),
         _change_government_text,
         verb="change_government",
+        requires="government",
     ),
     "spread_religion": _tool(
         "spread_religion",
@@ -1171,6 +1179,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("unit_id",),
         _spread_religion_text,
         verb="spread_religion",
+        requires="religious_unit",
     ),
     "activate_great_person": _tool(
         "activate_great_person",
@@ -1180,6 +1189,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("unit_id",),
         _activate_great_person_text,
         verb="activate_great_person",
+        requires="gp_unit",
     ),
 }
 
@@ -1257,6 +1267,25 @@ def openai_tools(names: Sequence[str]) -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+def filter_tools(
+    names: Sequence[str], caps: "Mapping[str, bool] | None"
+) -> tuple[str, ...]:
+    """Drop tools whose `requires` flag is false in the capability snapshot.
+
+    caps=None (snapshot failed/absent) and missing flags both FAIL OPEN:
+    over-exposing costs invalid-call churn; over-closing silently removes an
+    ability (spec §1).
+    """
+    resolved = resolve_tools(names)
+    if caps is None:
+        return resolved
+    return tuple(
+        n for n in resolved
+        if TOOL_REGISTRY[n].requires is None
+        or caps.get(TOOL_REGISTRY[n].requires, True)
+    )
 
 
 async def dispatch(

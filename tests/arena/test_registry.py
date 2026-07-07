@@ -4,6 +4,7 @@ from civ_mcp.arena.registry import (
     TOOL_REGISTRY,
     TIERS,
     dispatch,
+    filter_tools,
     openai_tools,
     resolve_tools,
 )
@@ -1137,3 +1138,33 @@ def test_parity_actions_have_mirrored_verbs():
                  "activate_great_person"):
         assert TOOL_REGISTRY[name].verb == name
         assert LOCAL_TOOL_VERBS[name] == name
+
+
+def test_filter_tools_fail_open_and_gating():
+    names = ("get_overview", "get_spies", "spy_action", "change_government")
+    # caps=None (snapshot failed): everything exposed
+    assert filter_tools(names, None) == names
+    # flag false: gated tools dropped, unflagged tools kept
+    caps = {"spies": False, "government": True}
+    assert filter_tools(names, caps) == ("get_overview", "change_government")
+    # missing flag: fail open (exposed)
+    assert filter_tools(names, {}) == names
+
+
+def test_gated_parity_tools_declare_requires():
+    assert TOOL_REGISTRY["get_spies"].requires == "spies"
+    assert TOOL_REGISTRY["spy_action"].requires == "spies"
+    assert TOOL_REGISTRY["change_government"].requires == "government"
+    assert TOOL_REGISTRY["spread_religion"].requires == "religious_unit"
+    assert TOOL_REGISTRY["activate_great_person"].requires == "gp_unit"
+    # readouts stay ungated
+    assert TOOL_REGISTRY["get_strategic_map"].requires is None
+    assert TOOL_REGISTRY["get_notifications"].requires is None
+
+
+def test_every_requires_flag_exists_in_snapshot():
+    """A ToolDef gating on a flag the snapshot never emits would fail open
+    forever (silently ungated). Pin the mirror."""
+    from civ_mcp.arena.capabilities import CAP_FLAGS
+    used = {t.requires for t in TOOL_REGISTRY.values() if t.requires is not None}
+    assert used <= set(CAP_FLAGS), used - set(CAP_FLAGS)
