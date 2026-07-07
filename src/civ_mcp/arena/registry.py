@@ -1067,8 +1067,12 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
     ),
     "resolve_city_capture": _tool(
         "resolve_city_capture",
-        "Resolve a captured or disloyal city: keep, raze, or liberate.",
-        {"action": _str_param("One of: keep, raze, liberate_founder, liberate_previous.")},
+        "Resolve a captured or disloyal city: keep, raze, liberate, or reject.",
+        {"action": _str_param(
+            "One of: keep, raze, liberate_founder, liberate_previous, reject. "
+            "Use reject to decline a city gained via loyalty flip (frees it) "
+            "instead of keeping it."
+        )},
         ("action",),
         _resolve_city_capture_text,
         verb="resolve_city_capture",
