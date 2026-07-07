@@ -31,6 +31,10 @@ local natl, mob = true, true
 pcall(function() natl = civ("CIVIC_NATIONALISM") end)
 pcall(function() mob = civ("CIVIC_MOBILIZATION") end)
 pcall(function()
+    -- PROBE(live): unit-scan APIs (GetSpreadCharges, GetGreatPerson():IsGreatPerson(),
+    -- GetBuildCharges/ExtractsArtifacts, GetMilitaryFormation + MilitaryFormationTypes/
+    -- FormationClass enums) validated by the Task 15 checklist. On error all six
+    -- flags in this block stay fail-open true.
     local rel, gpu, air, arch, corpsOwned, pair = false, false, false, false, false, false
     local counts = {}
     for i, u in p:GetUnits():Members() do
