@@ -1052,6 +1052,44 @@ async def test_exclusive_cli_briefing_built_before_disconnect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_briefing_build_failure_does_not_abort_arena_turn(monkeypatch):
+    """A briefing-build raise (e.g. a missing playbook file) must degrade this
+    civ to no briefing, not abort the whole multi-civ run -- mirroring the
+    memory/task-tracker load guards."""
+    from civ_mcp.arena import coordinator
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("playbook missing")
+
+    monkeypatch.setattr(coordinator, "maybe_build_briefing", boom)
+
+    seen = {}
+
+    class ExclusiveBriefingPolicy:
+        needs_exclusive_tuner = True
+        options = CivOptions(briefing=BriefingOptions(enabled=True))
+        provider = "cli-claude"
+
+        async def __call__(self, gs, player_id, turn, *, briefing=None):
+            seen["briefing"] = briefing
+            return {"summary": "ran"}
+
+    conn = FakeConn()
+    conn._polls = iter([["LOCAL|7", "TURN|2", "ACTIVE|true", "LAST|1"]])
+    cfg = ArenaConfig(
+        players=[PlayerSpec(7, "cli-claude", "")],
+        max_puppet_turns=1,
+        puppet_ids=[7],
+    )
+    pol = ExclusiveBriefingPolicy()
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol)
+
+    assert result["puppet_turns_played"] == 1   # run survived the briefing failure
+    assert seen["briefing"] is None              # degraded to no briefing
+
+
+@pytest.mark.asyncio
 async def test_exclusive_policy_without_briefing_kwarg_runs_with_briefing_enabled():
     class NarrowExclusivePolicy:
         needs_exclusive_tuner = True

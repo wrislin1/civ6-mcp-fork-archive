@@ -222,16 +222,26 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     and opts.briefing.enabled
                     and _policy_accepts_kwarg(pol, "briefing")
                 ):
-                    playbook_chars = (
-                        len(load_playbook()) if opts.playbook == "condensed" else 0
-                    )
-                    policy_kwargs["briefing"] = await maybe_build_briefing(
-                        gs,
-                        opts,
-                        n_ctx=explicit_n_ctx(opts.context_budget),
-                        playbook_chars=playbook_chars,
-                        tool_schema_chars=0,
-                    )
+                    try:
+                        playbook_chars = (
+                            len(load_playbook()) if opts.playbook == "condensed" else 0
+                        )
+                        policy_kwargs["briefing"] = await maybe_build_briefing(
+                            gs,
+                            opts,
+                            n_ctx=explicit_n_ctx(opts.context_budget),
+                            playbook_chars=playbook_chars,
+                            tool_schema_chars=0,
+                        )
+                    except Exception as e:
+                        # A per-civ briefing-build failure (a missing playbook
+                        # file, a budget-calc raise) must degrade THIS civ to no
+                        # briefing, never abort the whole multi-civ run --
+                        # mirroring the memory/task-tracker load guards above and
+                        # the promotion-sweep guard below. Omitting the kwarg is
+                        # the same state a non-exclusive turn uses, so the policy
+                        # already tolerates its absence.
+                        print(f"[arena] briefing build failed: {e!r}", file=sys.stderr)
 
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
