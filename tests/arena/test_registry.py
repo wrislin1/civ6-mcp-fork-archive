@@ -1004,3 +1004,58 @@ async def test_dispatch_resolve_city_capture_rejects_unknown_action():
 
     text = await dispatch(FakeGS(), "resolve_city_capture", {"action": "destroy"})
     assert text.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_wc_votes_rejects_non_integer_fields():
+    class FakeGS:
+        async def queue_wc_votes(self, votes):
+            raise AssertionError("non-integer vote fields must not reach GameState")
+
+    string_option = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": '[{"hash": 1, "option": "B", "target": 0, "votes": 1}]'},
+    )
+    lua_injection = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": '[{"hash": 1, "option": "1}; DoEvil() --", "target": 0, "votes": 1}]'},
+    )
+    bool_votes = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": [{"hash": 1, "option": 1, "target": 0, "votes": True}]},
+    )
+    fractional = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": [{"hash": 1, "option": 1.5, "target": 0, "votes": 1}]},
+    )
+    missing_hash = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": [{"option": 1, "target": 0, "votes": 1}]},
+    )
+
+    for text in (string_option, lua_injection, bool_votes, fractional, missing_hash):
+        assert text.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_wc_votes_coerces_aliases_and_numeric_strings():
+    calls = []
+
+    class FakeGS:
+        async def queue_wc_votes(self, votes):
+            calls.append(votes)
+            return "OK:VOTES_QUEUED"
+
+    text = await dispatch(
+        FakeGS(),
+        "queue_wc_votes",
+        {"votes": '[{"resolution_hash": "123", "option": "2", "target_index": 1}]'},
+    )
+
+    assert text == "OK:VOTES_QUEUED"
+    assert calls == [[{"hash": 123, "option": 2, "target": 1, "votes": 5}]]

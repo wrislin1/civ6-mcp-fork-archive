@@ -198,7 +198,33 @@ async def _queue_wc_votes_text(gs: Any, args: dict[str, Any]) -> str:
         parsed = raw
     if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
         return 'Error: votes must be a JSON list of vote objects, e.g. [{"hash": H, "option": 1, "target": 0, "votes": N}].'
-    return await gs.queue_wc_votes(parsed)
+    # Coerce every field to a real int before it reaches the Lua generator:
+    # build_register_wc_voter interpolates these values bare into a Lua table
+    # literal, so a stray string would splice into the Lua source (or, e.g.
+    # option="B", silently evaluate to nil and fall back to option A).
+    coerced = []
+    for item in parsed:
+        clean: dict[str, int] = {}
+        for field, aliases, default in (
+            ("hash", ("hash", "resolution_hash"), None),
+            ("option", ("option",), 1),
+            ("target", ("target", "target_index"), 0),
+            ("votes", ("votes", "num_votes"), 5),
+        ):
+            value = next((item[a] for a in aliases if a in item), default)
+            if value is None:
+                return f'Error: each vote object needs an integer "{field}".'
+            if isinstance(value, bool):
+                return f'Error: vote field "{field}" must be an integer, got {value!r}.'
+            try:
+                int_value = int(value)
+            except (TypeError, ValueError):
+                return f'Error: vote field "{field}" must be an integer, got {value!r}.'
+            if isinstance(value, float) and value != int_value:
+                return f'Error: vote field "{field}" must be an integer, got {value!r}.'
+            clean[field] = int_value
+        coerced.append(clean)
+    return await gs.queue_wc_votes(coerced)
 
 
 _CITY_CAPTURE_ACTIONS = ("keep", "raze", "liberate_founder", "liberate_previous")
