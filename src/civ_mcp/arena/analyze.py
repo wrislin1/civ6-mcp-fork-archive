@@ -176,6 +176,7 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
     task_completed = 0
     task_blocked_visible_hostile = 0
     task_lost = 0
+    task_failed = 0
     drivers = {"in_process": 0, "cli": 0}
     puppeted_players: set = set()
 
@@ -204,6 +205,8 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
                 task_completed += 1
             elif status == "lost":
                 task_lost += 1
+            elif status == "failed":
+                task_failed += 1
             if entry.get("result") == "blocked_visible_hostile":
                 task_blocked_visible_hostile += 1
 
@@ -215,6 +218,7 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
         "task_completed": task_completed,
         "task_blocked_visible_hostile": task_blocked_visible_hostile,
         "task_lost": task_lost,
+        "task_failed": task_failed,
         "drivers": drivers,
         "puppeted_players": sorted(puppeted_players),
     }
@@ -555,6 +559,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
         task_completions = 0
         task_blocked = 0
         task_lost_count = 0
+        task_failed_count = 0
         gp_calls = 0
         trade_calls = 0
         religion_wc_calls = 0
@@ -594,6 +599,8 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                     task_completions += 1
                 elif status == "lost":
                     task_lost_count += 1
+                elif status == "failed":
+                    task_failed_count += 1
                 if entry.get("result") == "blocked_visible_hostile":
                     task_blocked += 1
             gp_calls += _count_tool_calls(steps, _GREAT_PEOPLE_TOOLS)
@@ -641,6 +648,7 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                 "task_completions": task_completions,
                 "task_blocked": task_blocked,
                 "task_lost": task_lost_count,
+                "task_failed": task_failed_count,
                 "great_people_tool_calls": gp_calls,
                 "trade_route_tool_calls": trade_calls,
                 "religion_wc_tool_calls": religion_wc_calls,
@@ -714,6 +722,7 @@ def render_markdown(report: dict) -> str:
             f"- **Task blocked (visible hostile)**: {behavior.get('task_blocked_visible_hostile', 0)}"
         )
         lines.append(f"- **Task lost**: {behavior.get('task_lost', 0)}")
+        lines.append(f"- **Task failed**: {behavior.get('task_failed', 0)}")
         lines.append(
             f"- **Driver mix**: in_process={drivers.get('in_process', 0)}, cli={drivers.get('cli', 0)}"
         )
@@ -723,11 +732,11 @@ def render_markdown(report: dict) -> str:
 
         lines.append(
             "| player_id | driver | provider | model | mem injected | mem captured | "
-            "task attempts | task complete | task blocked | task lost | GP calls | trade calls | religion/WC calls |"
+            "task attempts | task complete | task blocked | task lost | task failed | GP calls | trade calls | religion/WC calls |"
         )
         lines.append(
             "|-----------|--------|----------|-------|---------------|--------------|"
-            "---------------|----------------|--------------|-----------|----------|-------------|-------------------|"
+            "---------------|----------------|--------------|-----------|-------------|----------|-------------|-------------------|"
         )
         for _seat, data in sorted(by_player.items(), key=lambda item: _config_summary_sort_key(item[0])):
             pb = data.get("behavior") or {}
@@ -738,6 +747,7 @@ def render_markdown(report: dict) -> str:
                 f"{pb.get('model', '') or ''} | {pb.get('standing_memory_injected_turns', 0)} | "
                 f"{pb.get('standing_memory_captured_turns', 0)} | {pb.get('task_follow_through_attempts', 0)} | "
                 f"{pb.get('task_completions', 0)} | {pb.get('task_blocked', 0)} | {pb.get('task_lost', 0)} | "
+                f"{pb.get('task_failed', 0)} | "
                 f"{pb.get('great_people_tool_calls', 0)} | {pb.get('trade_route_tool_calls', 0)} | "
                 f"{pb.get('religion_wc_tool_calls', 0)} |"
             )

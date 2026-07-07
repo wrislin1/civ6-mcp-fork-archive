@@ -1511,6 +1511,53 @@ def test_behavior_per_player_cli_puppet() -> None:
     assert pb["religion_wc_tool_calls"] == 3
 
 
+def _behavior_failed_task_rec() -> dict:
+    """puppet whose tasks died at the retry limits: failures must be counted,
+    not read as a healthy run of in-progress actions."""
+    return {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "ts": "2026-07-06T00:03:00Z",
+        "player_id": 4,
+        "turn": 4,
+        "provider": "local",
+        "model": "model-d",
+        "driver": "in_process",
+        "steps": [],
+        "invalid_tool_calls": [],
+        "standing_memory": {"loaded": False, "injected_chars": 0, "captured_chars": 0},
+        "task_tracker": {
+            "active_before": 2,
+            "pre_model_results": [
+                {"task_id": "t9", "kind": "settle", "unit_id": 7, "target": [4, 4],
+                 "status": "failed", "action": "found_city",
+                 "result": "found_city_failed_retry_limit"},
+                {"task_id": "t10", "kind": "builder_improve", "unit_id": 8, "target": [5, 5],
+                 "status": "failed", "action": "improve",
+                 "result": "improve_no_response_retry_limit"},
+            ],
+            "active_after": 0,
+        },
+        "state_before": None,
+        "state_after": None,
+        "state_delta": None,
+    }
+
+
+def test_behavior_counts_failed_tasks() -> None:
+    from civ_mcp.arena.analyze import analyze, render_markdown
+
+    report = analyze([_behavior_failed_task_rec()], [])
+    behavior = report["behavior"]
+    pb = report["by_player"][4]["behavior"]
+
+    assert behavior["task_failed"] == 2
+    assert pb["task_failed"] == 2
+
+    md = render_markdown(report)
+    assert "**Task failed**: 2" in md
+
+
 def test_behavior_markdown_has_section_and_no_treatment_control_wording() -> None:
     from civ_mcp.arena.analyze import analyze, render_markdown
 
@@ -1546,6 +1593,7 @@ def test_behavior_empty_run_all_zero() -> None:
         "task_completed": 0,
         "task_blocked_visible_hostile": 0,
         "task_lost": 0,
+        "task_failed": 0,
         "drivers": {"in_process": 0, "cli": 0},
         "puppeted_players": [],
     }
