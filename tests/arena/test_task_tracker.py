@@ -366,6 +366,34 @@ def test_merge_tasks_cancel_matches_unit_index_alias():
     assert merge_tasks([existing], [cancel], max_tasks=8) == ()
 
 
+def test_merge_cancel_does_not_conflate_distinct_composite_ids():
+    # 65537 and 131073 are congruent mod 65536 but carry different owner high
+    # bits -- they are different units, not alias forms of one unit.
+    existing = (_task(task_id="settle:65537", unit_id=65537),)
+    cancel = UnitTask(
+        task_id="cancel:131073",
+        kind="cancel",
+        unit_id=131073,
+        target_x=0,
+        target_y=0,
+        status="cancelled",
+        created_turn=9,
+        updated_turn=9,
+        last_result="cancelled",
+    )
+
+    assert merge_tasks(existing, [cancel], max_tasks=8) == existing
+
+
+def test_merge_restatement_does_not_conflate_distinct_composite_ids():
+    existing = (_task(task_id="settle:65537", unit_id=65537, target_x=10, target_y=10),)
+    updates = parse_task_lines("TASK settle unit_id=131073 target=12,13", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert {t.task_id for t in merged} == {"settle:65537", "settle:131073"}
+
+
 def test_merge_respects_max_tasks_keeping_newest():
     existing = (
         _task(task_id="settle:1", unit_id=1, updated_turn=1),

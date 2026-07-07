@@ -233,7 +233,14 @@ def parse_task_lines(plan_text: str, turn: int) -> list[UnitTask]:
 
 
 def _task_unit_ids_equivalent(left: int, right: int) -> bool:
-    return left == right or left % 65536 == right % 65536
+    if left == right:
+        return True
+    # A bare unit index (< 65536) aliases its composite owner*65536+index form.
+    # Two distinct composite ids are different units even when congruent mod
+    # 65536 -- their high bits encode different owners.
+    if left >= 65536 and right >= 65536:
+        return False
+    return left % 65536 == right % 65536
 
 
 def merge_tasks(
