@@ -1062,3 +1062,32 @@ async def test_dispatch_queue_wc_votes_coerces_aliases_and_numeric_strings():
 
     assert text == "OK:VOTES_QUEUED"
     assert calls == [[{"hash": 123, "option": 2, "target": 1, "votes": 5}]]
+
+
+PARITY_READOUTS = ("get_spies", "get_strategic_map", "get_notifications")
+
+
+def test_parity_readouts_registered():
+    for name in PARITY_READOUTS:
+        assert name in TOOL_REGISTRY, name
+        assert TOOL_REGISTRY[name].verb == ""      # query tools carry no verb
+        assert name in resolve_tools("full")
+
+
+@pytest.mark.asyncio
+async def test_parity_readouts_dispatch_to_gamestate():
+    class GS:
+        def __init__(self):
+            self.called = []
+        async def get_spies(self):
+            self.called.append("spies"); return "2 spies"      # str passthrough
+        async def get_strategic_map(self):
+            self.called.append("smap"); return "fog report"
+        async def get_notifications(self):
+            self.called.append("notif"); return "3 notifications"
+
+    gs = GS()
+    for name in PARITY_READOUTS:
+        out = await dispatch(gs, name, {})
+        assert isinstance(out, str) and out
+    assert gs.called == ["spies", "smap", "notif"]

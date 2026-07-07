@@ -149,6 +149,21 @@ async def _trade_routes_text(gs: Any, args: dict[str, Any]) -> str:
     return _render(await gs.get_trade_routes(), nr.narrate_trade_routes)
 
 
+async def _spies_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_spies(), nr.narrate_spies)
+
+
+async def _strategic_map_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_strategic_map(), nr.narrate_strategic_map)
+
+
+async def _notifications_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_notifications(), nr.narrate_notifications)
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1076,6 +1091,31 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         ("action",),
         _resolve_city_capture_text,
         verb="resolve_city_capture",
+    ),
+    "get_spies": _tool(
+        "get_spies",
+        "List your spy units: composite id, position, rank, city, and which "
+        "operations are available where they stand. Offensive missions need the "
+        "spy physically in the target city (spy_action travel first).",
+        None,
+        (),
+        _spies_text,
+    ),
+    "get_strategic_map": _tool(
+        "get_strategic_map",
+        "Empire-level map summary: fog coverage per city and unclaimed nearby "
+        "resources. Use every ~30 turns to spot expansion gaps.",
+        None,
+        (),
+        _strategic_map_text,
+    ),
+    "get_notifications": _tool(
+        "get_notifications",
+        "Current game notifications (the bell items a human sees): what needs "
+        "attention this turn.",
+        None,
+        (),
+        _notifications_text,
     ),
 }
 
