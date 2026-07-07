@@ -1,6 +1,8 @@
 import asyncio
 import types
 
+import httpx
+import openai
 import pytest
 
 from civ_mcp.arena.backends import (
@@ -62,8 +64,10 @@ def test_chat_passes_tools_with_cap():
 
 def test_caps_are_bounded():
     # guard against someone loosening the cap back into runaway territory
-    assert 256 <= MAX_COMPLETION_TOKENS <= 4096
-    assert 30 <= REQUEST_TIMEOUT_S <= 300
+    assert 256 <= MAX_COMPLETION_TOKENS <= 8192
+    assert 30 <= REQUEST_TIMEOUT_S <= 600
+    assert MAX_COMPLETION_TOKENS == 6144   # slice-4 decision (spec §4)
+    assert REQUEST_TIMEOUT_S == 300.0      # token cap, not the clock, bounds a step
 
 
 def _backend_with_create(create_fn):
@@ -115,3 +119,44 @@ async def test_chat_raises_after_bounded_retries(monkeypatch):
     with pytest.raises(RuntimeError):
         await b.chat([{"role": "user", "content": "hi"}], tools=[])
     assert calls["n"] == 3   # bounded: exactly three attempts, no unbounded loop
+
+
+@pytest.mark.asyncio
+async def test_timeout_errors_are_not_retried(monkeypatch):
+    """A 300 s timeout at a 6144 cap means runaway generation; resampling it
+    3x would stall one seat ~15 minutes. Timeouts re-raise immediately so the
+    coordinator's degrade guard skips the turn (spec §4)."""
+    monkeypatch.setattr(asyncio, "sleep", _noop)
+    calls = {"n": 0}
+
+    async def timing_out(**kw):
+        calls["n"] += 1
+        raise openai.APITimeoutError(request=httpx.Request("POST", "http://x/v1"))
+
+    b = _backend_with_create(timing_out)
+    with pytest.raises(openai.APITimeoutError):
+        await b.chat([{"role": "user", "content": "hi"}], tools=[])
+    assert calls["n"] == 1   # no retry
+
+
+@pytest.mark.asyncio
+async def test_non_timeout_errors_still_retry(monkeypatch):
+    """The existing 3-attempt retry stays for gateway 500s / llama-swap 503s."""
+    monkeypatch.setattr(asyncio, "sleep", _noop)
+    calls = {"n": 0}
+
+    async def flaky_then_ok(**kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("HTTP 500")
+        import types as _t
+        msg = _t.SimpleNamespace(content="ok", tool_calls=None)
+        return _t.SimpleNamespace(
+            choices=[_t.SimpleNamespace(message=msg)],
+            usage=_t.SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+
+    b = _backend_with_create(flaky_then_ok)
+    r = await b.chat([{"role": "user", "content": "hi"}], tools=[])
+    assert r.text == "ok"
+    assert calls["n"] == 2

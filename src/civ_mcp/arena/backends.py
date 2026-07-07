@@ -1,16 +1,19 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
+import openai
 from openai import AsyncOpenAI
 
-# A turn-step is "reason, then emit one tool call". Observed legit treatment steps
-# reach ~1900 completion tokens, so cap with headroom above that. Without any cap a
-# degenerate/looping generation runs until it exhausts the 131K context, pegging the
-# GPU for minutes and stalling the whole game on one turn; 3072 bounds a runaway to
-# ~1-1.5 min while (almost) never truncating a valid step. The timeout is a backstop
-# against a hung upstream — with the token cap it should essentially never fire.
-MAX_COMPLETION_TOKENS = 3072
-REQUEST_TIMEOUT_S = 120.0
+# A turn-step is "reason, then emit one tool call". Observed legit steps reach
+# ~1,900 completion tokens; one live step hit the old 3072 cap (truncated tool
+# JSON -> gateway 500 -> the 37a48ef crash). 6144 is ~3x observed max. At local
+# speeds (~25-35 tok/s on a 3090) a full 6144-token generation runs 3-4 minutes,
+# so the timeout rises with it: the token cap, not the clock, bounds a legit
+# long step. A timeout at this cap means runaway generation - it is re-raised
+# without retry (see chat()) so one seat stalls at most ~5 min before the
+# coordinator's degrade guard skips the turn.
+MAX_COMPLETION_TOKENS = 6144
+REQUEST_TIMEOUT_S = 300.0
 
 # A single chat step can fail transiently: the gateway 500s on a malformed/truncated
 # tool call (which at temp>0 usually differs when resampled), llama-swap 503s while it
@@ -48,6 +51,9 @@ class OpenAICompatBackend:
             try:
                 resp = await self._client.chat.completions.create(**kw)
                 break
+            except openai.APITimeoutError:
+                # Runaway generation, not a transient: resampling would repeat it.
+                raise
             except Exception:
                 if attempt >= MAX_ATTEMPTS:
                     raise
