@@ -527,5 +527,9 @@ def test_build_unit_operation_shape():
     assert "REBASE" in lua and "PARAM_X" in lua and "PARAM_Y" in lua
     assert "CanStartOperation" in lua
     assert "OK:" in lua and "ERR:" in lua
+    # Unit-not-found bail must print ERR AND the sentinel before returning
+    # (via _lua_get_unit/_bail) — a bare return would hang the reader.
+    assert 'print("ERR:UNIT_NOT_FOUND"); print("---END---"); return' in lua
+    assert lua.rstrip().endswith('print("---END---")')
     with pytest.raises(ValueError):
         build_unit_operation(3, "MAKE_TEA", 0, 0)
