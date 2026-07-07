@@ -299,11 +299,15 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 # as standing-memory turns -- so a stripped block must read as
                 # not injected.
                 injected_block = policy_kwargs.get("memory_block", "")
+                # Same rule on the capture side: extraction also feeds the task
+                # tracker, so with memory disabled captured_plan can be non-empty
+                # while nothing is ever saved or injectable -- report 0 or a
+                # tracker-only civ reads as a standing-memory-captured turn.
                 _standing_memory_fields = {
                     "loaded": bool(memory),
                     "injected": bool(injected_block),
                     "injected_chars": len(injected_block),
-                    "captured_chars": len(captured_plan),
+                    "captured_chars": len(captured_plan) if opts.memory.enabled else 0,
                     "error": memory_error,
                 }
                 _task_tracker_fields = {

@@ -20,6 +20,11 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from civ_mcp.arena.task_tracker import (
+    DROPPED_FUTURE_DATED,
+    SKIPPED_NO_MOVES,
+    UNITS_FETCH_FAILED,
+)
 from civ_mcp.arena.vocab import MCP_CIV6_PREFIX, LOCAL_TOOL_VERBS
 
 
@@ -162,6 +167,15 @@ def _task_tracker_active(rec: dict) -> bool:
     return bool(_task_tracker_pre_model_results(rec))
 
 
+# Bookkeeping results run_pre_model_tasks emits without issuing a game action
+# or deciding anything about the task: a unit with no moves left, a transient
+# unit-fetch failure (one entry PER executable task), a rollback drop. Counting
+# them as follow-through attempts inflates the metric on flaky-tuner turns.
+_NON_ATTEMPT_RESULTS = frozenset(
+    {SKIPPED_NO_MOVES, UNITS_FETCH_FAILED, DROPPED_FUTURE_DATED}
+)
+
+
 def _classify_task_results(rec: dict) -> dict[str, int]:
     """Per-record task-result counts.
 
@@ -177,7 +191,8 @@ def _classify_task_results(rec: dict) -> dict[str, int]:
         "blocked_visible_hostile": 0,
     }
     for entry in _task_tracker_pre_model_results(rec):
-        counts["attempts"] += 1
+        if entry.get("result") not in _NON_ATTEMPT_RESULTS:
+            counts["attempts"] += 1
         status = entry.get("status")
         if status in ("complete", "lost", "failed"):
             counts[status] += 1

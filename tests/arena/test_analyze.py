@@ -1650,3 +1650,29 @@ def test_behavior_counts_cli_unit_action_trade_routes() -> None:
     report = analyze([rec], [])
 
     assert report["by_player"][2]["behavior"]["trade_route_tool_calls"] == 2
+
+
+def test_classify_task_results_excludes_non_attempt_bookkeeping():
+    """skipped_no_moves / units_fetch_failed / dropped_future_dated entries
+    issue no game action and must not inflate task follow-through attempts."""
+    from civ_mcp.arena.analyze import _classify_task_results
+
+    rec = {
+        "task_tracker": {
+            "pre_model_results": [
+                {"task_id": "t1", "status": "active", "action": "skip",
+                 "result": "skipped_no_moves"},
+                {"task_id": "t2", "status": "active", "action": "skip",
+                 "result": "units_fetch_failed"},
+                {"task_id": "t3", "status": "lost", "action": "skip",
+                 "result": "dropped_future_dated"},
+                {"task_id": "t4", "status": "active", "action": "move",
+                 "result": "MOVING_TO|18,24"},
+            ]
+        }
+    }
+
+    counts = _classify_task_results(rec)
+
+    assert counts["attempts"] == 1
+    assert counts["lost"] == 1

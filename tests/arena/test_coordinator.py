@@ -1399,3 +1399,43 @@ def test_policy_accepts_kwarg_handles_bare_function_signature():
 
     assert _policy_accepts_kwarg(Explicit(), "memory_block") is True
     assert _policy_accepts_kwarg(Explicit(), "task_block") is False
+
+
+@pytest.mark.asyncio
+async def test_tracker_only_capture_not_reported_as_memory_captured(tmp_path):
+    """With memory disabled the extracted plan is never saved or injectable;
+    captured_chars must read 0 or analyze counts the tracker-only civ as a
+    standing-memory-captured turn."""
+    opts = CivOptions(task_tracker=TaskTrackerOptions(enabled=True, max_tasks=8))
+    run_id, player_id = "tracker-only-captured", 8
+    cfg = ArenaConfig(
+        players=[PlayerSpec(player_id, "local", "m")],
+        max_puppet_turns=1,
+        dry_run=True,
+        puppet_ids=[player_id],
+        run_id=run_id,
+        transcript_dir=str(tmp_path),
+    )
+    pol = RecordingPolicy(
+        {
+            "summary": "ignored",
+            "transcript": {
+                "final_summary": (
+                    "STANDING PLAN:\n- keep going\n"
+                    "TASK settle unit_id=42 target=10,12\n"
+                )
+            },
+        },
+        options=opts,
+    )
+    conn = FakeConn()
+    conn._polls = iter([[f"LOCAL|{player_id}", "TURN|2", "ACTIVE|true", "LAST|1"]])
+    sink = FakeSink()
+
+    result = await run_arena(conn, FakeGS(), cfg, policy=pol, transcript=sink)
+
+    # Task capture itself still worked...
+    assert '"unit_id": 42' in task_path(str(tmp_path), run_id, player_id).read_text()
+    # ...but nothing reads as a standing-memory capture.
+    assert result["log"][0]["standing_memory"]["captured_chars"] == 0
+    assert sink.records[0]["standing_memory"]["captured_chars"] == 0
