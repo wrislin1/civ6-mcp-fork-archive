@@ -1477,3 +1477,47 @@ async def test_tracker_only_capture_not_reported_as_memory_captured(tmp_path):
     # ...but nothing reads as a standing-memory capture.
     assert result["log"][0]["standing_memory"]["captured_chars"] == 0
     assert sink.records[0]["standing_memory"]["captured_chars"] == 0
+
+
+@pytest.mark.asyncio
+async def test_policy_failure_is_skipped_not_crashed_and_restores_human():
+    """A puppet LLM turn whose policy raises -- e.g. the llama.cpp gateway returns
+    HTTP 500 on a malformed/truncated tool call (openai.InternalServerError) -- must
+    NOT crash the whole run. The coordinator logs it, hands the seat back to the human
+    (finish_units + restore_local(0)), consumes the puppet-turn budget, and continues.
+    This mirrors the sweep/memory/task/briefing degrade-not-abort guards.
+
+    Goes RED under the unguarded `result = await pol(...)`: the exception propagates
+    out of run_arena and kills the watcher mid-round (leaving the human stuck on the
+    puppet seat), which is exactly the live-run crash this guards against."""
+    class BoomPolicy:
+        provider = "local"
+        options = CivOptions()
+
+        def __init__(self):
+            self.calls = 0
+
+        async def __call__(self, gs, player_id, turn, **kwargs):
+            self.calls += 1
+            raise RuntimeError(
+                "Error code: 500 - Failed to parse tool call arguments as JSON"
+            )
+
+    conn, gs = FakeConn(), FakeGS()
+    # Two active puppet polls but budget of 1: a failed turn that correctly consumes
+    # the budget yields exactly ONE attempt. A guard that forgot to decrement would
+    # re-enter and call the policy a second time (or idle-loop) -- pol.calls pins it.
+    conn._polls = iter([
+        ["LOCAL|1", "TURN|2", "ACTIVE|true", "LAST|1"],
+        ["LOCAL|1", "TURN|3", "ACTIVE|true", "LAST|1"],
+    ])
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      puppet_ids=[1])
+    pol = BoomPolicy()
+
+    result = await run_arena(conn, gs, cfg, policy=pol)   # must NOT raise
+
+    assert pol.calls == 1              # budget consumed: one attempt, no loop
+    assert conn.restored is True       # human handed back despite the failure
+    # The failure is surfaced in the log rather than silently swallowed.
+    assert any(entry.get("skipped") for entry in result["log"])

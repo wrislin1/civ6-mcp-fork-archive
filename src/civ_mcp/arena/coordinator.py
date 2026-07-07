@@ -245,7 +245,28 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
 
                 if exclusive and conn.is_connected:
                     await conn.disconnect()       # free the single tuner slot for the CLI
-                result = await pol(gs, st.local, st.turn, **policy_kwargs)
+                try:
+                    result = await pol(gs, st.local, st.turn, **policy_kwargs)
+                except Exception as e:
+                    # A single failed LLM turn -- e.g. the gateway 500s on a malformed/
+                    # truncated tool call (openai.InternalServerError) -- must degrade THIS
+                    # puppet turn, never abort the whole multi-turn run. Mirrors the
+                    # sweep/memory/task/briefing guards below and the human-safety invariant:
+                    # reclaim the tuner (an exclusive CLI turn released it), hand the seat
+                    # back to the human, consume the puppet-turn budget, and continue.
+                    # Exception (not BaseException) so a CancelledError/Ctrl-C still unwinds
+                    # to the finally's guarded handback.
+                    print(f"[arena] puppet turn seat {st.local} turn {st.turn} failed, "
+                          f"skipping: {e!r}", file=sys.stderr)
+                    log.append({"turn": st.turn, "player_id": st.local,
+                                "skipped": True, "error": repr(e)})
+                    if not conn.is_connected:
+                        await _reconnect_with_retry(conn)
+                    await hook.finish_units(conn, st.local)
+                    await hook.restore_local(conn, 0)
+                    remaining -= 1
+                    deadline_polls -= 1
+                    continue
                 if exclusive and not conn.is_connected:
                     await _reconnect_with_retry(conn)   # reclaim before we end the turn
                 try:
