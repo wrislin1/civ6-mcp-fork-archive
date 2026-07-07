@@ -507,3 +507,15 @@ def test_build_move_great_work_rejects_suspicious_building():
                 "b]u[ilding"):
         with pytest.raises(ValueError):
             build_move_great_work(17, 65793, bad, 2)
+
+
+def test_build_form_formation_shape():
+    from civ_mcp.lua.units import build_form_formation
+    lua = build_form_formation(3, 7, "FORM_CORPS")
+    assert "FORM_CORPS" in lua
+    assert "PARAM_UNIT_ID" in lua           # merge target passed by id
+    assert "CanStartCommand" in lua         # precheck before request
+    assert "OK:" in lua and "ERR:" in lua
+
+    with pytest.raises(ValueError):
+        build_form_formation(3, 7, "FORM_VOLTRON")

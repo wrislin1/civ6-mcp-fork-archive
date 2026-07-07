@@ -995,6 +995,31 @@ async def move_great_work(
         lambda: gs.move_great_work(work_id, target_city_id, building, slot))
 
 
+@mcp.tool()
+async def form_corps(ctx: Context, unit_id: int, merge_unit_id: int) -> str:
+    """Merge two same-type military units into a corps (+10 CS, one unit).
+
+    Requires the Nationalism civic. Units must be the same type and adjacent
+    or stacked.
+    """
+    gs = _get_game(ctx)
+    params = {"unit_id": unit_id, "merge_unit_id": merge_unit_id}
+    return await _logged(ctx, "form_corps", params,
+                         lambda: gs.form_corps(unit_id % 65536, merge_unit_id % 65536))
+
+
+@mcp.tool()
+async def form_army(ctx: Context, unit_id: int, merge_unit_id: int) -> str:
+    """Merge a corps with a same-type unit into an army (+17 CS total).
+
+    Requires the Mobilization civic. unit_id must already be a corps.
+    """
+    gs = _get_game(ctx)
+    params = {"unit_id": unit_id, "merge_unit_id": merge_unit_id}
+    return await _logged(ctx, "form_army", params,
+                         lambda: gs.form_army(unit_id % 65536, merge_unit_id % 65536))
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.

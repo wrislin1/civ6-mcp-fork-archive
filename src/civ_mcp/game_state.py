@@ -1386,6 +1386,28 @@ class GameState:
         return _action_result(lines)
 
     # ------------------------------------------------------------------
+    # Unit formations (InGame context, Nationalism + Mobilization civics)
+    # ------------------------------------------------------------------
+
+    async def form_corps(self, unit_index: int, merge_unit_index: int) -> str:
+        """Merge two same-type military units into a corps (+10 CS, one unit).
+
+        Requires Nationalism civic. Units must be same type and adjacent/stacked.
+        """
+        lines = await self.conn.execute_write(
+            lq.build_form_formation(unit_index, merge_unit_index, "FORM_CORPS"))
+        return _action_result(lines)
+
+    async def form_army(self, unit_index: int, merge_unit_index: int) -> str:
+        """Merge a corps with a same-type unit into an army (+17 CS total).
+
+        Requires Mobilization civic. unit_index must already be a corps.
+        """
+        lines = await self.conn.execute_write(
+            lq.build_form_formation(unit_index, merge_unit_index, "FORM_ARMY"))
+        return _action_result(lines)
+
+    # ------------------------------------------------------------------
     # Trader teleport (InGame context)
     # ------------------------------------------------------------------
 

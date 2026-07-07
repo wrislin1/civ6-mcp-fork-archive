@@ -212,6 +212,16 @@ async def _move_great_work_text(gs: Any, args: dict[str, Any]) -> str:
         args["work_id"], args["target_city_id"], args["building"], args["slot"])
 
 
+async def _form_corps_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.form_corps(
+        _unit_index(args["unit_id"]), _unit_index(args["merge_unit_id"]))
+
+
+async def _form_army_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.form_army(
+        _unit_index(args["unit_id"]), _unit_index(args["merge_unit_id"]))
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1262,6 +1272,32 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         _move_great_work_text,
         verb="move_great_work",
         requires="great_works",
+    ),
+    "form_corps": _tool(
+        "form_corps",
+        "Merge two same-type military units into a corps (+10 CS as one unit). "
+        "Units must be adjacent or stacked.",
+        {
+            "unit_id": _int_param("Composite id of the unit to keep"),
+            "merge_unit_id": _int_param("Composite id of the same-type unit to merge in"),
+        },
+        ("unit_id", "merge_unit_id"),
+        _form_corps_text,
+        verb="form_corps",
+        requires="corps",
+    ),
+    "form_army": _tool(
+        "form_army",
+        "Merge a corps with a same-type unit into an army. unit_id must already "
+        "be a corps.",
+        {
+            "unit_id": _int_param("Composite id of the corps"),
+            "merge_unit_id": _int_param("Composite id of the same-type unit to merge in"),
+        },
+        ("unit_id", "merge_unit_id"),
+        _form_army_text,
+        verb="form_army",
+        requires="army",
     ),
 }
 

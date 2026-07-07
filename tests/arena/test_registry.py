@@ -1221,3 +1221,22 @@ async def test_great_works_tools_registered_and_gated():
                    {"work_id": 17, "target_city_id": 65793,
                     "building": "BUILDING_MUSEUM_ART", "slot": 2})
     assert gs.calls == [(17, 65793, "BUILDING_MUSEUM_ART", 2)]
+
+
+@pytest.mark.asyncio
+async def test_formation_tools_registered_gated_composite_ids():
+    assert TOOL_REGISTRY["form_corps"].requires == "corps"
+    assert TOOL_REGISTRY["form_army"].requires == "army"
+
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def form_corps(self, unit_index, merge_unit_index):
+            self.calls.append(("corps", unit_index, merge_unit_index)); return "OK"
+        async def form_army(self, unit_index, merge_unit_index):
+            self.calls.append(("army", unit_index, merge_unit_index)); return "OK"
+
+    gs = GS()
+    await dispatch(gs, "form_corps", {"unit_id": 65539, "merge_unit_id": 65540})
+    await dispatch(gs, "form_army", {"unit_id": 65539, "merge_unit_id": 65541})
+    assert gs.calls == [("corps", 3, 4), ("army", 3, 5)]

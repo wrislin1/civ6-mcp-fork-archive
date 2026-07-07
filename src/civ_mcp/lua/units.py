@@ -1350,6 +1350,48 @@ print("{SENTINEL}")
 """
 
 
+_FORMATION_COMMANDS = ("FORM_CORPS", "FORM_ARMY")
+
+
+def build_form_formation(
+    unit_index: int, merge_unit_index: int, command: str
+) -> str:
+    """InGame context: merge two same-type units into a corps or army.
+
+    command must be "FORM_CORPS" or "FORM_ARMY".
+    Both units must be the same type, adjacent or stacked, and you must have
+    the required civic (Nationalism for corps, Mobilization for army).
+    """
+    if command not in _FORMATION_COMMANDS:
+        raise ValueError(f"unknown formation command: {command!r}")
+
+    # Use the existing helper for first unit lookup (matching file idiom),
+    # then manually lookup the merge unit with same pattern
+    merge_lookup = (
+        f"local merge_unit = UnitManager.GetUnit(me, {merge_unit_index}) "
+        f"if merge_unit == nil then {_bail('ERR:MERGE_UNIT_NOT_FOUND')} end"
+    )
+
+    return f"""
+{_lua_get_unit(unit_index)}
+{merge_lookup}
+local ok, err = pcall(function()
+    local cmd = UnitCommandTypes.{command}
+    local tParameters = {{}}
+    tParameters[UnitCommandTypes.PARAM_UNIT_PLAYER] = merge_unit:GetOwner()
+    tParameters[UnitCommandTypes.PARAM_UNIT_ID] = merge_unit:GetID()
+    if not UnitManager.CanStartCommand(unit, cmd, tParameters) then
+        print("ERR:cannot {command} here - units must be same type, on/adjacent tiles, with the required civic")
+        return
+    end
+    UnitManager.RequestCommand(unit, cmd, tParameters)
+    print("OK:{command} requested for unit {unit_index} merging {merge_unit_index}")
+end)
+if not ok then print("ERR:" .. tostring(err)) end
+print("{SENTINEL}")
+""".replace("{SENTINEL}", SENTINEL)
+
+
 def parse_units_response(lines: list[str]) -> list[UnitInfo]:
     units = []
     for line in lines:
