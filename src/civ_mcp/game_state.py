@@ -218,6 +218,10 @@ class GameState:
         lines = await self.conn.execute_write(lq.build_climate_query())
         return lq.parse_climate_response(lines)
 
+    async def get_great_works(self) -> list[lq.GreatWorkSlot]:
+        lines = await self.conn.execute_write(lq.build_great_works_query())
+        return lq.parse_great_works_response(lines)
+
     async def get_tech_civics(self) -> lq.TechCivicStatus:
         lines = await self.conn.execute_read(lq.build_tech_civics_query())
         return lq.parse_tech_civics_response(lines)
@@ -1371,6 +1375,13 @@ class GameState:
 
     async def spread_religion(self, unit_index: int) -> str:
         lua = lq.build_spread_religion(unit_index)
+        lines = await self.conn.execute_write(lua)
+        return _action_result(lines)
+
+    async def move_great_work(
+        self, work_index: int, target_city_id: int, building: str, slot: int
+    ) -> str:
+        lua = lq.build_move_great_work(work_index, target_city_id, building, slot)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 

@@ -2154,3 +2154,18 @@ def narrate_climate(status: lq.ClimateStatus) -> str:
     else:
         out.append("No active disasters.")
     return "\n".join(out)
+
+
+def narrate_great_works(slots: list[lq.GreatWorkSlot]) -> str:
+    if not slots:
+        return "No great-work slots yet (build Amphitheaters, Museums, Wonders)."
+    out = ["=== GREAT WORK SLOTS ==="]
+    for s in slots:
+        content = (f"[{s.work_index}] {s.work_name}" if s.work_index >= 0
+                   else "(empty)")
+        out.append(f"{s.city_name} {s.building} slot {s.slot_index} "
+                   f"({s.slot_type}): {content}")
+    empty = sum(1 for s in slots if s.work_index < 0)
+    out.append(f"{empty} empty slot(s). Theming bonus needs matching works in "
+               f"one building; use move_great_work to group them.")
+    return "\n".join(out)

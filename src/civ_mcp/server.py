@@ -962,6 +962,40 @@ async def get_climate(ctx: Context) -> str:
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+async def get_great_works(ctx: Context) -> str:
+    """Every great-work slot you own: city, building, slot type, contents.
+
+    Empty slots waste tourism; mismatched works forgo theming bonuses.
+    """
+    gs = _get_game(ctx)
+
+    async def _run():
+        return nr.narrate_great_works(await gs.get_great_works())
+
+    return await _logged(ctx, "get_great_works", {}, _run)
+
+
+@mcp.tool()
+async def move_great_work(
+    ctx: Context, work_id: int, target_city_id: int, building: str, slot: int
+) -> str:
+    """Move a great work (index from get_great_works) into another slot.
+
+    Args:
+        work_id: The work's index from get_great_works output
+        target_city_id: Destination city id
+        building: Destination building type, e.g. BUILDING_MUSEUM_ART
+        slot: Destination slot index (0-based)
+    """
+    gs = _get_game(ctx)
+    params = {"work_id": work_id, "target_city_id": target_city_id,
+              "building": building, "slot": slot}
+    return await _logged(
+        ctx, "move_great_work", params,
+        lambda: gs.move_great_work(work_id, target_city_id, building, slot))
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.
 

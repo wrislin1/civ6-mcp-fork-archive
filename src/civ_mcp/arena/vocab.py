@@ -57,4 +57,5 @@ LOCAL_TOOL_VERBS: dict[str, str] = {
     "change_government": "change_government",
     "spread_religion": "spread_religion",
     "activate_great_person": "activate_great_person",
+    "move_great_work": "move_great_work",
 }

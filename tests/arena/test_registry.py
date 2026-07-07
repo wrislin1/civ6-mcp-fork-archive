@@ -1198,3 +1198,26 @@ async def test_get_climate_registered_ungated():
         async def get_climate(self):
             return "Climate phase 2, sea level +1"
     assert "phase" in await dispatch(GS(), "get_climate", {})
+
+
+@pytest.mark.asyncio
+async def test_great_works_tools_registered_and_gated():
+    assert TOOL_REGISTRY["get_great_works"].requires is None
+    assert TOOL_REGISTRY["move_great_work"].requires == "great_works"
+    assert TOOL_REGISTRY["move_great_work"].verb == "move_great_work"
+
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def get_great_works(self):
+            return "1 empty writing slot"
+        async def move_great_work(self, work_index, target_city_id, building, slot):
+            self.calls.append((work_index, target_city_id, building, slot))
+            return "OK"
+
+    gs = GS()
+    assert "slot" in await dispatch(gs, "get_great_works", {})
+    await dispatch(gs, "move_great_work",
+                   {"work_id": 17, "target_city_id": 65793,
+                    "building": "BUILDING_MUSEUM_ART", "slot": 2})
+    assert gs.calls == [(17, 65793, "BUILDING_MUSEUM_ART", 2)]

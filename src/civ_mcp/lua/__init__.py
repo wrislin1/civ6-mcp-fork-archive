@@ -71,6 +71,11 @@ from civ_mcp.lua.climate import (  # noqa: F401
     build_climate_query,
     parse_climate_response,
 )
+from civ_mcp.lua.great_works import (  # noqa: F401
+    build_great_works_query,
+    build_move_great_work,
+    parse_great_works_response,
+)
 from civ_mcp.lua.congress import (  # noqa: F401
     build_congress_submit,
     build_congress_vote,
@@ -194,6 +199,7 @@ from civ_mcp.lua.models import (  # noqa: F401
     GPAdvisorCity,
     GPAdvisorResult,
     GreatPersonInfo,
+    GreatWorkSlot,
     GrievanceRow,
     LockedCivic,
     LockedTech,

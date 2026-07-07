@@ -18,6 +18,10 @@ from civ_mcp.lua.notifications import parse_end_turn_blocking
 from civ_mcp.lua.diplomacy import parse_gossip_response
 from civ_mcp.lua.cities import parse_loyalty_response
 from civ_mcp.lua.climate import parse_climate_response
+from civ_mcp.lua.great_works import (
+    parse_great_works_response,
+    build_move_great_work,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -468,3 +472,31 @@ class TestParseClimate:
     def test_empty_is_unavailable(self):
         st = parse_climate_response([])
         assert st.phase == -1
+
+
+# ---------------------------------------------------------------------------
+# parse_great_works_response
+# ---------------------------------------------------------------------------
+
+
+class TestParseGreatWorks:
+    def test_slots_and_works(self):
+        lines = [
+            "GWSLOT|65792|Lahore|BUILDING_AMPHITHEATER|0|GREATWORKSLOT_WRITING|17|Ramayana",
+            "GWSLOT|65792|Lahore|BUILDING_AMPHITHEATER|1|GREATWORKSLOT_WRITING|-1|",
+            "---END---",
+        ]
+        slots = parse_great_works_response(lines)
+        assert len(slots) == 2
+        assert slots[0].work_index == 17 and slots[0].work_name == "Ramayana"
+        assert slots[1].work_index == -1 and slots[1].work_name == ""
+        assert slots[1].slot_type == "GREATWORKSLOT_WRITING"
+
+    def test_junk_skipped(self):
+        assert parse_great_works_response(["GWSLOT|x|y", "noise"]) == []
+
+
+def test_build_move_great_work_substitutes_args():
+    lua = build_move_great_work(17, 65793, "BUILDING_MUSEUM_ART", 2)
+    assert "17" in lua and "65793" in lua and "BUILDING_MUSEUM_ART" in lua
+    assert "OK:" in lua and "ERR:" in lua

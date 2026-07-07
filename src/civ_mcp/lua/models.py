@@ -1328,3 +1328,14 @@ class ClimateStatus:
     sea_level: int
     co2_total: int
     disasters: list[DisasterEvent] = field(default_factory=list)
+
+
+@dataclass
+class GreatWorkSlot:
+    city_id: int
+    city_name: str
+    building: str
+    slot_index: int
+    slot_type: str
+    work_index: int     # -1 = empty slot
+    work_name: str      # "" when empty

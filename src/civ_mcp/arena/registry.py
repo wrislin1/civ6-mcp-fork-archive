@@ -202,6 +202,16 @@ async def _climate_text(gs: Any, args: dict[str, Any]) -> str:
     return _render(await gs.get_climate(), nr.narrate_climate)
 
 
+async def _great_works_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_great_works(), nr.narrate_great_works)
+
+
+async def _move_great_work_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.move_great_work(
+        args["work_id"], args["target_city_id"], args["building"], args["slot"])
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1229,6 +1239,29 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         _climate_text,
+    ),
+    "get_great_works": _tool(
+        "get_great_works",
+        "All your great-work slots: city, building, slot type, contents. Empty "
+        "slots waste tourism; matching works in one building earn theming.",
+        None,
+        (),
+        _great_works_text,
+    ),
+    "move_great_work": _tool(
+        "move_great_work",
+        "Move a great work (index from get_great_works) to another building "
+        "slot, e.g. to group matching works for a theming bonus.",
+        {
+            "work_id": _int_param("Work index from get_great_works"),
+            "target_city_id": _int_param("Destination city id"),
+            "building": _str_param("Destination BUILDING_* type"),
+            "slot": _int_param("Destination slot index (0-based)", minimum=0),
+        },
+        ("work_id", "target_city_id", "building", "slot"),
+        _move_great_work_text,
+        verb="move_great_work",
+        requires="great_works",
     ),
 }
 
