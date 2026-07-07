@@ -1325,3 +1325,52 @@ async def test_exclusive_cli_briefing_prebuild_uses_explicit_context_budget(monk
 
     assert result["puppet_turns_played"] == 1
     assert captured["n_ctx"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_old_signature_policy_without_kwargs_still_runs(tmp_path):
+    """A pre-slice-3 policy whose __call__ is (gs, player_id, turn) must not be
+    passed memory_block/task_block kwargs it cannot accept."""
+    calls = []
+
+    class OldStylePolicy:
+        provider = "local"
+        options = CivOptions()
+
+        async def __call__(self, gs, player_id, turn):
+            calls.append((player_id, turn))
+            return {"summary": "old-style", "actions": []}
+
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1], run_id="oldsig",
+                      transcript_dir=str(tmp_path))
+
+    result = await run_arena(FakeConn(), FakeGS(), cfg, policy=OldStylePolicy())
+
+    assert result["puppet_turns_played"] == 1
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_run_id_does_not_share_memory_across_runs(tmp_path):
+    """run_id='' must not collapse the memory dir onto transcript_dir, where a
+    later unrelated run would inherit this run's standing plan."""
+    opts = CivOptions(memory=MemoryOptions(enabled=True, max_chars=1200))
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=1,
+                      dry_run=True, puppet_ids=[1], run_id="",
+                      transcript_dir=str(tmp_path))
+
+    pol1 = RecordingPolicy({
+        "summary": "did stuff",
+        "transcript": {"final_summary": (
+            "TACTICAL: did stuff.\nSTANDING PLAN:\n- march settler to (18,24)\n"
+        )},
+    }, options=opts)
+    await run_arena(FakeConn(), FakeGS(), cfg, policy=pol1)
+
+    assert not (tmp_path / "memory").exists()
+
+    pol2 = RecordingPolicy({"summary": "no plan"}, options=opts)
+    await run_arena(FakeConn(), FakeGS(), cfg, policy=pol2)
+
+    assert pol2.calls[0]["memory_block"] == ""

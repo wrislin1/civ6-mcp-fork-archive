@@ -109,6 +109,14 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
             raise ValueError("run_arena needs policy or policy_for")
         policy_for = lambda _pid: policy
     puppet_ids = set(config.puppet_ids or [p.player_id for p in config.players])
+    run_id = getattr(config, "run_id", "")
+    if not run_id:
+        # Memory/task state is keyed by run_id; an empty one collapses the
+        # per-run directory onto transcript_dir itself, silently sharing
+        # standing plans and tasks across unrelated runs.
+        from civ_mcp.run_id import generate_run_id
+
+        run_id = generate_run_id()
     played, log = 0, []
     _tx_on = transcript is not None and getattr(transcript, "enabled", True)
     try:
@@ -121,7 +129,6 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 pol = policy_for(st.local)
                 exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
                 opts = getattr(pol, "options", CivOptions())
-                run_id = getattr(config, "run_id", "")
                 transcript_dir = config.transcript_dir
                 state_before = await _overview_snapshot(gs) if _tx_on else None
 
@@ -189,7 +196,17 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         task_tracker_error = repr(e)
                         print(f"[arena] task tracker pre-model failed: {e!r}", file=sys.stderr)
 
-                policy_kwargs = {"memory_block": memory_block, "task_block": task_block}
+                # Gate every injected kwarg on the policy's signature (the
+                # briefing precedent): a pre-slice-3 policy with a bare
+                # (gs, player_id, turn) __call__ must keep working.
+                policy_kwargs = {
+                    name: value
+                    for name, value in (
+                        ("memory_block", memory_block),
+                        ("task_block", task_block),
+                    )
+                    if _policy_accepts_kwarg(pol, name)
+                }
                 if (
                     exclusive
                     and opts.briefing.enabled
