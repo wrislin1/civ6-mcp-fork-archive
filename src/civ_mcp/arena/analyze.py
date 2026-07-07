@@ -100,6 +100,9 @@ _GREAT_PEOPLE_TOOLS: frozenset[str] = frozenset({
 _TRADE_ROUTE_TOOLS: frozenset[str] = frozenset({
     "get_trade_routes", "get_trade_destinations", "start_trade_route", "teleport_trader",
 })
+# CLI puppets express trader actions through unit_action(action=...) rather than
+# the local flat tools above; these verbs count as trade-route behavior too.
+_TRADE_ROUTE_UNIT_ACTIONS: frozenset[str] = frozenset({"trade_route", "teleport"})
 _RELIGION_WC_TOOLS: frozenset[str] = frozenset({
     "found_religion", "get_religion_beliefs", "get_religion_spread",
     "queue_wc_votes", "get_world_congress",
@@ -107,11 +110,14 @@ _RELIGION_WC_TOOLS: frozenset[str] = frozenset({
 
 
 def _count_tool_calls(steps: list[dict], tool_bases: "frozenset[str]") -> int:
-    """Count steps whose normalized tool_base (via _step_verb) is in tool_bases."""
+    """Count behavior tool calls after normalizing local and CLI tool vocabularies."""
     count = 0
     for step in steps:
-        tool_base, _ = _step_verb(step)
+        tool_base, verb = _step_verb(step)
         if tool_base in tool_bases:
+            count += 1
+            continue
+        if tool_bases is _TRADE_ROUTE_TOOLS and tool_base == "unit_action" and verb in _TRADE_ROUTE_UNIT_ACTIONS:
             count += 1
     return count
 
@@ -140,6 +146,20 @@ def _task_tracker_pre_model_results(rec: dict) -> list[dict]:
     if not isinstance(results, list):
         return []
     return [r for r in results if isinstance(r, dict)]
+
+
+def _task_tracker_active(rec: dict) -> bool:
+    """True only when the task tracker had meaningful state or results this turn.
+
+    A zero-filled ``task_tracker`` dict (tracker enabled but idle, or a disabled
+    record that still carries the field) must not count as a tracker-active turn.
+    """
+    tt = rec.get("task_tracker")
+    if not isinstance(tt, dict):
+        return False
+    if tt.get("active_before") or tt.get("active_after"):
+        return True
+    return bool(_task_tracker_pre_model_results(rec))
 
 
 def behavior_metrics(transcript_records: list[dict]) -> dict:
@@ -174,7 +194,7 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
         if _standing_memory_captured(rec):
             standing_memory_captured_turns += 1
 
-        if rec.get("task_tracker") is not None:
+        if _task_tracker_active(rec):
             task_tracker_turns += 1
 
         for entry in _task_tracker_pre_model_results(rec):

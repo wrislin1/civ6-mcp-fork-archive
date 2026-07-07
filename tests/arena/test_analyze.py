@@ -1549,3 +1549,56 @@ def test_behavior_empty_run_all_zero() -> None:
         "drivers": {"in_process": 0, "cli": 0},
         "puppeted_players": [],
     }
+
+
+def test_behavior_task_tracker_turns_ignore_zero_filled_disabled_records() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    disabled_record = {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "player_id": 4,
+        "turn": 1,
+        "driver": "cli",
+        "steps": [],
+        "standing_memory": {"loaded": False, "injected_chars": 0, "captured_chars": 0},
+        "task_tracker": {
+            "active_before": 0,
+            "pre_model_results": [],
+            "active_after": 0,
+        },
+    }
+
+    report = analyze([disabled_record], [])
+
+    assert report["behavior"]["task_tracker_turns"] == 0
+
+
+def test_behavior_counts_cli_unit_action_trade_routes() -> None:
+    from civ_mcp.arena.analyze import analyze
+
+    rec = {
+        "schema_version": 1,
+        "run_id": "behavior-test",
+        "player_id": 2,
+        "turn": 1,
+        "driver": "cli",
+        "steps": [
+            {
+                "tool_name": "mcp__civ6__unit_action",
+                "tool_args": {"action": "trade_route", "unit_id": 65538, "x": 10, "y": 12},
+                "tool_result_full": "ROUTE_STARTED",
+            },
+            {
+                "tool_name": "mcp__civ6__unit_action",
+                "tool_args": {"action": "teleport", "unit_id": 65538, "x": 5, "y": 6},
+                "tool_result_full": "TELEPORTED",
+            },
+        ],
+        "invalid_tool_calls": [],
+        "standing_memory": {"loaded": False, "injected_chars": 0, "captured_chars": 0},
+    }
+
+    report = analyze([rec], [])
+
+    assert report["by_player"][2]["behavior"]["trade_route_tool_calls"] == 2
