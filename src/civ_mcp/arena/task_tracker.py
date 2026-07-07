@@ -39,11 +39,12 @@ IMPROVE_ERROR_RETRY_LIMIT = "improve_error_retry_limit"
 BLOCKED_IMPROVEMENT_NOT_VALID = "blocked_improvement_not_valid"
 BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry_limit"
 TASK_EXCEPTION_RETRY_LIMIT = "task_exception_retry_limit"
+MOVE_ERROR_RETRY_LIMIT = "move_error_retry_limit"
 
-# Failed attempts (at-target errors/no-responses, raised exceptions) a task may
-# accumulate before it is marked failed. 3 leaves room for a transient blocker
-# that persists across two turns (e.g. a popup blocking the async found-city
-# op) to clear.
+# Failed attempts (at-target errors/no-responses, move errors, raised
+# exceptions) a task may accumulate before it is marked failed. 3 leaves room
+# for a transient blocker that persists across two turns (e.g. a popup
+# blocking the async found-city op) to clear.
 MAX_TASK_FAILURES = 3
 
 # Public: memory.py's standing-plan terminator lookahead reuses these so
@@ -527,6 +528,16 @@ async def _advance_toward_target(
         )
 
     result_str = await gs.move_unit(unit.unit_index, task.target_x, task.target_y)
+    if result_str.startswith("Error:"):
+        # An unreachable target never passes the at-target check, so without a
+        # strike here the task would retry a failing move every turn forever.
+        return _fail_or_retry(
+            task,
+            action="move",
+            result_str=result_str,
+            limit_result=MOVE_ERROR_RETRY_LIMIT,
+            turn=turn,
+        )
     new_task = _touch_task(replace(task, last_result=result_str), turn)
     return new_task, _result_dict(task, status="active", action="move", result=result_str)
 

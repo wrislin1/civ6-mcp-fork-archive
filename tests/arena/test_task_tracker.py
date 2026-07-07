@@ -1263,6 +1263,53 @@ async def test_per_task_exception_is_caught_and_recorded():
 
 
 @pytest.mark.asyncio
+async def test_move_error_accrues_failure_strike():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit], move_unit_result="Error: no path")
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+    assert updated[0].last_result == "Error: no path"
+
+
+@pytest.mark.asyncio
+async def test_move_error_fails_at_failure_budget():
+    """A task whose target is unreachable must not retry a failing move every
+    turn forever -- move errors count against the same failure budget."""
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit], move_unit_result="Error: no path")
+    task = _task(
+        task_id="settle:65537", unit_id=65537, target_x=18, target_y=24,
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "failed"
+    assert results[0]["status"] == "failed"
+    assert results[0]["result"] == "move_error_retry_limit"
+
+
+@pytest.mark.asyncio
+async def test_successful_move_does_not_accrue_failure_strike():
+    unit = _unit(unit_id=65537, unit_index=1, x=1, y=1)
+    gs = FakeGS(units=[unit], move_unit_result="MOVING_TO|18,24")
+    task = _task(
+        task_id="settle:65537", unit_id=65537, target_x=18, target_y=24,
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 2
+    assert results[0]["result"] == "MOVING_TO|18,24"
+
+
+@pytest.mark.asyncio
 async def test_task_exception_accrues_failure_strike():
     class RaisingGS(FakeGS):
         async def found_city(self, unit_index):
