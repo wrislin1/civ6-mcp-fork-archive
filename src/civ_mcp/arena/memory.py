@@ -144,7 +144,15 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     Finds a case-insensitive ``STANDING PLAN`` marker, including common
     markdown heading, bullet, and emphasis forms (with or without a trailing
     colon, and with an optional parenthetical like "(next 3 turns)"), and
-    captures that line's trailing content plus following non-empty lines. Stops at an unbulleted
+    captures that line's trailing content plus following non-empty lines.
+
+    Inline content on the marker line requires a colon ("STANDING PLAN:
+    settle east"); the colon-less forms are bare headers whose content must
+    begin on the following line, so a no-colon marker with same-line prose is
+    intentionally not treated as a plan (see
+    test_bare_marker_requires_end_of_line_so_prose_does_not_match).
+
+    Stops at an unbulleted
     known reflection header (case-insensitive), an unbulleted ALL-CAPS section
     header, a known bulleted reflection header such as ``- TACTICAL:``, or end
     of string. Left-edge markdown bullets are stripped per line. Returns ""
