@@ -334,6 +334,58 @@ print("{SENTINEL}")
 """
 
 
+def build_close_orphan_sessions() -> str:
+    """Close open diplomacy sessions that do NOT involve the local player.
+
+    During arena play the puppet hook makes seats 1/3/5 "the local player" for
+    their turns, so the engine queues real first-meet greeting sessions FOR THE
+    PUPPETS (or between two puppets that meet each other). Those sessions outlive
+    the puppet turn, wedge turn processing, and render as an unclickable leader
+    scene for the human. `build_clear_blocking_diplomacy`'s me-centric scan
+    cannot see them (observed live: `CLEAR|blocked|closed=0` while session
+    1<->3 held the game).
+
+    Sessions involving the CURRENT local player are deliberately skipped -- a
+    scene the human is actively using is never touched. Views are force-hidden
+    only when at least one orphan was actually closed. Reports 'ORPHANS|none'
+    or 'ORPHANS|<i>-<j>#<sid>,...' (deduped by session id: FindOpenSessionID
+    returns the same session for both argument orders).
+    """
+    return """
+local me = Game.GetLocalPlayer()
+local closed = {}
+local seen = {}
+for i = 0, 63 do
+    if i ~= me and Players[i] ~= nil and Players[i]:IsAlive() then
+        for j = 0, 63 do
+            if j ~= me and j ~= i and Players[j] ~= nil and Players[j]:IsAlive() then
+                local s = DiplomacyManager.FindOpenSessionID(i, j)
+                if s and s >= 0 and not seen[s] then
+                    seen[s] = true
+                    pcall(function() DiplomacyManager.CloseSession(s) end)
+                    closed[#closed+1] = i .. "-" .. j .. "#" .. s
+                end
+            end
+        end
+    end
+end
+if #closed > 0 then
+    local dav = ContextPtr:LookUpControl("/InGame/DiplomacyActionView")
+    local ls = ContextPtr:LookUpControl("/InGame/LeaderScene")
+    if dav ~= nil then pcall(function() UIManager:DequeuePopup(dav) end); dav:SetHide(true) end
+    if ls ~= nil then ls:SetHide(true) end
+    pcall(function() LuaEvents.DiplomacyActionView_ShowIngameUI() end)
+    pcall(function() Events.HideLeaderScreen() end)
+end
+if #closed > 0 then
+    print("ORPHANS|" .. table.concat(closed, ","))
+else
+    print("ORPHANS|none")
+end
+print("{SENTINEL}")
+""".replace("{SENTINEL}", SENTINEL)
+
+
 def build_check_diplomacy_session_state(other_player_id: int) -> str:
     """Check if a diplomacy session is still open after AddResponse.
 

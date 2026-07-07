@@ -80,6 +80,29 @@ async def _clear_blocking_diplomacy(conn) -> str:
     return "?"
 
 
+# Consecutive idle polls (~1s each) before the orphan-session sweep fires. An
+# orphaned puppet greeting wedges the AI phase indefinitely, so a human seat
+# idle this long with no capture is the wedge signature; a normal human turn
+# is unaffected either way because the sweep skips the local player's own
+# sessions entirely. Observed live (2026-07-07): session 1<->3 (two puppets
+# first-meeting) froze turn 27 for minutes until closed by hand.
+ORPHAN_SWEEP_IDLE_POLLS = 45
+
+
+async def _sweep_orphan_sessions(conn) -> str:
+    """Best-effort: close open diplomacy sessions not involving the local
+    player (orphaned puppet greetings that wedge turn processing). Sessions
+    involving the human are never touched; never raises into the poll loop."""
+    try:
+        lines = await conn.execute_write(lq.build_close_orphan_sessions())
+    except Exception:
+        return "err"
+    for line in lines:
+        if line.startswith("ORPHANS|"):
+            return line
+    return "?"
+
+
 class ScriptedPolicy:
     """Deterministic no-LLM policy for the dry-run gate: observe, then skip unit 0."""
     async def __call__(self, gs, player_id: int, turn: int, **kwargs) -> dict:
@@ -133,9 +156,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
         deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
+        idle_streak = 0  # consecutive idle polls since the last puppet capture
         while remaining > 0 and deadline_polls > 0:
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
+                idle_streak = 0
                 pol = policy_for(st.local)
                 exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
                 opts = getattr(pol, "options", CivOptions())
@@ -397,11 +422,25 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 played += 1
                 remaining -= 1
             else:
-                # Human seat is idle. Do NOT auto-clear diplomacy here: it cannot
-                # distinguish an orphaned first-meet greeting from a leader scene the
-                # human is actively using (declaring war, denouncing, trading), and
-                # force-hiding the latter mid-transition can black out the map. Stuck
-                # greetings are handled reactively via _clear_blocking_diplomacy.
+                # Human seat is idle. Do NOT auto-clear VIEW-level diplomacy here:
+                # _clear_blocking_diplomacy cannot distinguish an orphaned first-meet
+                # greeting from a leader scene the human is actively using (declaring
+                # war, denouncing, trading), and force-hiding the latter mid-transition
+                # can black out the map — it stays a reactive/manual tool.
+                #
+                # SESSION-level orphans are different: an open session between two
+                # non-local players (a greeting queued for/between puppet seats) can
+                # never be clicked by the human and wedges the AI phase indefinitely,
+                # so after a long idle streak sweep those closed. The sweep skips
+                # every session involving the local player by construction.
+                idle_streak += 1
+                if idle_streak % ORPHAN_SWEEP_IDLE_POLLS == 0:
+                    swept_sessions = await _sweep_orphan_sessions(conn)
+                    if swept_sessions not in ("ORPHANS|none", "?", "err"):
+                        print(f"[arena] orphan diplomacy sessions closed after "
+                              f"{idle_streak} idle polls: {swept_sessions}",
+                              file=sys.stderr)
+                        log.append({"turn": st.turn, "orphan_sweep": swept_sessions})
                 await asyncio.sleep(1.0)
             deadline_polls -= 1
         return {"puppet_turns_played": played, "log": log}
