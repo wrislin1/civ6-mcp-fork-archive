@@ -38,10 +38,12 @@ IMPROVE_NO_RESPONSE_RETRY_LIMIT = "improve_no_response_retry_limit"
 IMPROVE_ERROR_RETRY_LIMIT = "improve_error_retry_limit"
 BLOCKED_IMPROVEMENT_NOT_VALID = "blocked_improvement_not_valid"
 BLOCKED_IMPROVEMENT_NOT_VALID_RETRY_LIMIT = "blocked_improvement_not_valid_retry_limit"
+TASK_EXCEPTION_RETRY_LIMIT = "task_exception_retry_limit"
 
-# Consecutive at-target failures (of any kind) a task may accumulate before it
-# is marked failed. 3 leaves room for a transient blocker that persists across
-# two turns (e.g. a popup blocking the async found-city op) to clear.
+# Failed attempts (at-target errors/no-responses, raised exceptions) a task may
+# accumulate before it is marked failed. 3 leaves room for a transient blocker
+# that persists across two turns (e.g. a popup blocking the async found-city
+# op) to clear.
 MAX_TASK_FAILURES = 3
 
 # Public: memory.py's standing-plan terminator lookahead reuses these so
@@ -449,12 +451,13 @@ def _fail_or_retry(
     limit_result: str,
     turn: int | None,
 ) -> tuple[UnitTask, dict[str, Any]]:
-    """Record a failed at-target attempt, escalating at the failure budget.
+    """Record a failed attempt, escalating at the failure budget.
 
-    Consecutive at-target failures of any kind count against MAX_TASK_FAILURES
-    on the task itself (so the count survives merge_tasks restatements and does
-    not depend on error strings repeating verbatim); the attempt that reaches
-    the budget marks the task failed with ``limit_result``.
+    Failures of any kind (at-target errors/no-responses, raised exceptions)
+    count against MAX_TASK_FAILURES on the task itself (so the count survives
+    merge_tasks restatements and does not depend on error strings repeating
+    verbatim); the attempt that reaches the budget marks the task failed with
+    ``limit_result``.
     """
     failures = task.failure_count + 1
     if failures >= MAX_TASK_FAILURES:
@@ -621,7 +624,7 @@ async def run_pre_model_tasks(
     are ever executed -- this function never attacks, fortifies, escorts,
     purchases, chops, recruits, votes, trades, or makes diplomacy choices.
     A per-task exception is caught and recorded as ``error:<repr>`` without
-    aborting the remaining tasks.
+    aborting the remaining tasks; it counts against the task's failure budget.
     """
     executable = [
         task for task in tasks if task.status == "active" and task.kind in TASK_KINDS
@@ -657,9 +660,15 @@ async def run_pre_model_tasks(
                 gs, task, units_by_id, units_by_index, owner_context, turn
             )
         except Exception as exc:
-            error_msg = f"error:{exc!r}"
-            new_task = replace(task, last_result=error_msg)
-            result = _result_dict(task, status="active", action="error", result=error_msg)
+            # An exception is a failed attempt like any other: it must accrue a
+            # strike or a persistently-raising action retries forever.
+            new_task, result = _fail_or_retry(
+                task,
+                action="error",
+                result_str=f"error:{exc!r}",
+                limit_result=TASK_EXCEPTION_RETRY_LIMIT,
+                turn=turn,
+            )
 
         updated.append(new_task)
         results.append(result)

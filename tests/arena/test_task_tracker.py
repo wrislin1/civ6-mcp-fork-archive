@@ -1262,6 +1262,46 @@ async def test_per_task_exception_is_caught_and_recorded():
     assert results[0]["result"].startswith("error:")
 
 
+@pytest.mark.asyncio
+async def test_task_exception_accrues_failure_strike():
+    class RaisingGS(FakeGS):
+        async def found_city(self, unit_index):
+            raise RuntimeError("tuner disconnected")
+
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = RaisingGS(units=[unit])
+    task = _task(task_id="settle:65537", unit_id=65537, target_x=18, target_y=24)
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "active"
+    assert updated[0].failure_count == 1
+    assert updated[0].updated_turn == 9
+
+
+@pytest.mark.asyncio
+async def test_task_exception_fails_at_failure_budget():
+    """A task whose action raises every turn must hit MAX_TASK_FAILURES like a
+    string-error failure would, not retry forever."""
+    class RaisingGS(FakeGS):
+        async def found_city(self, unit_index):
+            raise RuntimeError("tuner disconnected")
+
+    unit = _unit(unit_id=65537, unit_index=1, x=18, y=24)
+    gs = RaisingGS(units=[unit])
+    task = _task(
+        task_id="settle:65537", unit_id=65537, target_x=18, target_y=24,
+        failure_count=2,
+    )
+
+    updated, results = await run_pre_model_tasks(gs, [task], turn=9)
+
+    assert updated[0].status == "failed"
+    assert updated[0].failure_count == 3
+    assert results[0]["status"] == "failed"
+    assert results[0]["result"] == "task_exception_retry_limit"
+
+
 # ---------------------------------------------------------------------------
 # format_task_block
 # ---------------------------------------------------------------------------
