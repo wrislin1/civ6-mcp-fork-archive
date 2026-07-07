@@ -250,9 +250,10 @@ def merge_tasks(
 
     - ``TASK`` updates (status != "cancelled") replace any existing task with
       the same ``task_id``. A restatement (same kind/unit/target/improvement)
-      carries over the existing task's failure strikes instead of resetting
-      them, and cannot resurrect a task that already hit its failure budget --
-      only a changed target starts fresh.
+      keeps the existing task object -- all execution state including failure
+      strikes survives, only ``updated_turn`` refreshes -- and cannot resurrect
+      a task that already resolved (failed/completed/lost). Only a changed
+      target starts fresh.
     - ``CANCEL`` updates remove whichever existing task currently owns that
       ``unit_id`` (regardless of kind).
     - Tasks absent from ``updates`` persist unchanged.
@@ -286,16 +287,20 @@ def merge_tasks(
             ):
                 restated = task
         if restated is not None:
-            if restated.status == "failed":
-                # A verbatim restatement can't revive a task that exhausted its
-                # failure budget -- the model must change the target to retry.
+            if restated.status != "active":
+                # A verbatim restatement is the model echoing its plan, not a
+                # new directive: it can't revive a failed/completed/lost task.
+                # Only a changed target starts fresh. Re-insert the resolved
+                # task unchanged so it isn't silently dropped mid-merge.
+                merged[restated.task_id] = restated
                 continue
-            update = replace(
-                update,
-                created_turn=restated.created_turn,
-                last_result=restated.last_result,
-                failure_count=restated.failure_count,
+            # Keep the existing task object wholesale -- every execution field
+            # (strikes, results, any future counter) survives by construction;
+            # a restatement only refreshes recency.
+            merged[restated.task_id] = replace(
+                restated, updated_turn=update.updated_turn
             )
+            continue
         merged[update.task_id] = update
 
     # Cap ACTIVE tasks only: a freshly completed/lost task (which

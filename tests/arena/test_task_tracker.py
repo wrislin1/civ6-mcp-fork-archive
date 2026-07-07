@@ -724,6 +724,57 @@ def test_merge_restated_task_with_new_target_resets_failure_state():
     assert merged[0].last_result == ""
 
 
+def test_merge_restatement_does_not_resurrect_completed_task():
+    """A task that just resolved complete and is verbatim re-emitted in the same
+    summary is the model echoing its plan, not a new directive -- it must not
+    re-enter the active set (and re-execute on a consumed unit next turn)."""
+    existing = [
+        _task(status="complete", last_result="Founded city at (18, 24)")
+    ]
+    updates = parse_task_lines("TASK settle unit_id=65537 target=18,24", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert merged == ()
+
+
+def test_merge_restatement_does_not_resurrect_lost_task():
+    existing = [
+        _task(status="lost", last_result="unit_missing")
+    ]
+    updates = parse_task_lines("TASK settle unit_id=65537 target=18,24", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert merged == ()
+
+
+def test_merge_restated_task_keeps_original_identity():
+    """A verbatim restatement keeps the existing task object (all execution
+    state by construction), only refreshing updated_turn -- even when the model
+    restates with the bare-index alias of the stored composite id."""
+    existing = [
+        _task(
+            task_id="settle:65537",
+            unit_id=65537,
+            created_turn=3,
+            updated_turn=5,
+            last_result="Error: FOUND_FAILED",
+            failure_count=1,
+        )
+    ]
+    updates = parse_task_lines("TASK settle unit_id=1 target=18,24", 6)
+
+    merged = merge_tasks(existing, updates, max_tasks=8)
+
+    assert len(merged) == 1
+    assert merged[0].task_id == "settle:65537"
+    assert merged[0].unit_id == 65537
+    assert merged[0].failure_count == 1
+    assert merged[0].created_turn == 3
+    assert merged[0].updated_turn == 6
+
+
 def test_merge_restatement_does_not_resurrect_failed_task():
     """A verbatim restatement of a task that just hit its failure budget must not
     revive it — only a changed target (a genuinely new instruction) starts over."""
