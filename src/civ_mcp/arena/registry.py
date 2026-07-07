@@ -164,6 +164,26 @@ async def _notifications_text(gs: Any, args: dict[str, Any]) -> str:
     return _render(await gs.get_notifications(), nr.narrate_notifications)
 
 
+async def _spy_action_text(gs: Any, args: dict[str, Any]) -> str:
+    unit_index = _unit_index(args["unit_id"])
+    action = str(args["action"])
+    if action == "travel":
+        return await gs.spy_travel(unit_index, args["target_x"], args["target_y"])
+    return await gs.spy_mission(unit_index, action, args["target_x"], args["target_y"])
+
+
+async def _change_government_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.change_government(args["government_type"])
+
+
+async def _spread_religion_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.spread_religion(_unit_index(args["unit_id"]))
+
+
+async def _activate_great_person_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.activate_great_person(_unit_index(args["unit_id"]))
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1116,6 +1136,50 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         _notifications_text,
+    ),
+    "spy_action": _tool(
+        "spy_action",
+        "Send a spy to a city (action='travel') or launch a mission (action = "
+        "COUNTERSPY, GAIN_SOURCES, SIPHON_FUNDS, STEAL_TECH_BOOST, "
+        "SABOTAGE_PRODUCTION, GREAT_WORK_HEIST, RECRUIT_PARTISANS, "
+        "NEUTRALIZE_GOVERNOR, FABRICATE_SCANDAL). The spy must already be IN the "
+        "target city for missions: travel first, end turn, then launch.",
+        {
+            "unit_id": _int_param("Spy composite id from get_spies"),
+            "action": _str_param("'travel' or a mission type"),
+            "target_x": _int_param("Target city tile X"),
+            "target_y": _int_param("Target city tile Y"),
+        },
+        ("unit_id", "action", "target_x", "target_y"),
+        _spy_action_text,
+        verb="spy_action",
+    ),
+    "change_government": _tool(
+        "change_government",
+        "Switch to a new government (e.g. GOVERNMENT_OLIGARCHY). The first switch "
+        "after unlocking a tier is free.",
+        {"government_type": _str_param("GOVERNMENT_* type id")},
+        ("government_type",),
+        _change_government_text,
+        verb="change_government",
+    ),
+    "spread_religion": _tool(
+        "spread_religion",
+        "Spend a missionary/apostle charge to spread its religion to the city it "
+        "stands in or adjacent to.",
+        {"unit_id": _int_param("Religious unit composite id from get_units")},
+        ("unit_id",),
+        _spread_religion_text,
+        verb="spread_religion",
+    ),
+    "activate_great_person": _tool(
+        "activate_great_person",
+        "Activate a Great Person standing on its matching completed district. "
+        "The error message lists requirements if activation fails.",
+        {"unit_id": _int_param("Great Person composite id from get_units")},
+        ("unit_id",),
+        _activate_great_person_text,
+        verb="activate_great_person",
     ),
 }
 

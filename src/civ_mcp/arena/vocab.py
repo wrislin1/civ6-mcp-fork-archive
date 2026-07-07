@@ -53,4 +53,8 @@ LOCAL_TOOL_VERBS: dict[str, str] = {
     "queue_wc_votes": "queue_wc_votes",
     "city_attack": "city_attack",
     "resolve_city_capture": "resolve_city_capture",
+    "spy_action": "spy_action",
+    "change_government": "change_government",
+    "spread_religion": "spread_religion",
+    "activate_great_person": "activate_great_person",
 }

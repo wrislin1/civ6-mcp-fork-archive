@@ -1091,3 +1091,49 @@ async def test_parity_readouts_dispatch_to_gamestate():
         out = await dispatch(gs, name, {})
         assert isinstance(out, str) and out
     assert gs.called == ["spies", "smap", "notif"]
+
+
+@pytest.mark.asyncio
+async def test_spy_action_routes_travel_vs_mission():
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def spy_travel(self, unit_index, x, y):
+            self.calls.append(("travel", unit_index, x, y)); return "OK travel"
+        async def spy_mission(self, unit_index, mission, x, y):
+            self.calls.append(("mission", unit_index, mission, x, y)); return "OK mission"
+
+    gs = GS()
+    # composite id 65539 = player 1, unit index 3
+    await dispatch(gs, "spy_action",
+                   {"unit_id": 65539, "action": "travel", "target_x": 5, "target_y": 6})
+    await dispatch(gs, "spy_action",
+                   {"unit_id": 65539, "action": "SIPHON_FUNDS", "target_x": 5, "target_y": 6})
+    assert gs.calls == [("travel", 3, 5, 6), ("mission", 3, "SIPHON_FUNDS", 5, 6)]
+
+
+@pytest.mark.asyncio
+async def test_parity_actions_dispatch_with_composite_ids():
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def change_government(self, government_type):
+            self.calls.append(("gov", government_type)); return "OK"
+        async def spread_religion(self, unit_index):
+            self.calls.append(("spread", unit_index)); return "OK"
+        async def activate_great_person(self, unit_index):
+            self.calls.append(("gp", unit_index)); return "OK"
+
+    gs = GS()
+    await dispatch(gs, "change_government", {"government_type": "GOVERNMENT_OLIGARCHY"})
+    await dispatch(gs, "spread_religion", {"unit_id": 131074})       # p2 idx2
+    await dispatch(gs, "activate_great_person", {"unit_id": 131075})  # p2 idx3
+    assert gs.calls == [("gov", "GOVERNMENT_OLIGARCHY"), ("spread", 2), ("gp", 3)]
+
+
+def test_parity_actions_have_mirrored_verbs():
+    from civ_mcp.arena.vocab import LOCAL_TOOL_VERBS
+    for name in ("spy_action", "change_government", "spread_religion",
+                 "activate_great_person"):
+        assert TOOL_REGISTRY[name].verb == name
+        assert LOCAL_TOOL_VERBS[name] == name
