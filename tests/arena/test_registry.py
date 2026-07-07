@@ -1240,3 +1240,22 @@ async def test_formation_tools_registered_gated_composite_ids():
     await dispatch(gs, "form_corps", {"unit_id": 65539, "merge_unit_id": 65540})
     await dispatch(gs, "form_army", {"unit_id": 65539, "merge_unit_id": 65541})
     assert gs.calls == [("corps", 3, 4), ("army", 3, 5)]
+
+
+@pytest.mark.asyncio
+async def test_air_and_archaeology_tools_registered_gated():
+    assert TOOL_REGISTRY["rebase_unit"].requires == "air"
+    assert TOOL_REGISTRY["excavate_artifact"].requires == "archaeology"
+
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def rebase_unit(self, unit_index, x, y):
+            self.calls.append(("rebase", unit_index, x, y)); return "OK"
+        async def excavate_artifact(self, unit_index, x, y):
+            self.calls.append(("dig", unit_index, x, y)); return "OK"
+
+    gs = GS()
+    await dispatch(gs, "rebase_unit", {"unit_id": 65539, "target_x": 4, "target_y": 5})
+    await dispatch(gs, "excavate_artifact", {"unit_id": 65540, "target_x": 6, "target_y": 7})
+    assert gs.calls == [("rebase", 3, 4, 5), ("dig", 4, 6, 7)]

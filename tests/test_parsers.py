@@ -519,3 +519,13 @@ def test_build_form_formation_shape():
 
     with pytest.raises(ValueError):
         build_form_formation(3, 7, "FORM_VOLTRON")
+
+
+def test_build_unit_operation_shape():
+    from civ_mcp.lua.units import build_unit_operation
+    lua = build_unit_operation(3, "REBASE", 10, 12)
+    assert "REBASE" in lua and "PARAM_X" in lua and "PARAM_Y" in lua
+    assert "CanStartOperation" in lua
+    assert "OK:" in lua and "ERR:" in lua
+    with pytest.raises(ValueError):
+        build_unit_operation(3, "MAKE_TEA", 0, 0)

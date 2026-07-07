@@ -222,6 +222,16 @@ async def _form_army_text(gs: Any, args: dict[str, Any]) -> str:
         _unit_index(args["unit_id"]), _unit_index(args["merge_unit_id"]))
 
 
+async def _rebase_unit_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.rebase_unit(
+        _unit_index(args["unit_id"]), args["target_x"], args["target_y"])
+
+
+async def _excavate_artifact_text(gs: Any, args: dict[str, Any]) -> str:
+    return await gs.excavate_artifact(
+        _unit_index(args["unit_id"]), args["target_x"], args["target_y"])
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1298,6 +1308,33 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         _form_army_text,
         verb="form_army",
         requires="army",
+    ),
+    "rebase_unit": _tool(
+        "rebase_unit",
+        "Rebase an air unit to another of your cities or airstrips in range.",
+        {
+            "unit_id": _int_param("Air unit composite id"),
+            "target_x": _int_param("Destination tile X"),
+            "target_y": _int_param("Destination tile Y"),
+        },
+        ("unit_id", "target_x", "target_y"),
+        _rebase_unit_text,
+        verb="rebase_unit",
+        requires="air",
+    ),
+    "excavate_artifact": _tool(
+        "excavate_artifact",
+        "Send an archaeologist to dig the antiquity site at the target tile "
+        "(consumes a charge; artifact fills a museum slot).",
+        {
+            "unit_id": _int_param("Archaeologist composite id"),
+            "target_x": _int_param("Site tile X"),
+            "target_y": _int_param("Site tile Y"),
+        },
+        ("unit_id", "target_x", "target_y"),
+        _excavate_artifact_text,
+        verb="excavate_artifact",
+        requires="archaeology",
     ),
 }
 

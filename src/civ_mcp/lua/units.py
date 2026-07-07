@@ -1392,6 +1392,43 @@ print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
+_UNIT_OPERATION_LUA = """
+local me = Game.GetLocalPlayer()
+local u = UnitManager.GetUnit(me, __UNIT__)
+if u == nil then print("ERR:unit __UNIT__ not found") return end
+local ok, err = pcall(function()
+    -- PROBE(live): operation enum availability (Task 15); spy ops needed
+    -- hardcoded hashes, these two may as well.
+    local op = UnitOperationTypes.__OPERATION__
+    local tParameters = {}
+    tParameters[UnitOperationTypes.PARAM_X] = __X__
+    tParameters[UnitOperationTypes.PARAM_Y] = __Y__
+    if not UnitManager.CanStartOperation(u, op, nil, tParameters) then
+        print("ERR:cannot __OPERATION__ at (__X__,__Y__) - check range/target")
+        return
+    end
+    UnitManager.RequestOperation(u, op, tParameters)
+    print("OK:__OPERATION__ requested to (__X__,__Y__)")
+end)
+if not ok then print("ERR:" .. tostring(err)) end
+print("{SENTINEL}")
+"""
+
+_UNIT_OPERATIONS = ("REBASE", "EXCAVATE")
+
+
+def build_unit_operation(unit_index: int, operation: str, x: int, y: int) -> str:
+    """InGame context: targeted unit operation (air rebase, artifact dig)."""
+    if operation not in _UNIT_OPERATIONS:
+        raise ValueError(f"unknown unit operation: {operation!r}")
+    return (_UNIT_OPERATION_LUA
+            .replace("__UNIT__", str(int(unit_index)))
+            .replace("__OPERATION__", operation)
+            .replace("__X__", str(int(x)))
+            .replace("__Y__", str(int(y)))
+            .replace("{SENTINEL}", SENTINEL))
+
+
 def parse_units_response(lines: list[str]) -> list[UnitInfo]:
     units = []
     for line in lines:

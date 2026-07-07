@@ -1407,6 +1407,18 @@ class GameState:
             lq.build_form_formation(unit_index, merge_unit_index, "FORM_ARMY"))
         return _action_result(lines)
 
+    async def rebase_unit(self, unit_index: int, x: int, y: int) -> str:
+        """Rebase an air unit to another of your cities/airstrips within range."""
+        lines = await self.conn.execute_write(
+            lq.build_unit_operation(unit_index, "REBASE", x, y))
+        return _action_result(lines)
+
+    async def excavate_artifact(self, unit_index: int, x: int, y: int) -> str:
+        """Send an archaeologist to dig an antiquity site (consumes a charge)."""
+        lines = await self.conn.execute_write(
+            lq.build_unit_operation(unit_index, "EXCAVATE", x, y))
+        return _action_result(lines)
+
     # ------------------------------------------------------------------
     # Trader teleport (InGame context)
     # ------------------------------------------------------------------

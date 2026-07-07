@@ -1020,6 +1020,27 @@ async def form_army(ctx: Context, unit_id: int, merge_unit_id: int) -> str:
                          lambda: gs.form_army(unit_id % 65536, merge_unit_id % 65536))
 
 
+@mcp.tool()
+async def rebase_unit(ctx: Context, unit_id: int, target_x: int, target_y: int) -> str:
+    """Rebase an air unit to another of your cities/airstrips within range."""
+    gs = _get_game(ctx)
+    params = {"unit_id": unit_id, "target_x": target_x, "target_y": target_y}
+    return await _logged(ctx, "rebase_unit", params,
+                         lambda: gs.rebase_unit(unit_id % 65536, target_x, target_y))
+
+
+@mcp.tool()
+async def excavate_artifact(ctx: Context, unit_id: int, target_x: int, target_y: int) -> str:
+    """Send an archaeologist to dig an antiquity site (consumes a charge).
+
+    Sites appear after the Natural History civic; artifacts fill museum slots.
+    """
+    gs = _get_game(ctx)
+    params = {"unit_id": unit_id, "target_x": target_x, "target_y": target_y}
+    return await _logged(ctx, "excavate_artifact", params,
+                         lambda: gs.excavate_artifact(unit_id % 65536, target_x, target_y))
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.

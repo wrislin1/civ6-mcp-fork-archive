@@ -60,4 +60,6 @@ LOCAL_TOOL_VERBS: dict[str, str] = {
     "move_great_work": "move_great_work",
     "form_corps": "form_corps",
     "form_army": "form_army",
+    "rebase_unit": "rebase_unit",
+    "excavate_artifact": "excavate_artifact",
 }
