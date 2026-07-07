@@ -247,4 +247,8 @@ def _is_section_header(line: str, following_lines: Sequence[str] = ()) -> bool:
 
     # Unbulleted: a known reflection header (matched case-insensitively, so title-case
     # "Tactical:" terminates) or any all-caps line ("STRATEGIC NOTES:") terminates.
+    # PLANNING stays task-aware in unbulleted form too: models emit TASK lines under
+    # a "Planning:" subheading, and cutting there would silently drop them.
+    if header in _TASK_AWARE_BULLETED_PLAN_SUBHEADINGS:
+        return not _has_task_line_before_next_header(following_lines)
     return header in _BULLETED_SECTION_HEADERS or body.isupper()

@@ -178,12 +178,16 @@ def test_extract_standing_plan_stops_at_emphasized_known_unbulleted_header():
     assert result == "keep builder near copper"
 
 
-def test_extract_standing_plan_stops_at_emphasized_planning_header_even_with_task_line():
+def test_extract_standing_plan_stops_at_emphasized_planning_header_without_task_line():
+    # Regression for the emphasized form being recognized as a header at all
+    # (not stripped as a bullet and kept as plan content). When TASK/CANCEL
+    # lines follow, PLANNING is task-aware and does NOT terminate -- see
+    # test_extract_standing_plan_keeps_task_lines_under_unbulleted_planning_headers.
     summary = (
         "STANDING PLAN:\n"
         "- keep scout moving\n"
         "**Planning:**\n"
-        "- TASK settle unit_id=42 target=10,12\n"
+        "- unrelated reflection content\n"
     )
 
     assert extract_standing_plan(summary, max_chars=1200) == "keep scout moving"
@@ -424,3 +428,28 @@ def test_format_memory_block_returns_empty_for_empty_text():
     )
 
     assert format_memory_block(memory) == ""
+
+
+def test_extract_standing_plan_keeps_task_lines_under_unbulleted_planning_headers():
+    for heading in ("Planning:", "**Planning:**", "PLANNING:"):
+        summary = (
+            "STANDING PLAN:\n"
+            "- settle east\n"
+            f"{heading}\n"
+            "TASK settle unit_id=65537 target=10,12\n"
+        )
+
+        result = extract_standing_plan(summary, max_chars=1200)
+
+        assert "TASK settle unit_id=65537 target=10,12" in result, heading
+
+
+def test_extract_standing_plan_stops_at_unbulleted_planning_without_task_lines():
+    summary = (
+        "STANDING PLAN:\n"
+        "- settle east\n"
+        "Planning:\n"
+        "- reflection prose only\n"
+    )
+
+    assert extract_standing_plan(summary, max_chars=1200) == "settle east"
