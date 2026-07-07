@@ -30,6 +30,7 @@ from civ_mcp.lua.cities import (  # noqa: F401
     build_city_attack,
     build_city_production_query,
     build_city_yield_focus_query,
+    build_loyalty_query,
     build_produce_item,
     build_purchase_item,
     build_resolve_city_capture,
@@ -37,6 +38,7 @@ from civ_mcp.lua.cities import (  # noqa: F401
     build_verify_production,
     parse_cities_response,
     parse_city_production_response,
+    parse_loyalty_response,
 )
 from civ_mcp.lua.diplomacy import (  # noqa: F401
     build_check_diplomacy_session_state,
@@ -151,6 +153,7 @@ from civ_mcp.lua.models import (  # noqa: F401
     AgentExtras,
     BuilderInfo,
     BuilderTask,
+    CityLoyalty,
     CityRow,
     DiarySnapshot,
     BeliefInfo,

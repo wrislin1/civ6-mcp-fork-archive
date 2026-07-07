@@ -210,6 +210,10 @@ class GameState:
         lines = await self.conn.execute_write(lq.build_gossip_query())
         return lq.parse_gossip_response(lines)
 
+    async def get_loyalty(self) -> list[lq.CityLoyalty]:
+        lines = await self.conn.execute_write(lq.build_loyalty_query())
+        return lq.parse_loyalty_response(lines)
+
     async def get_tech_civics(self) -> lq.TechCivicStatus:
         lines = await self.conn.execute_read(lq.build_tech_civics_query())
         return lq.parse_tech_civics_response(lines)

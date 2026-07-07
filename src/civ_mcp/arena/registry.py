@@ -192,6 +192,11 @@ async def _gossip_text(gs: Any, args: dict[str, Any]) -> str:
     return _render(await gs.get_gossip(), nr.narrate_gossip)
 
 
+async def _loyalty_text(gs: Any, args: dict[str, Any]) -> str:
+    del args
+    return _render(await gs.get_loyalty(), nr.narrate_loyalty)
+
+
 def _unit_index(unit_id: Any) -> int:
     """Composite unit_id -> unit_index, mirroring GameState's own convention."""
     return int(unit_id) % 65536
@@ -1203,6 +1208,14 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         None,
         (),
         _gossip_text,
+    ),
+    "get_loyalty": _tool(
+        "get_loyalty",
+        "Per-city loyalty: current/max, per-turn trend, and pressure sources. "
+        "A negative trend means the city will eventually revolt and flip.",
+        None,
+        (),
+        _loyalty_text,
     ),
 }
 

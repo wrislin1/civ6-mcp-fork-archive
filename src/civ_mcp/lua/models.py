@@ -1302,3 +1302,13 @@ class GossipEntry:
     about_player: int
     turn: int
     text: str
+
+
+@dataclass
+class CityLoyalty:
+    city_id: int
+    name: str
+    loyalty: float
+    max_loyalty: float
+    per_turn: float
+    sources: list[tuple[str, float]] = field(default_factory=list)

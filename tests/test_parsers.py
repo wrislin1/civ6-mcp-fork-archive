@@ -16,6 +16,7 @@ from civ_mcp.lua.cities import parse_cities_response
 from civ_mcp.lua.map import parse_map_response
 from civ_mcp.lua.notifications import parse_end_turn_blocking
 from civ_mcp.lua.diplomacy import parse_gossip_response
+from civ_mcp.lua.cities import parse_loyalty_response
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +409,32 @@ class TestParseGossip:
         grievances, gossip = parse_gossip_response(
             ["GRIEV|x|bad|row", "GOSSIP|notanint|q|t", "junk"])
         assert grievances == [] and gossip == []
+
+
+# ---------------------------------------------------------------------------
+# parse_loyalty_response
+# ---------------------------------------------------------------------------
+
+
+class TestParseLoyalty:
+    def test_cities_with_sources(self):
+        lines = [
+            "LOYAL|65792|Lahore|72.5|100.0|-3.25",
+            "LOYSRC|65792|Pressure from other civs|-5.5",
+            "LOYSRC|65792|Governor|2.25",
+            "LOYAL|65793|Multan|100.0|100.0|1.00",
+            "---END---",
+        ]
+        rows = parse_loyalty_response(lines)
+        assert len(rows) == 2
+        assert rows[0].name == "Lahore"
+        assert rows[0].loyalty == 72.5
+        assert rows[0].per_turn == -3.25
+        assert rows[0].sources == [("Pressure from other civs", -5.5),
+                                   ("Governor", 2.25)]
+        assert rows[1].sources == []
+
+    def test_orphan_source_and_junk_skipped(self):
+        rows = parse_loyalty_response(
+            ["LOYSRC|999|orphan|1.0", "LOYAL|bad|X|a|b|c", "noise"])
+        assert rows == []

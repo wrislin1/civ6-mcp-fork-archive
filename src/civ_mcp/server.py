@@ -932,6 +932,21 @@ async def get_gossip(ctx: Context) -> str:
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+async def get_loyalty(ctx: Context) -> str:
+    """Per-city loyalty with per-turn trend and pressure sources.
+
+    A city trending negative will revolt and flip; assign a governor or
+    fix amenities before it does. get_cities shows only the summary number.
+    """
+    gs = _get_game(ctx)
+
+    async def _run():
+        return nr.narrate_loyalty(await gs.get_loyalty())
+
+    return await _logged(ctx, "get_loyalty", {}, _run)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 async def get_tech_civics(ctx: Context) -> str:
     """Get technology and civic research status.
 

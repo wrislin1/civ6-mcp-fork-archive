@@ -11,7 +11,7 @@ from civ_mcp.lua._helpers import (
     _bail_lua,
     _lua_get_city,
 )
-from civ_mcp.lua.models import CityInfo, ProductionOption
+from civ_mcp.lua.models import CityInfo, CityLoyalty, ProductionOption
 
 
 def build_cities_query() -> str:
@@ -847,3 +847,60 @@ def parse_city_production_response(lines: list[str]) -> list[ProductionOption]:
                 )
             )
     return options
+
+
+_LOYALTY_LUA = """
+local me = Game.GetLocalPlayer()
+for _, c in Players[me]:GetCities():Members() do
+    local ok = pcall(function()
+        local ci = c:GetCulturalIdentity()
+        local cur, mx, pt = 0, 100, 0
+        pcall(function() cur = ci:GetLoyalty() end)
+        pcall(function() mx = ci:GetMaxLoyalty() end)
+        pcall(function() pt = ci:GetLoyaltyPerTurn() end)
+        print(string.format("LOYAL|%d|%s|%.2f|%.2f|%.2f",
+            c:GetID(), Locale.Lookup(c:GetName()), cur, mx, pt))
+        pcall(function()
+            -- PROBE(live): per-source breakdown API (Task 15). Base numbers
+            -- above are solid; if this errors the city simply has no LOYSRC
+            -- lines and the tool degrades to totals-only.
+            local breakdown = ci:GetLoyaltyBreakdown()
+            for _, src in ipairs(breakdown) do
+                print(string.format("LOYSRC|%d|%s|%.2f",
+                    c:GetID(), tostring(src.Name), src.Amount))
+            end
+        end)
+    end)
+    if not ok then
+        print("LOYAL|" .. c:GetID() .. "|ERROR|0|100|0")
+    end
+end
+print("{SENTINEL}")
+"""
+
+
+def build_loyalty_query() -> str:
+    """InGame context: per-city loyalty, per-turn delta, source breakdown."""
+    return _LOYALTY_LUA.replace("{SENTINEL}", SENTINEL)
+
+
+def parse_loyalty_response(lines: list[str]) -> list[CityLoyalty]:
+    rows: list[CityLoyalty] = []
+    by_id: dict[int, CityLoyalty] = {}
+    for line in lines:
+        parts = line.split("|")
+        try:
+            if parts[0] == "LOYAL" and len(parts) >= 6:
+                row = CityLoyalty(
+                    city_id=int(parts[1]), name=parts[2],
+                    loyalty=float(parts[3]), max_loyalty=float(parts[4]),
+                    per_turn=float(parts[5]))
+                rows.append(row)
+                by_id[row.city_id] = row
+            elif parts[0] == "LOYSRC" and len(parts) >= 4:
+                row = by_id.get(int(parts[1]))
+                if row is not None:
+                    row.sources.append((parts[2], float(parts[3])))
+        except (ValueError, IndexError):
+            continue
+    return rows

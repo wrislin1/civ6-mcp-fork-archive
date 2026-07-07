@@ -1178,3 +1178,13 @@ async def test_get_gossip_registered_ungated():
         async def get_gossip(self):
             return "Gilgamesh holds 30 grievances against you"
     assert "grievances" in await dispatch(GS(), "get_gossip", {})
+
+
+@pytest.mark.asyncio
+async def test_get_loyalty_registered_ungated():
+    assert TOOL_REGISTRY["get_loyalty"].requires is None
+
+    class GS:
+        async def get_loyalty(self):
+            return "Lahore: 72.5/100 (-3.25/turn)"
+    assert "Lahore" in await dispatch(GS(), "get_loyalty", {})

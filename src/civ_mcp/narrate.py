@@ -2121,3 +2121,21 @@ def narrate_gossip(
         for e in gossip[-20:]:
             out.append(f"[T{e.turn}] (about player {e.about_player}) {e.text}")
     return "\n".join(out)
+
+
+def narrate_loyalty(rows: list[lq.CityLoyalty]) -> str:
+    if not rows:
+        return "No cities."
+    out = ["=== LOYALTY ==="]
+    for r in rows:
+        trend = "+" if r.per_turn >= 0 else ""
+        flag = ""
+        if r.per_turn < 0:
+            turns = int(r.loyalty / -r.per_turn) if r.per_turn else 0
+            flag = f"  !! LOSING LOYALTY (~{turns} turns to revolt)"
+        out.append(f"{r.name} (id {r.city_id}): {r.loyalty:.0f}/{r.max_loyalty:.0f} "
+                   f"({trend}{r.per_turn:.2f}/turn){flag}")
+        for name, amount in r.sources:
+            sign = "+" if amount >= 0 else ""
+            out.append(f"    {name}: {sign}{amount:.2f}")
+    return "\n".join(out)
