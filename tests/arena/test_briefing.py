@@ -696,3 +696,28 @@ async def test_great_people_omitted_when_not_configured():
 
     assert "great_people" not in b.sections
     assert "GREAT_PEOPLE" not in b.text
+
+
+@pytest.mark.asyncio
+async def test_great_people_caps_claimed_entries_to_newest():
+    """Claimed GPs accumulate for the whole game; only the newest few are a
+    useful contested/gone signal. Unbounded they overflow the briefing budget
+    and starve the threats/victory sections ordered after great_people."""
+    claimed = [
+        _gp(f"Claimed{i}", claimant="Rome", player_points=0, cost=100)
+        for i in range(8)
+    ]
+    gp = claimed + [_gp("Hypatia", can_recruit=True, player_points=100, cost=100)]
+
+    class GS:
+        async def get_great_people(self):
+            return gp
+
+    text = await _briefing._great_people(GS(), {})
+
+    # Newest 5 claimed kept, oldest 3 dropped; recruitable always kept.
+    assert "Hypatia" in text
+    for i in range(3):
+        assert f"Claimed{i}" not in text
+    for i in range(3, 8):
+        assert f"Claimed{i}" in text

@@ -121,6 +121,7 @@ async def _empire_resources(gs: Any, ctx: dict[str, Any]) -> str:
 
 
 _GP_CLOSE_RATIO = 0.5  # puppet's progress/cost ratio counted as "close to recruiting"
+_GP_MAX_CLAIMED = 5  # newest claimed entries kept as the contested/gone signal
 
 
 async def _great_people(gs: Any, ctx: dict[str, Any]) -> str:
@@ -132,13 +133,18 @@ async def _great_people(gs: Any, ctx: dict[str, Any]) -> str:
         return nr.narrate_great_people(gp)
 
     # Keep this concise: the full timeline can span dozens of individuals across
-    # every era. Surface only what's actionable this turn or worth tracking —
-    # recruitable now, close to recruitable, or already claimed (contested/gone).
+    # every era, and claimed entries accumulate for the whole game. Surface only
+    # what's actionable this turn or worth tracking — recruitable now, close to
+    # recruitable, or the newest few claimed (contested/gone). Older claimed
+    # entries are dead history; unbounded they would overflow the briefing
+    # budget and drop the threats/victory sections ordered after this one.
+    claimed_indices = [i for i, g in enumerate(gp) if g.claimant != "Unclaimed"]
+    recent_claimed = set(claimed_indices[-_GP_MAX_CLAIMED:])
     relevant = [
         g
-        for g in gp
+        for i, g in enumerate(gp)
         if g.can_recruit
-        or g.claimant != "Unclaimed"
+        or i in recent_claimed
         or (g.cost > 0 and g.player_points / g.cost >= _GP_CLOSE_RATIO)
     ]
     if not relevant:
