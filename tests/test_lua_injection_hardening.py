@@ -189,3 +189,24 @@ def test_send_diplo_action_unknown_does_not_fall_back_to_raw():
     from civ_mcp.lua.diplomacy import build_send_diplo_action
     lua = build_send_diplo_action(1, "TOTALLY_UNKNOWN_ACTION")
     assert 'RequestSession(me, target, "TOTALLY_UNKNOWN_ACTION")' not in lua
+
+
+# NOTE: set_research's real kwarg is tech_name (not tech); improve_tile's real
+# signature is (unit_index, improvement_name) — unit_index is already coerced
+# to int at the arena registry, so only improvement_name is crafted here.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,kwargs", [
+    ("set_research",         {"tech_name": 'TECH_X" .. e() .. "'}),
+    ("set_civic",            {"civic_name": 'CIVIC_X" --'}),
+    ("improve_tile",         {"unit_index": 1, "improvement_name": 'IMPROVEMENT_X" --'}),
+    ("get_district_advisor", {"city_id": 1, "district_type": 'DISTRICT_X" --'}),
+    ("get_district_advisor", {"city_id": '1)--', "district_type": "DISTRICT_CAMPUS"}),
+    ("get_wonder_advisor",   {"city_id": 1, "wonder_name": 'BUILDING_X" --'}),
+    ("get_wonder_advisor",   {"city_id": '1)--', "wonder_name": "BUILDING_STONEHENGE"}),
+    ("get_purchasable_tiles",{"city_id": '1) print(1) --'}),
+    ("purchase_tile",        {"city_id": '1)--', "x": 1, "y": 1}),
+])
+async def test_research_map_methods_reject_injection(method, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(**kwargs)

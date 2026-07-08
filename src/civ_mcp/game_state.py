@@ -583,6 +583,7 @@ class GameState:
         return _action_result(lines)
 
     async def improve_tile(self, unit_index: int, improvement_name: str) -> str:
+        improvement_name = _safe_enum(improvement_name, "improvement")
         lua = lq.build_improve_tile(unit_index, improvement_name)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
@@ -738,6 +739,7 @@ class GameState:
         return lq.parse_city_production_response(lines)
 
     async def set_research(self, tech_name: str) -> str:
+        tech_name = _safe_enum(tech_name, "tech")
         lua = lq.build_set_research(tech_name)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -764,6 +766,7 @@ class GameState:
         return result
 
     async def set_civic(self, civic_name: str) -> str:
+        civic_name = _safe_enum(civic_name, "civic")
         lua = lq.build_set_civic(civic_name)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -1300,6 +1303,8 @@ class GameState:
         self, city_id: int, district_type: str
     ) -> list[lq.DistrictPlacement] | str:
         """Returns placements list, or an error string if placement is impossible."""
+        city_id = int(city_id)
+        district_type = _safe_enum(district_type, "district")
         hard_err, soft_warn = self._advisor_budget_check()
         if hard_err:
             return hard_err
@@ -1320,6 +1325,8 @@ class GameState:
         self, city_id: int, wonder_name: str
     ) -> list[lq.WonderPlacement] | str:
         """Returns placements list, or an error string if budget exceeded."""
+        city_id = int(city_id)
+        wonder_name = _safe_enum(wonder_name, "wonder")
         hard_err, soft_warn = self._advisor_budget_check()
         if hard_err:
             return hard_err
@@ -1334,11 +1341,13 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def get_purchasable_tiles(self, city_id: int) -> list[lq.PurchasableTile]:
+        city_id = int(city_id)
         lua = lq.build_purchasable_tiles_query(city_id)
         lines = await self.conn.execute_write(lua)
         return lq.parse_purchasable_tiles_response(lines)
 
     async def purchase_tile(self, city_id: int, x: int, y: int) -> str:
+        city_id = int(city_id)
         lua = lq.build_purchase_tile(city_id, x, y)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
