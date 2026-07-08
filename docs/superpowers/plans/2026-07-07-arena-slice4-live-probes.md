@@ -60,3 +60,24 @@ the degrade/cut in the spec and tick with "DEGRADED"/"CUT".
 
 Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
 <reason>") and mirror any degrade/cut into the spec before merge.
+
+## Review-fix probes (2026-07-08)
+
+- [ ] **Formation enum constants** (capabilities.py, finding #3): in a live InGame
+      context, confirm `MilitaryFormationTypes.CORPS_FORMATION` and
+      `MilitaryFormationTypes.STANDARD_FORMATION` are non-nil (the live-verified
+      spelling elsewhere in the repo is the longer `STANDARD_MILITARY_FORMATION`).
+      If either is nil, the fail-open guard keeps `corps`/`army` exposed but the
+      detection is inert — fix the constant name and capture the correct enum.
+- [ ] **Naval Fleet gating** (capabilities.py, finding #2): with a Nationalism-era
+      naval-only roster, confirm `corps` reports 1 (a Fleet-eligible pair is
+      detected), i.e. `form_corps` is exposed for naval civs.
+- [ ] **GameClimate numeric format** (climate.py, finding #4): capture a real
+      `CLIMATE|` line in a Gathering-Storm game and confirm the parser handles the
+      actual formatting (integer vs float) of `GetClimateChangeLevel` /
+      `GetSeaLevel` / `GetTotalCO2Footprint`.
+- [ ] **Residual id-arg coercion** (registry.py, follow-up to finding #6 sweep):
+      the coordinate/unit-index sweep did not cover `city_id`/`player_id` args that
+      also interpolate into Lua (e.g. via `_lua_get_city`'s `{city_id} % 65536`).
+      Decide whether to extend the int-coercion sweep to those id args or accept
+      them as validated upstream.
