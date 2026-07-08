@@ -2,7 +2,48 @@
 
 from __future__ import annotations
 
+import re
+
 SENTINEL = "---END---"
+
+# Validation primitives for LLM-supplied input bound for Lua
+_ENUM_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _safe_enum(value: str, field: str = "value") -> str:
+    """Validate an LLM-supplied Civ type token before it is spliced into a bare
+    Lua string-literal or ["..."] index. Admits only [A-Za-z0-9_]+, so the value
+    can contain no quote/backslash/newline/bracket and cannot break out. Raises
+    ValueError otherwise. Use for large GameInfo-table params."""
+    if not isinstance(value, str) or not _ENUM_RE.match(value):
+        raise ValueError(f"invalid {field}: {value!r}")
+    return value
+
+
+def _one_of(value: str, allowed: "frozenset[str]", field: str = "value") -> str:
+    """Closed-domain allowlist for small, stable enums. Upper-cases and checks
+    membership — rejects both Lua-breakout payloads and safe-shaped-but-invalid
+    values before they reach a live game API. Raises ValueError otherwise."""
+    if not isinstance(value, str):
+        raise ValueError(f"invalid {field}: {value!r}")
+    up = value.upper()
+    if up not in allowed:
+        raise ValueError(f"invalid {field}: {value!r} (allowed: {sorted(allowed)})")
+    return up
+
+
+def _lua_escape(value: str) -> str:
+    """Escape an LLM-supplied free-text value for interpolation INSIDE an existing
+    Lua "..." literal (adds no surrounding quotes). For item_name, which carries
+    display names with spaces/mixed case. A crafted value is neutralized into a
+    harmless Lua string that matches no display name."""
+    if not isinstance(value, str):
+        raise ValueError(f"item_name must be a string, got {value!r}")
+    return (
+        value.replace("\\", "\\\\").replace('"', '\\"')
+        .replace("\n", "\\n").replace("\r", "").replace("\0", "")
+    )
+
 
 # Item type → GameInfo table name (shared by produce + purchase builders)
 _ITEM_TABLE_MAP: dict[str, str] = {
@@ -86,6 +127,7 @@ def _lua_get_unit_gamecore(unit_index: int) -> str:
 
 def _lua_get_city(city_id: int) -> str:
     """Lua snippet: look up a city in InGame context or bail."""
+    city_id = int(city_id)
     return (
         f"local me = Game.GetLocalPlayer() "
         f"local pCity = CityManager.GetCity(me, {city_id} % 65536) "
