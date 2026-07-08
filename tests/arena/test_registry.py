@@ -1327,3 +1327,109 @@ async def test_dispatch_coerces_coordinates_and_rejects_injection(name, args):
         async def get_pathing_estimate(self, *a): raise AssertionError("must not reach GS")
     with pytest.raises((ValueError, TypeError)):
         await dispatch(FakeGS(), name, args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("found_city", {"unit_index": "1) print(1) --"}),
+    ("fortify_unit", {"unit_index": "1) print(1) --"}),
+    ("skip_unit", {"unit_index": "1) print(1) --"}),
+    ("remove_feature", {"unit_index": "z"}),
+    ("heal_unit", {"unit_index": "z"}),
+    ("alert_unit", {"unit_index": "z"}),
+    ("get_settle_advisor", {"unit_index": "z"}),
+    ("automate_explore", {"unit_index": "z"}),
+    ("improve_tile", {"unit_index": "z", "improvement_name": "IMPROVEMENT_FARM"}),
+    ("upgrade_unit", {"unit_id": "1) print(1) --"}),
+    ("promote_unit", {"unit_id": "z", "promotion_type": "PROMOTION_BATTLECRY"}),
+    ("get_unit_promotions", {"unit_id": "z"}),
+])
+async def test_dispatch_coerces_unit_index_and_rejects_injection(name, args):
+    """A non-numeric unit_index/unit_id must raise before any Lua is built, so an
+    in-process LLM civ cannot inject Lua through a raw index."""
+    class FakeGS:
+        def __getattr__(self, _n):
+            async def _boom(*a, **k):
+                raise AssertionError("must not reach GS")
+            return _boom
+    with pytest.raises((ValueError, TypeError)):
+        await dispatch(FakeGS(), name, args)
+
+
+@pytest.mark.asyncio
+async def test_unit_index_and_unit_id_cast_preserves_happy_path():
+    """A valid numeric unit_index/unit_id (int or numeric string) must reach the
+    GS builder as the identical int the wrapper produced before this fix - the
+    injection-hardening cast must not change legitimate-input behavior."""
+    class FakeGS:
+        def __init__(self):
+            self.calls = []
+
+        async def found_city(self, unit_index):
+            self.calls.append(("found_city", unit_index)); return "OK"
+
+        async def fortify_unit(self, unit_index):
+            self.calls.append(("fortify_unit", unit_index)); return "OK"
+
+        async def skip_unit(self, unit_index):
+            self.calls.append(("skip_unit", unit_index)); return "OK"
+
+        async def remove_feature(self, unit_index):
+            self.calls.append(("remove_feature", unit_index)); return "OK"
+
+        async def heal_unit(self, unit_index):
+            self.calls.append(("heal_unit", unit_index)); return "OK"
+
+        async def alert_unit(self, unit_index):
+            self.calls.append(("alert_unit", unit_index)); return "OK"
+
+        async def get_settle_advisor(self, unit_index):
+            self.calls.append(("get_settle_advisor", unit_index)); return "OK"
+
+        async def automate_explore(self, unit_index):
+            self.calls.append(("automate_explore", unit_index)); return "OK"
+
+        async def improve_tile(self, unit_index, improvement_name):
+            self.calls.append(("improve_tile", unit_index, improvement_name)); return "OK"
+
+        async def upgrade_unit(self, unit_id):
+            self.calls.append(("upgrade_unit", unit_id)); return "OK"
+
+        async def promote_unit(self, unit_id, promotion_type):
+            self.calls.append(("promote_unit", unit_id, promotion_type)); return "OK"
+
+        async def get_unit_promotions(self, unit_id):
+            self.calls.append(("get_unit_promotions", unit_id)); return "OK"
+
+    gs = FakeGS()
+    await dispatch(gs, "found_city", {"unit_index": "5"})
+    await dispatch(gs, "fortify_unit", {"unit_index": 5})
+    await dispatch(gs, "skip_unit", {"unit_index": "5"})
+    await dispatch(gs, "remove_feature", {"unit_index": 5})
+    await dispatch(gs, "heal_unit", {"unit_index": "5"})
+    await dispatch(gs, "alert_unit", {"unit_index": 5})
+    await dispatch(gs, "get_settle_advisor", {"unit_index": "5"})
+    await dispatch(gs, "automate_explore", {"unit_index": 5})
+    await dispatch(
+        gs, "improve_tile", {"unit_index": "5", "improvement_name": "IMPROVEMENT_FARM"}
+    )
+    await dispatch(gs, "upgrade_unit", {"unit_id": "65541"})
+    await dispatch(
+        gs, "promote_unit", {"unit_id": 65541, "promotion_type": "PROMOTION_BATTLECRY"}
+    )
+    await dispatch(gs, "get_unit_promotions", {"unit_id": "65541"})
+
+    assert gs.calls == [
+        ("found_city", 5),
+        ("fortify_unit", 5),
+        ("skip_unit", 5),
+        ("remove_feature", 5),
+        ("heal_unit", 5),
+        ("alert_unit", 5),
+        ("get_settle_advisor", 5),
+        ("automate_explore", 5),
+        ("improve_tile", 5, "IMPROVEMENT_FARM"),
+        ("upgrade_unit", 65541),
+        ("promote_unit", 65541, "PROMOTION_BATTLECRY"),
+        ("get_unit_promotions", 65541),
+    ]

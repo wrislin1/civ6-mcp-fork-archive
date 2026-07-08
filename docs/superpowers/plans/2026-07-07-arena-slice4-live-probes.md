@@ -77,7 +77,13 @@ Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
       actual formatting (integer vs float) of `GetClimateChangeLevel` /
       `GetSeaLevel` / `GetTotalCO2Footprint`.
 - [ ] **Residual id-arg coercion** (registry.py, follow-up to finding #6 sweep):
-      the coordinate/unit-index sweep did not cover `city_id`/`player_id` args that
-      also interpolate into Lua (e.g. via `_lua_get_city`'s `{city_id} % 65536`).
-      Decide whether to extend the int-coercion sweep to those id args or accept
-      them as validated upstream.
+      the flat `unit_index`/`unit_id` numeric tools (including the minimal-tier
+      `found_city`/`fortify_unit`/`skip_unit`) are now coerced — this fix closed
+      that gap. **Residual un-coerced LLM→Lua surface still to harden (tracked,
+      out of this branch's scope):** (a) `city_id`/`player_id` args that
+      interpolate into Lua (e.g. via `_lua_get_city`'s `{city_id} % 65536`); (b)
+      **string params interpolated into Lua string-literal contexts** —
+      `improvement_name`, `promotion_type`, `civic_name`, `tech`,
+      `item_name`/`item_type`, `focus`, `government_type`, `belief_type` — which
+      cannot be int-cast and need a whitelist/escaping pass. Decide whether to
+      extend the sweep to these or accept them as validated upstream.

@@ -520,7 +520,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Found a city with a settler.",
         {"unit_index": _int_param("Settler unit_index from get_units.")},
         ("unit_index",),
-        lambda gs, args: gs.found_city(args["unit_index"]),
+        lambda gs, args: gs.found_city(int(args["unit_index"])),
         verb="found_city",
     ),
     "set_city_production": _tool(
@@ -554,7 +554,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Fortify a military unit.",
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
-        lambda gs, args: gs.fortify_unit(args["unit_index"]),
+        lambda gs, args: gs.fortify_unit(int(args["unit_index"])),
         verb="fortify",
     ),
     "skip_unit": _tool(
@@ -562,7 +562,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Skip a unit for this turn.",
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
-        lambda gs, args: gs.skip_unit(args["unit_index"]),
+        lambda gs, args: gs.skip_unit(int(args["unit_index"])),
         verb="skip",
     ),
     "get_map_area": _tool(
@@ -608,7 +608,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "improvement_name": _str_param("Improvement type to build."),
         },
         ("unit_index", "improvement_name"),
-        lambda gs, args: gs.improve_tile(args["unit_index"], args["improvement_name"]),
+        lambda gs, args: gs.improve_tile(int(args["unit_index"]), args["improvement_name"]),
         verb="improve",
     ),
     "remove_feature": _tool(
@@ -616,7 +616,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Remove a feature from the current tile.",
         {"unit_index": _int_param("Builder unit index.")},
         ("unit_index",),
-        lambda gs, args: gs.remove_feature(args["unit_index"]),
+        lambda gs, args: gs.remove_feature(int(args["unit_index"])),
         verb="remove_feature",
     ),
     "purchase_item": _tool(
@@ -642,7 +642,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Heal a unit until fully recovered.",
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
-        lambda gs, args: gs.heal_unit(args["unit_index"]),
+        lambda gs, args: gs.heal_unit(int(args["unit_index"])),
         verb="heal",
     ),
     "alert_unit": _tool(
@@ -650,7 +650,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Put a unit on alert.",
         {"unit_index": _int_param("Unit index from get_units.")},
         ("unit_index",),
-        lambda gs, args: gs.alert_unit(args["unit_index"]),
+        lambda gs, args: gs.alert_unit(int(args["unit_index"])),
         verb="alert",
     ),
     "set_civic": _tool(
@@ -666,7 +666,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Recommend nearby settle locations for a settler.",
         {"unit_index": _int_param("Settler unit index.")},
         ("unit_index",),
-        lambda gs, args: gs.get_settle_advisor(args["unit_index"]),
+        lambda gs, args: gs.get_settle_advisor(int(args["unit_index"])),
     ),
     "get_district_advisor": _tool(
         "get_district_advisor",
@@ -826,7 +826,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Upgrade a unit to its next type.",
         {"unit_id": _int_param("Composite unit ID from get_units.")},
         ("unit_id",),
-        lambda gs, args: gs.upgrade_unit(args["unit_id"]),
+        lambda gs, args: gs.upgrade_unit(int(args["unit_id"])),
         verb="upgrade",
     ),
     "promote_unit": _tool(
@@ -837,7 +837,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "promotion_type": _str_param("Promotion type name."),
         },
         ("unit_id", "promotion_type"),
-        lambda gs, args: gs.promote_unit(args["unit_id"], args["promotion_type"]),
+        lambda gs, args: gs.promote_unit(int(args["unit_id"]), args["promotion_type"]),
         verb="promote",
     ),
     "get_unit_promotions": _tool(
@@ -852,7 +852,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Set a scout to automated exploration.",
         {"unit_index": _int_param("Scout unit index.")},
         ("unit_index",),
-        lambda gs, args: gs.automate_explore(args["unit_index"]),
+        lambda gs, args: gs.automate_explore(int(args["unit_index"])),
         verb="automate",
     ),
     "skip_remaining_units": _tool(
@@ -1509,7 +1509,7 @@ async def _narrate_pantheon_status(gs: Any, args: dict[str, Any]) -> str:
 
 async def _narrate_unit_promotions(gs: Any, args: dict[str, Any]) -> str:
     return _render(
-        await gs.get_unit_promotions(args["unit_id"]),
+        await gs.get_unit_promotions(int(args["unit_id"])),
         nr.narrate_unit_promotions,
     )
 
