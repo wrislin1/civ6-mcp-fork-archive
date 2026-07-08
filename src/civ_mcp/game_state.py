@@ -990,6 +990,10 @@ class GameState:
         return lq.parse_policies_response(lines)
 
     async def set_policies(self, assignments: dict[int, str]) -> str:
+        assignments = {
+            int(slot): (pol if str(pol).upper() == "NONE" else _safe_enum(pol, "policy"))
+            for slot, pol in assignments.items()
+        }
         lua = lq.build_set_policies(assignments)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -1022,16 +1026,21 @@ class GameState:
         return lq.parse_governors_response(lines)
 
     async def appoint_governor(self, governor_type: str) -> str:
+        governor_type = _safe_enum(governor_type, "governor_type")
         lua = lq.build_appoint_governor(governor_type)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
     async def assign_governor(self, governor_type: str, city_id: int) -> str:
+        governor_type = _safe_enum(governor_type, "governor_type")
+        city_id = int(city_id)
         lua = lq.build_assign_governor(governor_type, city_id)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
     async def promote_governor(self, governor_type: str, promotion_type: str) -> str:
+        governor_type = _safe_enum(governor_type, "governor_type")
+        promotion_type = _safe_enum(promotion_type, "promotion_type")
         lua = lq.build_promote_governor(governor_type, promotion_type)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -1069,6 +1078,7 @@ class GameState:
         return lq.parse_unit_promotions_response(lines)
 
     async def promote_unit(self, unit_id: int, promotion_type: str) -> str:
+        promotion_type = _safe_enum(promotion_type, "promotion_type")
         unit_index = unit_id % 65536
         lua = lq.build_promote_unit(unit_index, promotion_type)
         lines = await self.conn.execute_read(lua)  # GameCore context
@@ -1320,6 +1330,7 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def change_government(self, government_type: str) -> str:
+        government_type = _safe_enum(government_type, "government_type")
         lua = lq.build_change_government(government_type)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)

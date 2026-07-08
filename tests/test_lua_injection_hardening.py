@@ -109,3 +109,25 @@ async def test_purchase_item_escapes_item_name_at_entry():
     lua = conn.calls[-1]
     assert 'x\\" .. e() .. \\"' in lua
     assert ' .. e() .. "' not in lua.replace('x\\" .. e() .. \\"', "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,kwargs", [
+    ("appoint_governor",  {"governor_type": 'GOVERNOR_X" --'}),
+    ("assign_governor",   {"governor_type": 'GOVERNOR_X" --', "city_id": 1}),
+    ("assign_governor",   {"governor_type": "GOVERNOR_LIANG", "city_id": '1)--'}),
+    ("promote_governor",  {"governor_type": "GOVERNOR_LIANG", "promotion_type": 'X" --'}),
+    ("promote_unit",      {"unit_id": 1, "promotion_type": 'PROMOTION_X" --'}),
+    ("change_government",  {"government_type": 'GOVERNMENT_X" --'}),
+])
+async def test_governance_methods_reject_injection(method, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_set_policies_rejects_injection():
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await gs.set_policies({0: 'POLICY_X" .. e() .. "'})
