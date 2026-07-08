@@ -549,6 +549,14 @@ def test_build_unit_operation_shape():
         build_unit_operation(3, "MAKE_TEA", 0, 0)
 
 
+def test_build_unit_operation_uses_hash():
+    from civ_mcp.lua.units import build_unit_operation, _UNIT_OP_HASHES
+    lua = build_unit_operation(42, "EXCAVATE", 5, 6)
+    assert str(_UNIT_OP_HASHES["EXCAVATE"]) in lua
+    assert "UnitOperationTypes.EXCAVATE" not in lua  # no nil enum reference
+    assert "PARAM_X" in lua and "PARAM_Y" in lua
+
+
 def test_build_form_formation_coerces_indices_and_rejects_injection():
     from civ_mcp.lua.units import build_form_formation
     # numeric strings are accepted (coerced)

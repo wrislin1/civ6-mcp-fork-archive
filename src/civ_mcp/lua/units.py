@@ -1395,18 +1395,25 @@ print("{SENTINEL}")
 
 _UNIT_OPERATIONS = ("REBASE", "EXCAVATE")
 
+# Operation hashes — UnitOperationTypes.EXCAVATE is nil in the tuner Lua
+# context (live probe 2026-07-08); REBASE resolves but we pin both for
+# stability, mirroring espionage.py's _SPY_OP_HASHES.
+_UNIT_OP_HASHES: dict[str, int] = {
+    "REBASE": -1054550409,
+    "EXCAVATE": 1548958412,
+}
+
 
 def build_unit_operation(unit_index: int, operation: str, x: int, y: int) -> str:
     """InGame context: targeted unit operation (air rebase, artifact dig)."""
     if operation not in _UNIT_OPERATIONS:
         raise ValueError(f"unknown unit operation: {operation!r}")
     x, y = int(x), int(y)
+    op_hash = _UNIT_OP_HASHES[operation]
     return f"""
 {_lua_get_unit(unit_index)}
 local ok, err = pcall(function()
-    -- PROBE(live): operation enum availability (Task 15); spy ops needed
-    -- hardcoded hashes, these two may as well.
-    local op = UnitOperationTypes.{operation}
+    local op = {op_hash}
     local tParameters = {{}}
     tParameters[UnitOperationTypes.PARAM_X] = {x}
     tParameters[UnitOperationTypes.PARAM_Y] = {y}
