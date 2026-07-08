@@ -144,3 +144,48 @@ async def test_religion_methods_reject_injection(method, kwargs):
     gs = GameState(NoExecConn())
     with pytest.raises((ValueError, TypeError)):
         await getattr(gs, method)(**kwargs)
+
+
+# NOTE: method names below are the REAL GameState methods, not the public tool
+# names — e.g. respond_to_diplomacy/get_trade_options/respond_to_trade are
+# exposed under diplomacy_respond/get_deal_options/respond_to_deal internally.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,kwargs", [
+    ("send_diplomatic_action", {"other_player_id": 1, "action": 'DECLARE_FRIENDSHIP" --'}),
+    ("send_diplomatic_action", {"other_player_id": '1)--', "action": "DECLARE_FRIENDSHIP"}),
+    ("diplomacy_respond",      {"other_player_id": 1, "response": 'POSITIVE" --'}),
+    ("form_alliance",          {"other_player_id": 1, "alliance_type": 'MILITARY" --'}),
+    ("form_alliance",          {"other_player_id": 1, "alliance_type": "BOGUS"}),
+    ("propose_peace",          {"other_player_id": '1) e() --'}),
+    ("get_deal_options",       {"other_player_id": '1)--'}),
+    ("respond_to_deal",        {"other_player_id": '1)--', "accept": True}),
+    ("send_envoy",             {"city_state_player_id": '1) print(1) --'}),
+])
+async def test_diplomacy_methods_reject_injection(method, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_propose_trade_rejects_resource_injection():
+    # GameState.propose_trade takes offer_items/request_items (list[dict]), not
+    # the offer_resources/mode kwargs the public server.py tool builds from —
+    # craft a RESOURCE item so the call actually reaches the _lua_deal_item
+    # RESOURCE branch in civ_mcp.lua.diplomacy.
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await gs.propose_trade(
+            other_player_id=1,
+            offer_items=[
+                {"type": "RESOURCE", "name": 'RESOURCE_IRON,X" .. e() .. "', "amount": 1}
+            ],
+            request_items=[],
+        )
+
+
+def test_send_diplo_action_unknown_does_not_fall_back_to_raw():
+    # An unknown (but charset-safe) action must NOT be spliced into RequestSession.
+    from civ_mcp.lua.diplomacy import build_send_diplo_action
+    lua = build_send_diplo_action(1, "TOTALLY_UNKNOWN_ACTION")
+    assert 'RequestSession(me, target, "TOTALLY_UNKNOWN_ACTION")' not in lua

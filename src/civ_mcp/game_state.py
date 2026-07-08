@@ -33,6 +33,8 @@ log = logging.getLogger(__name__)
 # (see civ_mcp.lua._helpers for the validation primitives).
 _PURCHASE_ITEM_TYPES = frozenset({"UNIT", "BUILDING", "DISTRICT", "PROJECT"})
 _PURCHASE_YIELDS = frozenset({"YIELD_GOLD", "YIELD_FAITH"})
+_ALLIANCE_TYPES = frozenset({"MILITARY", "RESEARCH", "CULTURAL", "ECONOMIC", "RELIGIOUS"})
+_DIPLO_RESPONSES = frozenset({"POSITIVE", "NEGATIVE", "EXIT"})
 
 
 class GameState:
@@ -795,6 +797,8 @@ class GameState:
         return lq.parse_diplomacy_sessions(lines)
 
     async def diplomacy_respond(self, other_player_id: int, response: str) -> str:
+        other_player_id = int(other_player_id)
+        response = _one_of(response, _DIPLO_RESPONSES, "response")
         # Capture dialogue text BEFORE response to detect goodbye phase
         pre_sessions = await self.get_diplomacy_sessions()
         pre_text = ""
@@ -857,6 +861,8 @@ class GameState:
         return f"OK:RESPONDED|{response.upper()}|SESSION_CONTINUES{dialogue_note}"
 
     async def send_diplomatic_action(self, other_player_id: int, action: str) -> str:
+        other_player_id = int(other_player_id)
+        action = _safe_enum(action, "action")
         if action.upper() == "OPEN_BORDERS":
             # Session-based OPEN_BORDERS causes AI turn hang.
             # Route through the trade deal API instead (mutual open borders).
@@ -908,6 +914,7 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def get_deal_options(self, other_player_id: int) -> lq.DealOptions:
+        other_player_id = int(other_player_id)
         lua = lq.build_deal_options_query(other_player_id)
         lines = await self.conn.execute_write(lua)
         return lq.parse_deal_options_response(lines)
@@ -918,6 +925,7 @@ class GameState:
         return lq.parse_pending_deals_response(lines)
 
     async def respond_to_deal(self, other_player_id: int, accept: bool) -> str:
+        other_player_id = int(other_player_id)
         lua = lq.build_respond_to_deal(other_player_id, accept)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
@@ -928,6 +936,7 @@ class GameState:
         offer_items: list[dict],
         request_items: list[dict],
     ) -> str:
+        other_player_id = int(other_player_id)
         lua = lq.build_propose_trade(other_player_id, offer_items, request_items)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -953,12 +962,14 @@ class GameState:
         offer_items: list[dict],
         request_items: list[dict],
     ) -> str:
+        other_player_id = int(other_player_id)
         lua = lq.build_test_trade(other_player_id, offer_items, request_items)
         lines = await self.conn.execute_write(lua)
         result = lq.parse_test_trade_response(lines)
         return narrate_test_trade(result)
 
     async def propose_peace(self, other_player_id: int) -> str:
+        other_player_id = int(other_player_id)
         lua = lq.build_propose_peace(other_player_id)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
@@ -976,6 +987,8 @@ class GameState:
             return f"REJECTED|{name} rejected your peace offer"
 
     async def form_alliance(self, other_player_id: int, alliance_type: str) -> str:
+        other_player_id = int(other_player_id)
+        alliance_type = _one_of(alliance_type, _ALLIANCE_TYPES, "alliance_type")
         lua = lq.build_form_alliance(other_player_id, alliance_type.upper())
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
@@ -1159,6 +1172,7 @@ class GameState:
         return lq.parse_city_states_response(lines)
 
     async def send_envoy(self, city_state_player_id: int) -> str:
+        city_state_player_id = int(city_state_player_id)
         lua = lq.build_send_envoy(city_state_player_id)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)

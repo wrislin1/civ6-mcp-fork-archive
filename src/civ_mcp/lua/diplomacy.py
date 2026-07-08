@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from civ_mcp.lua._helpers import SENTINEL, _bail, _bail_lua, _lua_close_diplo_session
+from civ_mcp.lua._helpers import (
+    SENTINEL,
+    _bail,
+    _bail_lua,
+    _lua_close_diplo_session,
+    _safe_enum,
+)
 from civ_mcp.lua.models import (
     AgendaInfo,
     CivInfo,
@@ -443,7 +449,9 @@ def build_send_diplo_action(other_player_id: int, action_name: str) -> str:
         "DECLARE_TERRITORIAL_WAR": "DECLARE_TERRITORIAL_WAR",
     }
     is_war = action_name.endswith("_WAR") and action_name.startswith("DECLARE_")
-    session_str = session_string_map.get(action_name, action_name)
+    session_str = session_string_map.get(action_name)
+    if session_str is None:
+        return _bail(f"ERR:UNKNOWN_ACTION|{_safe_enum(action_name, 'action')}")
 
     # War declarations use CanDeclareWarOn; other actions use IsDiplomaticActionValid
     if is_war:
@@ -823,7 +831,7 @@ def _lua_deal_item(from_var: str, item: dict) -> str:
             f"if gi then gi:SetAmount({amount}) gi:SetDuration({duration}) end end"
         )
     elif t == "RESOURCE":
-        res_name = item["name"]
+        res_name = _safe_enum(item["name"], "resource")
         res_amount = item.get("amount", 1)
         res_duration = item.get("duration", 30)
         return (
