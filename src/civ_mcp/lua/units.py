@@ -1364,6 +1364,7 @@ def build_form_formation(
     """
     if command not in _FORMATION_COMMANDS:
         raise ValueError(f"unknown formation command: {command!r}")
+    unit_index, merge_unit_index = int(unit_index), int(merge_unit_index)
 
     # Use the existing helper for first unit lookup (matching file idiom),
     # then manually lookup the merge unit with same pattern

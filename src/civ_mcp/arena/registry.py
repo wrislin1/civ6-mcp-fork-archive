@@ -228,12 +228,12 @@ async def _form_army_text(gs: Any, args: dict[str, Any]) -> str:
 
 async def _rebase_unit_text(gs: Any, args: dict[str, Any]) -> str:
     return await gs.rebase_unit(
-        _unit_index(args["unit_id"]), args["target_x"], args["target_y"])
+        _unit_index(args["unit_id"]), int(args["target_x"]), int(args["target_y"]))
 
 
 async def _excavate_artifact_text(gs: Any, args: dict[str, Any]) -> str:
     return await gs.excavate_artifact(
-        _unit_index(args["unit_id"]), args["target_x"], args["target_y"])
+        _unit_index(args["unit_id"]), int(args["target_x"]), int(args["target_y"]))
 
 
 def _unit_index(unit_id: Any) -> int:
@@ -266,12 +266,12 @@ async def _world_congress_text(gs: Any, args: dict[str, Any]) -> str:
 
 async def _start_trade_route_text(gs: Any, args: dict[str, Any]) -> str:
     unit_index = _unit_index(args["unit_id"])
-    return await gs.make_trade_route(unit_index, args["target_x"], args["target_y"])
+    return await gs.make_trade_route(unit_index, int(args["target_x"]), int(args["target_y"]))
 
 
 async def _teleport_trader_text(gs: Any, args: dict[str, Any]) -> str:
     unit_index = _unit_index(args["unit_id"])
-    return await gs.teleport_to_city(unit_index, args["target_x"], args["target_y"])
+    return await gs.teleport_to_city(unit_index, int(args["target_x"]), int(args["target_y"]))
 
 
 async def _queue_wc_votes_text(gs: Any, args: dict[str, Any]) -> str:
@@ -512,7 +512,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "y": _int_param("Target Y coordinate."),
         },
         ("unit_index", "x", "y"),
-        lambda gs, args: gs.move_unit(args["unit_index"], args["x"], args["y"]),
+        lambda gs, args: gs.move_unit(int(args["unit_index"]), int(args["x"]), int(args["y"])),
         verb="move",
     ),
     "found_city": _tool(
@@ -597,7 +597,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "y": _int_param("Target Y coordinate."),
         },
         ("unit_index", "x", "y"),
-        lambda gs, args: gs.attack_unit(args["unit_index"], args["x"], args["y"]),
+        lambda gs, args: gs.attack_unit(int(args["unit_index"]), int(args["x"]), int(args["y"])),
         verb="attack",
     ),
     "improve_tile": _tool(
@@ -872,7 +872,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "y": _int_param("Tile Y coordinate."),
         },
         ("city_id", "x", "y"),
-        lambda gs, args: gs.purchase_tile(args["city_id"], args["x"], args["y"]),
+        lambda gs, args: gs.purchase_tile(args["city_id"], int(args["x"]), int(args["y"])),
         verb="purchase_tile",
     ),
     "get_purchasable_tiles": _tool(
@@ -1151,7 +1151,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
             "target_y": _int_param("Target Y coordinate."),
         },
         ("city_id", "target_x", "target_y"),
-        lambda gs, args: gs.city_attack(args["city_id"], args["target_x"], args["target_y"]),
+        lambda gs, args: gs.city_attack(args["city_id"], int(args["target_x"]), int(args["target_y"])),
         verb="city_attack",
     ),
     "resolve_city_capture": _tool(
@@ -1462,7 +1462,7 @@ async def _narrate_units(gs: Any, args: dict[str, Any]) -> str:
 async def _narrate_map(gs: Any, args: dict[str, Any]) -> str:
     radius = _clamp_map_radius(args.get("radius", _MAP_RADIUS_DEFAULT))
     return _render(
-        await gs.get_map_area(args["x"], args["y"], radius),
+        await gs.get_map_area(int(args["x"]), int(args["y"]), radius),
         nr.narrate_map,
     )
 
@@ -1493,7 +1493,7 @@ async def _narrate_victory_progress(gs: Any, args: dict[str, Any]) -> str:
 
 
 async def _narrate_pathing_estimate(gs: Any, args: dict[str, Any]) -> str:
-    est = await gs.get_pathing_estimate(args["unit_index"], args["x"], args["y"])
+    est = await gs.get_pathing_estimate(int(args["unit_index"]), int(args["x"]), int(args["y"]))
     return _render(est, nr.narrate_pathing_estimate)
 
 

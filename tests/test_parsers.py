@@ -534,6 +534,16 @@ def test_build_unit_operation_shape():
         build_unit_operation(3, "MAKE_TEA", 0, 0)
 
 
+def test_build_form_formation_coerces_indices_and_rejects_injection():
+    from civ_mcp.lua.units import build_form_formation
+    # numeric strings are accepted (coerced)
+    lua = build_form_formation("3", "7", "FORM_CORPS")
+    assert "GetUnit(me, 7)" in lua
+    # a crafted string index cannot reach Lua — it raises at the builder
+    with pytest.raises((ValueError, TypeError)):
+        build_form_formation(3, "7} print(1) --", "FORM_CORPS")
+
+
 # ---------------------------------------------------------------------------
 # build_spy_mission (espionage builders)
 # ---------------------------------------------------------------------------

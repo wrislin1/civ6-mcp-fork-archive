@@ -1296,3 +1296,34 @@ async def test_air_and_archaeology_tools_registered_gated():
     await dispatch(gs, "rebase_unit", {"unit_id": 65539, "target_x": 4, "target_y": 5})
     await dispatch(gs, "excavate_artifact", {"unit_id": 65540, "target_x": 6, "target_y": 7})
     assert gs.calls == [("rebase", 3, 4, 5), ("dig", 4, 6, 7)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("move_unit", {"unit_index": 1, "x": "0} print(1) --", "y": 5}),
+    ("attack_unit", {"unit_index": 1, "x": 3, "y": "9)--"}),
+    ("purchase_tile", {"city_id": 1, "x": "z", "y": 2}),
+    ("city_attack", {"city_id": 1, "target_x": "q", "target_y": 2}),
+    ("start_trade_route", {"unit_id": 65537, "target_x": 1, "target_y": "b"}),
+    ("teleport_trader", {"unit_id": 65537, "target_x": "a", "target_y": 2}),
+    ("rebase_unit", {"unit_id": 65537, "target_x": "a", "target_y": 2}),
+    ("excavate_artifact", {"unit_id": 65537, "target_x": 1, "target_y": "b"}),
+    ("get_map_area", {"x": "z", "y": 2}),
+    ("get_pathing_estimate", {"unit_index": 1, "x": "q", "y": 2}),
+])
+async def test_dispatch_coerces_coordinates_and_rejects_injection(name, args):
+    """A non-numeric coordinate must raise before any Lua is built, so an
+    in-process LLM civ cannot inject Lua through a coordinate string."""
+    class FakeGS:
+        async def move_unit(self, *a): raise AssertionError("must not reach GS")
+        async def attack_unit(self, *a): raise AssertionError("must not reach GS")
+        async def purchase_tile(self, *a): raise AssertionError("must not reach GS")
+        async def city_attack(self, *a): raise AssertionError("must not reach GS")
+        async def make_trade_route(self, *a): raise AssertionError("must not reach GS")
+        async def teleport_to_city(self, *a): raise AssertionError("must not reach GS")
+        async def rebase_unit(self, *a): raise AssertionError("must not reach GS")
+        async def excavate_artifact(self, *a): raise AssertionError("must not reach GS")
+        async def get_map_area(self, *a): raise AssertionError("must not reach GS")
+        async def get_pathing_estimate(self, *a): raise AssertionError("must not reach GS")
+    with pytest.raises((ValueError, TypeError)):
+        await dispatch(FakeGS(), name, args)
