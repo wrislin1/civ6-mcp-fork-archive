@@ -1274,8 +1274,9 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
     ),
     "move_great_work": _tool(
         "move_great_work",
-        "Move a great work (index from get_great_works) to another building "
-        "slot, e.g. to group matching works for a theming bonus.",
+        "UNAVAILABLE in this game build: no working move API in the tuner "
+        "context, so this reports UNAVAILABLE rather than moving anything. "
+        "Read slots with get_great_works; great works can't be rearranged here.",
         {
             "work_id": _int_param("Work index from get_great_works"),
             "target_city_id": _int_param("Destination city id"),

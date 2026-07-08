@@ -82,7 +82,14 @@ local ok, err = pcall(function()
         print("ERR:target city or building not found")
         return
     end
-    -- PROBE(live): move request API (Task 15)
+    -- PROBE(live 2026-07-08): UI.MoveGreatWork / Game.GetGreatWorks /
+    -- GreatWorksManager are all nil in the tuner Lua context; no working
+    -- move API found. CUT to an informative readout (query still works).
+    if type(UI) ~= "table" or type(UI.MoveGreatWork) ~= "function" then
+        print("UNAVAILABLE:great-work move — no move API in this game build "
+              .. "(work " .. workIndex .. " -> " .. targetBuilding .. " slot " .. targetSlot .. ")")
+        return
+    end
     UI.MoveGreatWork(fromCity:GetID(), fromBuildingIdx, fromSlot,
                      toCity:GetID(), toRow.Index, targetSlot)
     print("OK:requested move of work " .. workIndex .. " to " .. targetBuilding

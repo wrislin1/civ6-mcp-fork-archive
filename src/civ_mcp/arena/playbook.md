@@ -159,4 +159,5 @@ get_climate warns of floods/storms - avoid settling low coast in late game.
 Two same-type units adjacent -> form_corps (+10 CS) once Nationalism unlocks; a
 corps + one more -> form_army after Mobilization. Rebase air units forward as the
 front moves. Archaeologists dig antiquity sites (excavate_artifact) to fill museum
-slots; group matching great works in one building (move_great_work) for theming.
+slots. (Rearranging works for a theming bonus via move_great_work is
+unavailable in this build — the tuner context exposes no move API.)

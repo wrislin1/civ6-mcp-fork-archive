@@ -523,6 +523,12 @@ def test_build_move_great_work_rejects_suspicious_building():
             build_move_great_work(17, 65793, bad, 2)
 
 
+def test_build_move_great_work_degrades_when_ui_absent():
+    lua = build_move_great_work(33, 851980, "BUILDING_AMPHITHEATER", 0)
+    assert "UNAVAILABLE:great-work move" in lua      # cut path present
+    assert 'type(UI.MoveGreatWork) ~= "function"' in lua
+
+
 def test_build_form_formation_shape():
     from civ_mcp.lua.units import build_form_formation
     lua = build_form_formation(3, 7, "FORM_CORPS")
