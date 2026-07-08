@@ -1384,6 +1384,7 @@ class GameState:
     async def patronize_great_person(
         self, individual_id: int, yield_type: str = "YIELD_GOLD"
     ) -> str:
+        yield_type = _one_of(yield_type, _PURCHASE_YIELDS, "yield_type")
         lua = lq.build_patronize_great_person(individual_id, yield_type)
         lines = await self.conn.execute_write(lua)
         return lines[0] if lines else "No response"

@@ -210,3 +210,19 @@ async def test_research_map_methods_reject_injection(method, kwargs):
     gs = GameState(NoExecConn())
     with pytest.raises((ValueError, TypeError)):
         await getattr(gs, method)(**kwargs)
+
+
+# patronize_great_person: individual_id is already int-coerced at the arena
+# registry (registry.py ~1096, int(args["individual_id"])); yield_type was
+# NOT covered by the earlier hardening pass — it splices raw into a Lua
+# string literal inside build_patronize_great_person (great_people.py
+# :199/:208) via .replace("YIELD_", "").lower(), which strips no quote or
+# backslash.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,kwargs", [
+    ("patronize_great_person", {"individual_id": 1, "yield_type": 'GOLD" .. e() .. "'}),
+])
+async def test_great_people_methods_reject_injection(method, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(**kwargs)
