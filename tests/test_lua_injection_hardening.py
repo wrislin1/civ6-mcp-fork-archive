@@ -212,17 +212,41 @@ async def test_research_map_methods_reject_injection(method, kwargs):
         await getattr(gs, method)(**kwargs)
 
 
-# patronize_great_person: individual_id is already int-coerced at the arena
-# registry (registry.py ~1096, int(args["individual_id"])); yield_type was
-# NOT covered by the earlier hardening pass — it splices raw into a Lua
-# string literal inside build_patronize_great_person (great_people.py
-# :199/:208) via .replace("YIELD_", "").lower(), which strips no quote or
-# backslash.
+# Great People: yield_type splices raw into a Lua string literal inside
+# build_patronize_great_person (great_people.py :199/:208) via
+# .replace("YIELD_", "").lower(), which strips no quote/backslash; and
+# individual_id splices raw into GameInfo.GreatPersonIndividuals[{individual_id}]
+# in all three builders (great_people.py :172-227). Both are now validated at
+# the GameState entry — individual_id via int() (matching every other id in
+# the pass; the arena registry also int-casts it, so this is defense-in-depth
+# at the innermost dominating point).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,kwargs", [
     ("patronize_great_person", {"individual_id": 1, "yield_type": 'GOLD" .. e() .. "'}),
+    ("patronize_great_person", {"individual_id": '1]; os.exit(); x=GameInfo[1'}),
+    ("recruit_great_person",   {"individual_id": '1]; os.exit(); x=GameInfo[1'}),
+    ("reject_great_person",    {"individual_id": '1]; os.exit(); x=GameInfo[1'}),
 ])
 async def test_great_people_methods_reject_injection(method, kwargs):
     gs = GameState(NoExecConn())
     with pytest.raises((ValueError, TypeError)):
         await getattr(gs, method)(**kwargs)
+
+
+# _lua_deal_item self-defends every splice at the builder — the innermost
+# point dominating these post-split fields (the arena tool builds item dicts
+# server-side today, so these are latent/defense-in-depth, but the builder
+# must hold for any caller): subtype via _safe_enum, amount/duration/city_id
+# via int().
+def test_lua_deal_item_rejects_injection():
+    from civ_mcp.lua.diplomacy import _lua_deal_item
+    with pytest.raises(ValueError):
+        _lua_deal_item("me", {"type": "AGREEMENT",
+                              "subtype": 'OPEN_BORDERS) end os.exit() --'})
+    with pytest.raises((ValueError, TypeError)):
+        _lua_deal_item("me", {"type": "CITY", "city_id": '1]; os.exit(); x=1['})
+    with pytest.raises((ValueError, TypeError)):
+        _lua_deal_item("me", {"type": "GOLD", "amount": '1) os.exit() --'})
+    # legit values still build the expected Lua without raising
+    ok = _lua_deal_item("me", {"type": "AGREEMENT", "subtype": "OPEN_BORDERS"})
+    assert "DealAgreementTypes.OPEN_BORDERS" in ok

@@ -822,8 +822,8 @@ def _lua_deal_item(from_var: str, item: dict) -> str:
     item: dict with keys type, amount, and optionally name, duration.
     """
     t = item["type"].upper()
-    amount = item.get("amount", 0)
-    duration = item.get("duration", 0)
+    amount = int(item.get("amount", 0))
+    duration = int(item.get("duration", 0))
 
     if t == "GOLD":
         return (
@@ -832,8 +832,8 @@ def _lua_deal_item(from_var: str, item: dict) -> str:
         )
     elif t == "RESOURCE":
         res_name = _safe_enum(item["name"], "resource")
-        res_amount = item.get("amount", 1)
-        res_duration = item.get("duration", 30)
+        res_amount = int(item.get("amount", 1))
+        res_duration = int(item.get("duration", 30))
         return (
             f'do local res = GameInfo.Resources["{res_name}"] '
             f"if res then local ri = deal:AddItemOfType(DealItemTypes.RESOURCES, {from_var}) "
@@ -846,13 +846,13 @@ def _lua_deal_item(from_var: str, item: dict) -> str:
             f"if fi then fi:SetAmount({amount}) end end"
         )
     elif t == "AGREEMENT":
-        subtype = item["subtype"]  # "OPEN_BORDERS", "JOINT_WAR", "ALLIANCE"
+        subtype = _safe_enum(item["subtype"], "subtype")  # "OPEN_BORDERS", "JOINT_WAR", "ALLIANCE"
         return (
             f"do local ai = deal:AddItemOfType(DealItemTypes.AGREEMENTS, {from_var}) "
             f"if ai then ai:SetSubType(DealAgreementTypes.{subtype}) end end"
         )
     elif t == "CITY":
-        city_id = item["city_id"]
+        city_id = int(item["city_id"])
         return (
             f"do local ci = deal:AddItemOfType(DealItemTypes.CITIES, {from_var}) "
             f"if ci then ci:SetValueType({city_id}) end end"

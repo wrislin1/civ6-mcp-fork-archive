@@ -1377,6 +1377,7 @@ class GameState:
         return lq.parse_gp_advisor_response(lines)
 
     async def recruit_great_person(self, individual_id: int) -> str:
+        individual_id = int(individual_id)
         lua = lq.build_recruit_great_person(individual_id)
         lines = await self.conn.execute_write(lua)
         return lines[0] if lines else "No response"
@@ -1384,6 +1385,7 @@ class GameState:
     async def patronize_great_person(
         self, individual_id: int, yield_type: str = "YIELD_GOLD"
     ) -> str:
+        individual_id = int(individual_id)
         yield_type = _one_of(yield_type, _PURCHASE_YIELDS, "yield_type")
         lua = lq.build_patronize_great_person(individual_id, yield_type)
         lines = await self.conn.execute_write(lua)
@@ -1394,6 +1396,7 @@ class GameState:
         return lq.parse_religion_status_response(lines)
 
     async def reject_great_person(self, individual_id: int) -> str:
+        individual_id = int(individual_id)
         lua = lq.build_reject_great_person(individual_id)
         lines = await self.conn.execute_write(lua)
         return lines[0] if lines else "No response"

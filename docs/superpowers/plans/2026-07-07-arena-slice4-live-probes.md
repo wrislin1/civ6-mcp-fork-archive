@@ -100,8 +100,13 @@ Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
       `set_city_production` coords. Helpers in `src/civ_mcp/lua/_helpers.py`;
       spec `docs/superpowers/specs/2026-07-08-arena-lua-injection-hardening-design.md`;
       inventory `.superpowers/sdd/lua-injection-inventory.md`. Out of scope
-      (documented non-goals): the human-facing FastMCP `run_lua` (server.py:2864),
-      the unwired `build_congress_vote`, and the dead `_lua_deal_item` CITY branch.
+      (documented non-goals): the human-facing FastMCP `run_lua` (server.py:2864)
+      and the unwired `build_congress_vote`. (Review follow-up 2026-07-08:
+      `_lua_deal_item` now self-defends every branch at the builder — `subtype`
+      via `_safe_enum`, `amount`/`duration`/`city_id` via `int()` — so the
+      dead CITY branch is no longer an injection vector if revived; and
+      `individual_id` is int()-cast at the recruit/patronize/reject GameState
+      entries as defense-in-depth over the existing registry cast.)
       (Verified 2026-07-08: `target_city_id` and `joint_war_target` — named in
       the prior residual note's id family but not in this pass's closed set —
       were re-checked and are not open gaps. `target_city_id` is int()-cast
