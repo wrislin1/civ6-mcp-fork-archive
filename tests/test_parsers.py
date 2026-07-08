@@ -574,3 +574,15 @@ def test_build_spy_mission_unknown_type_still_names_valid_missions():
     from civ_mcp.lua.espionage import build_spy_mission
     lua = build_spy_mission(5, "NOPE", 10, 12)
     assert "NOPE" in lua and "SIPHON_FUNDS" in lua
+
+
+def test_narrate_great_works_surfaces_city_id():
+    from civ_mcp import narrate as nr
+    from civ_mcp.lua.models import GreatWorkSlot
+    slot = GreatWorkSlot(city_id=65792, city_name="Lahore",
+                         building="BUILDING_AMPHITHEATER", slot_index=0,
+                         slot_type="GREATWORKSLOT_WRITING", work_index=17,
+                         work_name="Ramayana")
+    text = nr.narrate_great_works([slot])
+    assert "65792" in text          # the numeric id move_great_work needs
+    assert "Lahore" in text

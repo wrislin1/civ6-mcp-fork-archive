@@ -2163,9 +2163,9 @@ def narrate_great_works(slots: list[lq.GreatWorkSlot]) -> str:
     for s in slots:
         content = (f"[{s.work_index}] {s.work_name}" if s.work_index >= 0
                    else "(empty)")
-        out.append(f"{s.city_name} {s.building} slot {s.slot_index} "
+        out.append(f"{s.city_name} (city_id {s.city_id}) {s.building} slot {s.slot_index} "
                    f"({s.slot_type}): {content}")
     empty = sum(1 for s in slots if s.work_index < 0)
     out.append(f"{empty} empty slot(s). Theming bonus needs matching works in "
-               f"one building; use move_great_work to group them.")
+               f"one building; use move_great_work(target_city_id=...) to group them.")
     return "\n".join(out)
