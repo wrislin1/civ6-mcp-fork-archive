@@ -1,5 +1,14 @@
 # Arena Lua-Injection Hardening Implementation Plan
 
+> **Status: EXECUTED + MERGED (2026-07-08).** All 7 tasks implemented via
+> subagent-driven-development (`fdfcb40`..`0ed3f4a`), + final-review Critical
+> `4110af9` (patronize `yield_type`) + post-review consistency fixes `0de49fb`
+> (`_lua_deal_item` branches + GP `individual_id`). Suite 850 green. Merged to
+> `main` on all four copies at `0de49fb` (riz "just merge and push"). The
+> LLM→Lua injection surface is CLOSED per the inventory; only live-probe
+> *testing* of the broader slice-4 toolset remains
+> (`2026-07-07-arena-slice4-live-probes.md`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Validate every untrusted LLM argument at its GameState-method entry so no string, id, or coordinate can break out of a Lua literal/index, closing the arena's remaining Lua-injection surface.

@@ -145,10 +145,13 @@ tools build in-branch against *synthetic fixtures* (offline-testable) — but a
 synthetic fixture proves the parser, **not that the Civ API exists**. The slice's
 merge gate is the per-system **live-probe checklist**: no greenfield-backed tool
 reaches a live run until its probe has captured a real fixture, or the spec records a
-degrade/cut decision for it. (Live runs only ever execute the box's merged `main`, so
-holding the branch unmerged enforces this mechanically.) An API that doesn't pan out
-live degrades its tool to readout-only or gets cut with a note here — never silently
-faked. Parity tools (Section 2) are exempt: their GameState methods are already
+degrade/cut decision for it. (**Status update 2026-07-08:** riz directed the branch
+merged to `main` — all four copies at `0de49fb` — *before* the probes ran, so the
+checklist is now a **post-merge test gate**: the greenfield tools ship in `main` but
+remain live-unproven until `docs/superpowers/plans/2026-07-07-arena-slice4-live-probes.md`
+is worked against a late-game save. Treat those tools as provisional in live runs
+until then.) An API that doesn't pan out live degrades its tool to readout-only or
+gets cut with a note here — never silently faked. Parity tools (Section 2) are exempt: their GameState methods are already
 live-proven via the MCP server.
 
 ## Section 4 — Completion Cap

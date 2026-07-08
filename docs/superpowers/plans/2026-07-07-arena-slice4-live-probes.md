@@ -1,4 +1,14 @@
-# Slice 4 live-probe checklist (MERGE GATE)
+# Slice 4 live-probe checklist (now a POST-MERGE TEST GATE)
+
+> **Status 2026-07-08:** the slice-4 branch (incl. lua-injection hardening) was
+> **merged to `main` on all four copies at `0de49fb`** on riz's directive,
+> *before* these probes ran — so this is no longer a pre-merge gate but the
+> **remaining test step**. All 9 probes below are still `[ ]`. They need a
+> **late-game save** (Nationalism units, an air unit, an archaeologist, Great
+> Works, a Gathering Storm game) — a fresh Turn-1 game cannot exercise them.
+> Run them by **reading through the existing `civ-mcp` connection or a single
+> freed FireTuner slot**, never a competing direct client (that wedges the
+> single-client tuner). Until worked, treat the greenfield tools as provisional.
 
 No greenfield-backed tool reaches a live run until its probe below captures a
 real fixture, or the spec records a degrade/cut decision
