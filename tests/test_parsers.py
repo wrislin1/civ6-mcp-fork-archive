@@ -472,6 +472,16 @@ class TestParseClimate:
         st = parse_climate_response([])
         assert st.phase == -1
 
+    def test_float_formatted_values_parse(self):
+        st = parse_climate_response(["CLIMATE|2.0|1.0|317.0", "---END---"])
+        assert (st.phase, st.sea_level, st.co2_total) == (2, 1, 317)
+
+    def test_bad_value_does_not_half_update(self):
+        # a non-numeric field must leave the whole status at its unavailable default,
+        # not a partially-written mix.
+        st = parse_climate_response(["CLIMATE|2|1|notanumber"])
+        assert (st.phase, st.sea_level, st.co2_total) == (-1, -1, -1)
+
 
 # ---------------------------------------------------------------------------
 # parse_great_works_response

@@ -7,7 +7,7 @@ live-probe checklist before the tool reaches a live run.
 """
 from __future__ import annotations
 
-from civ_mcp.lua._helpers import SENTINEL
+from civ_mcp.lua._helpers import SENTINEL, _int
 from civ_mcp.lua.models import ClimateStatus, DisasterEvent
 
 _CLIMATE_LUA = """
@@ -39,13 +39,14 @@ def parse_climate_response(lines: list[str]) -> ClimateStatus:
         parts = line.split("|")
         try:
             if parts[0] == "CLIMATE" and len(parts) >= 4:
-                status.phase = int(parts[1])
-                status.sea_level = int(parts[2])
-                status.co2_total = int(parts[3])
+                # parse all three before assigning any — a bad field must not
+                # leave a half-updated status.
+                phase, sea, co2 = _int(parts[1]), _int(parts[2]), _int(parts[3])
+                status.phase, status.sea_level, status.co2_total = phase, sea, co2
             elif parts[0] == "DISASTER" and len(parts) >= 5:
                 status.disasters.append(DisasterEvent(
-                    kind=parts[1], x=int(parts[2]), y=int(parts[3]),
-                    turn=int(parts[4])))
+                    kind=parts[1], x=_int(parts[2]), y=_int(parts[3]),
+                    turn=_int(parts[4])))
         except (ValueError, IndexError):
             continue
     return status
