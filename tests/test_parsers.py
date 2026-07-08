@@ -12,11 +12,10 @@ from civ_mcp.lua.units import (
     parse_threat_scan_response,
     parse_units_response,
 )
-from civ_mcp.lua.cities import parse_cities_response
+from civ_mcp.lua.cities import parse_cities_response, parse_loyalty_response
 from civ_mcp.lua.map import parse_map_response
 from civ_mcp.lua.notifications import parse_end_turn_blocking
 from civ_mcp.lua.diplomacy import parse_gossip_response
-from civ_mcp.lua.cities import parse_loyalty_response
 from civ_mcp.lua.climate import parse_climate_response
 from civ_mcp.lua.great_works import (
     parse_great_works_response,

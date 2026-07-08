@@ -170,9 +170,13 @@ async def _notifications_text(gs: Any, args: dict[str, Any]) -> str:
 async def _spy_action_text(gs: Any, args: dict[str, Any]) -> str:
     unit_index = _unit_index(args["unit_id"])
     action = str(args["action"])
+    # Coordinates reach a bare Lua-value context in the espionage builders;
+    # coerce to int so a crafted-string arg can't inject Lua (dispatch does
+    # not type-check JSON args against the tool schema).
+    x, y = int(args["target_x"]), int(args["target_y"])
     if action == "travel":
-        return await gs.spy_travel(unit_index, args["target_x"], args["target_y"])
-    return await gs.spy_mission(unit_index, action, args["target_x"], args["target_y"])
+        return await gs.spy_travel(unit_index, x, y)
+    return await gs.spy_mission(unit_index, action, x, y)
 
 
 async def _change_government_text(gs: Any, args: dict[str, Any]) -> str:

@@ -1114,6 +1114,43 @@ async def test_spy_action_routes_travel_vs_mission():
 
 
 @pytest.mark.asyncio
+async def test_spy_action_coerces_coords_and_blocks_lua_injection():
+    # spy_travel/spy_mission interpolate target_x/target_y bare into a Lua-value
+    # context in the espionage builders (no schema type-checking happens before
+    # dispatch), so _spy_action_text must int-cast before calling the GS.
+    class GS:
+        def __init__(self):
+            self.calls = []
+        async def spy_travel(self, unit_index, x, y):
+            self.calls.append(("travel", unit_index, x, y)); return "OK travel"
+        async def spy_mission(self, unit_index, mission, x, y):
+            self.calls.append(("mission", unit_index, mission, x, y)); return "OK mission"
+
+    gs = GS()
+
+    # (a) a numeric-string coordinate is coerced to a real int before reaching GS.
+    await dispatch(gs, "spy_action",
+                   {"unit_id": 65539, "action": "travel", "target_x": "5", "target_y": "6"})
+    assert gs.calls == [("travel", 3, 5, 6)]
+    assert all(isinstance(v, int) for v in gs.calls[0][2:])
+
+    # (b) a crafted non-numeric coordinate must never reach the GS method. The
+    # arena's dispatch loop (agent.py __call__) wraps the dispatch() call in
+    # try/except Exception and surfaces failures as "ERROR: {e!r}"; mirror that
+    # same wrapping here so the assertion matches the real error surface.
+    gs.calls.clear()
+    try:
+        await dispatch(gs, "spy_action",
+                       {"unit_id": 65539, "action": "travel",
+                        "target_x": "0} print(evil) --", "target_y": 6})
+        result = "OK unexpected"
+    except Exception as e:  # noqa: BLE001 - mirrors agent.py's catch-all
+        result = f"ERROR: {e!r}"
+    assert result.startswith("ERROR")
+    assert gs.calls == []
+
+
+@pytest.mark.asyncio
 async def test_parity_actions_dispatch_with_composite_ids():
     class GS:
         def __init__(self):

@@ -1389,7 +1389,7 @@ local ok, err = pcall(function()
 end)
 if not ok then print("ERR:" .. tostring(err)) end
 print("{SENTINEL}")
-""".replace("{SENTINEL}", SENTINEL)
+"""
 
 
 _UNIT_OPERATIONS = ("REBASE", "EXCAVATE")
