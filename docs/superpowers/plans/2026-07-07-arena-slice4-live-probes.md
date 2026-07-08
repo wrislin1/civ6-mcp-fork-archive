@@ -1,14 +1,16 @@
 # Slice 4 live-probe checklist (now a POST-MERGE TEST GATE)
 
-> **Status 2026-07-08:** the slice-4 branch (incl. lua-injection hardening) was
-> **merged to `main` on all four copies at `0de49fb`** on riz's directive,
-> *before* these probes ran — so this is no longer a pre-merge gate but the
-> **remaining test step**. All 9 probes below are still `[ ]`. They need a
-> **late-game save** (Nationalism units, an air unit, an archaeologist, Great
-> Works, a Gathering Storm game) — a fresh Turn-1 game cannot exercise them.
-> Run them by **reading through the existing `civ-mcp` connection or a single
-> freed FireTuner slot**, never a competing direct client (that wedges the
-> single-client tuner). Until worked, treat the greenfield tools as provisional.
+> **Status 2026-07-08 (fix branch `arena-slice4-live-probe-fixes`):** the
+> slice-4 branch (incl. lua-injection hardening) was **merged to `main` at
+> `0de49fb`** *before* these probes ran. The probes have since been **run
+> against a live turn-380 Future-era Gathering-Storm game**, read through a
+> single freed FireTuner slot (one persistent connection), never a competing
+> direct client (that wedges the single-client tuner). Outcomes are recorded
+> per-box below: **3 defects fixed** (gossip table-pointer + 13k-line spam →
+> `entry[1]`, capped; excavate nil enum → hardcoded hash; great-works move nil
+> API → UNAVAILABLE), **2 degrades** (loyalty breakdown, climate sea-level),
+> **1 cut** (great-works move). Real fixtures are pinned in
+> `tests/test_live_probe_fixtures.py` + `tests/arena/test_capabilities.py`.
 
 No greenfield-backed tool reaches a live run until its probe below captures a
 real fixture, or the spec records a degrade/cut decision
@@ -42,50 +44,63 @@ fixture (replacing/augmenting the synthetic one), re-run the suite, and tick
 the box. If an API errors, either fix the Lua from the live error, or record
 the degrade/cut in the spec and tick with "DEGRADED"/"CUT".
 
-- [ ] **caps snapshot** — `build_caps_query(<pid>)` via execute_read. Verify all
-      9 flags emit and flip correctly (check a civ with/without Diplomatic
-      Service; verify great_works building scan and formation enums).
-- [ ] **gossip** — `build_gossip_query()` via execute_write. GRIEV lines are
-      expected to work; GOSSIP lines depend on Game.GetGossipManager existing.
-      Likely outcome if absent: degrade to grievances-only (pre-approved in
-      spec §3.1).
-- [ ] **loyalty** — `build_loyalty_query()` via execute_write. LOYAL lines
-      expected solid; LOYSRC breakdown is the probe target.
-- [ ] **climate** — `build_climate_query()` via execute_write on a Gathering
-      Storm game. Verify phase/sea/CO2 and DISASTER lines; on a base-game
-      ruleset confirm the -1 degrade path.
-- [ ] **great works query** — `build_great_works_query()` via execute_write on
-      a save owning >=1 work + >=1 empty slot.
-- [ ] **great works move** — `build_move_great_work(...)` between two owned
-      slots; verify with a follow-up query that the work moved. UI.MoveGreatWork
-      is the least certain API in the slice.
-- [ ] **form corps/army** — on a save with Nationalism + two same-type units:
-      `build_form_formation(...)`; verify via get_units that one unit remains
-      with corps formation.
-- [ ] **rebase** — with any air unit: `build_unit_operation(idx,"REBASE",x,y)`.
-      If UnitOperationTypes.REBASE is nil, capture the operation hash the way
-      espionage.py documents its _SPY_OP_HASHES and hardcode it.
-- [ ] **excavate** — with an archaeologist + revealed antiquity site:
-      `build_unit_operation(idx,"EXCAVATE",x,y)`; same hash fallback note.
+- [x] **caps snapshot** — `build_caps_query(<pid>)` via execute_read.
+      **→ RESULT:** real CAPS line captured; all 9 flags emit and flip.
+      `archaeology=0` on a save that *owns* an (charge-0) archaeologist proves
+      the gating scan is live, not hardcoded. Fixture: `test_parse_caps_real_capture`.
+- [x] **gossip** — `build_gossip_query()` via execute_write.
+      **→ RESULT:** GRIEV ok; GOSSIP worked but printed the table pointer
+      (`tostring(entry)`) and emitted **13,493 lines/turn**. FIXED to extract
+      `entry[1]` text + `entry[2]` turn, capped newest-first at 15/civ
+      (commit `b770626`).
+- [x] DEGRADED **loyalty** — `build_loyalty_query()` via execute_write.
+      **→ RESULT:** LOYAL ×32 solid; LOYSRC omitted — `GetLoyaltyBreakdown` is
+      nil in the tuner context, so `sources` degrades to `[]` (spec §3).
+- [x] DEGRADED **climate** — `build_climate_query()` via execute_write on the
+      Gathering-Storm game.
+      **→ RESULT:** phase + CO2 solid (`CLIMATE|11|-1|17376`); **sea level
+      degrades to `-1`** — `GetSeaLevel` + 3 alternatives all nil (spec §3).
+- [x] **great works query** — `build_great_works_query()` via execute_write.
+      **→ RESULT:** **145 GWSLOT lines** captured (filled works + empty-slot
+      `-1` sentinels). Fixture: `test_real_great_works_slots`.
+- [x] CUT **great works move** — `build_move_great_work(...)`. UI.MoveGreatWork
+      was flagged the least-certain API in the slice.
+      **→ RESULT:** `UI.MoveGreatWork`, `Game.GetGreatWorks`, and
+      `GreatWorksManager` are **all nil** in the tuner context — no working move
+      API. CUT to an informative `UNAVAILABLE:` readout; tool description +
+      playbook now say so (commit `7cf085c`). Query path unaffected.
+- [x] **form corps/army** — on the Nationalism-era roster:
+      `build_form_formation(...)`, verified via get_units.
+      **→ RESULT:** form corps OK — merged pair verified at `mf=1`. form army
+      command path validated via `CanStartCommand`; no adjacent same-type trio
+      existed on this save for a live merge (armies already present), so the
+      army success path wasn't fully exercised.
+- [x] **rebase** — air unit: `build_unit_operation(idx,"REBASE",x,y)`.
+      **→ RESULT:** OK — `UnitOperationTypes.REBASE` resolves; its hash
+      (`-1054550409`) is now pinned alongside excavate for stability (`8706814`).
+- [x] DEGRADED **excavate** — `build_unit_operation(idx,"EXCAVATE",x,y)`.
+      **→ RESULT:** `UnitOperationTypes.EXCAVATE` is **nil** → the op was
+      silently failing. FIXED by hardcoding the hash `1548958412`
+      (`DB.MakeHash("UNITOPERATION_EXCAVATE")`), mirroring espionage.py
+      (commit `8706814`). Needs a charged archaeologist on a revealed site to
+      exercise the full success path (this save's archaeologist had 0 charges).
 
-Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
-<reason>") and mirror any degrade/cut into the spec before merge.
+Results are recorded inline above (real snippet / "DEGRADED" / "CUT"); the two
+degrades and one cut are mirrored into the spec §3.
 
 ## Review-fix probes (2026-07-08)
 
-- [ ] **Formation enum constants** (capabilities.py, finding #3): in a live InGame
-      context, confirm `MilitaryFormationTypes.CORPS_FORMATION` and
-      `MilitaryFormationTypes.STANDARD_FORMATION` are non-nil (the live-verified
-      spelling elsewhere in the repo is the longer `STANDARD_MILITARY_FORMATION`).
-      If either is nil, the fail-open guard keeps `corps`/`army` exposed but the
-      detection is inert — fix the constant name and capture the correct enum.
-- [ ] **Naval Fleet gating** (capabilities.py, finding #2): with a Nationalism-era
-      naval-only roster, confirm `corps` reports 1 (a Fleet-eligible pair is
-      detected), i.e. `form_corps` is exposed for naval civs.
-- [ ] **GameClimate numeric format** (climate.py, finding #4): capture a real
-      `CLIMATE|` line in a Gathering-Storm game and confirm the parser handles the
-      actual formatting (integer vs float) of `GetClimateChangeLevel` /
-      `GetSeaLevel` / `GetTotalCO2Footprint`.
+- [x] **Formation enum constants** (capabilities.py, finding #3):
+      **→ RESULT:** `GetMilitaryFormation` returns the integer enum
+      **0 (standard) / 1 (corps) / 2 (army)** live; the caps scan reads them
+      correctly, so `corps`/`army` detection is not inert.
+- [x] **Naval Fleet gating** (capabilities.py, finding #2):
+      **→ RESULT:** confirmed — a Fleet-eligible pair on the Nationalism-era
+      roster is detected, so `form_corps` is exposed for naval rosters.
+- [x] **GameClimate numeric format** (climate.py, finding #4):
+      **→ RESULT:** the real `CLIMATE|` fields are **integers**
+      (`CLIMATE|11|-1|17376`); the parser handles them. Sea-level reads `-1`
+      (the documented degrade — see the climate probe above).
 - [x] **Residual id-arg coercion** (registry.py, follow-up to finding #6 sweep):
       all always-on NUMERIC LLM args reaching bare Lua are now coerced. Round 1
       closed the flat `unit_index`/`unit_id` numeric tools (including the

@@ -154,6 +154,26 @@ until then.) An API that doesn't pan out live degrades its tool to readout-only 
 gets cut with a note here — never silently faked. Parity tools (Section 2) are exempt: their GameState methods are already
 live-proven via the MCP server.
 
+**Live-probe outcomes (2026-07-08, turn-380 Future-era Gathering-Storm game).**
+The checklist was worked; three systems resolved to degrade/cut decisions here
+(the rest captured real fixtures — see the checklist and
+`tests/test_live_probe_fixtures.py`):
+
+- **Climate sea-level — DEGRADE.** `GetSeaLevel` and its 3 candidate alternatives
+  are all nil in the tuner context; `get_climate` reports `sea_level = -1`
+  (explicit sentinel, inside a `pcall`). Phase + CO2 + disasters are solid.
+- **Loyalty pressure-source breakdown — DEGRADE.** `GetLoyaltyBreakdown` is nil;
+  `get_loyalty` omits `LOYSRC` lines and `sources` degrades to `[]`. Per-city
+  loyalty / max / per-turn delta are solid.
+- **`move_great_work` — CUT to readout.** `UI.MoveGreatWork`, `Game.GetGreatWorks`,
+  and `GreatWorksManager` are all nil; no working move API exists in the tuner
+  context. The builder returns an informative `UNAVAILABLE:` line (never a crash),
+  and the tool description + playbook mark it unavailable. The **query**
+  (`get_great_works`) is fully retained.
+- **Gossip / excavate — FIXED (not degraded).** Gossip now emits `entry[1]` text
+  capped newest-first (15/civ); excavate uses the hardcoded op hash `1548958412`
+  (`UnitOperationTypes.EXCAVATE` is nil in the tuner context).
+
 ## Section 4 — Completion Cap
 
 `MAX_COMPLETION_TOKENS` 3072 → **6144** in `src/civ_mcp/arena/backends.py`; the
