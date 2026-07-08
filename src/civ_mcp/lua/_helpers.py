@@ -7,7 +7,7 @@ import re
 SENTINEL = "---END---"
 
 # Validation primitives for LLM-supplied input bound for Lua
-_ENUM_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_ENUM_RE = re.compile(r"\A[A-Za-z0-9_]+\Z")
 
 
 def _safe_enum(value: str, field: str = "value") -> str:

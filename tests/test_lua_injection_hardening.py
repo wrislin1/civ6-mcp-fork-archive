@@ -25,7 +25,7 @@ def test_safe_enum_accepts_civ_tokens():
     assert _safe_enum("IMPROVEMENT_FARM", "improvement") == "IMPROVEMENT_FARM"
     assert _safe_enum("TECH_POTTERY") == "TECH_POTTERY"
 
-@pytest.mark.parametrize("bad", ['X" .. evil() .. "', "A]B", "A B", "A.B", "", "A;B", "A\nB"])
+@pytest.mark.parametrize("bad", ['X" .. evil() .. "', "A]B", "A B", "A.B", "", "A;B", "A\nB", "IMPROVEMENT_FARM\n"])
 def test_safe_enum_rejects_breakout(bad):
     with pytest.raises(ValueError):
         _safe_enum(bad, "field")
