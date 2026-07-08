@@ -50,6 +50,29 @@ After the user says it is back to them:
 - A direct hook poll can fail while an arena or Codex MCP child owns the single FireTuner connection. Do not treat that alone as proof Civ is down.
 - End-of-session means no watcher process is running unless the user explicitly asks to keep one armed.
 
+## FireTuner Single-Client Diagnostics
+
+FireTuner allows one client. Before any direct `GameConnection()`, hook poll,
+or live-probe script, map ownership first:
+
+- local riz-llm: `ss -tnp | grep 4318`, `pgrep -af 'civ-mcp|civ-arena|ssh.*4318'`
+- gaming WSL: `ss -tn | grep 4318`, watcher/MCP process scan
+- Windows side: `NETSTAT.EXE -ano | grep 4318`
+
+If any `ESTABLISHED`, `CLOSE_WAIT`, or `FIN-WAIT` socket exists on `4318`, do
+not open a direct hook poll. It can compete for the single slot and leave stale
+loopback sockets. Use the existing owner instead:
+
+- Claude/Codex-spawned `civ-mcp`: `curl http://127.0.0.1:8000/api/overview`
+- arena watcher: read watcher logs/cost tail; avoid a separate hook poll
+
+No WSL process owner does not prove the slot is free; mirrored networking can
+show Windows loopback sockets without an owning WSL process.
+
+After merging new code, restart any already-running `civ-mcp` before expecting
+new tools or code paths. A successful `/api/overview` proves game connectivity,
+not that the process has freshly loaded code.
+
 ## Landing code on `.141`
 
 `origin` is the **`.141` non-bare checkout** with `main` checked out, so `git push origin main` is rejected (`denyCurrentBranch`). To land work:
@@ -65,8 +88,10 @@ After the user says it is back to them:
 Run from the repo root:
 
 - `tools/skills/civ6-arena-live/scripts/arena-live-status.sh`
+- `tools/skills/civ6-arena-live/scripts/firetuner-owner-map.sh` — read-only
+  process/socket/API map for FireTuner ownership. Run this before any direct
+  hook poll when connection state is ambiguous.
 - `tools/skills/civ6-arena-live/scripts/start-hybrid-watch.sh`
 - `tools/skills/civ6-arena-live/scripts/stop-arena-watchers.sh`
 
 The stop script is dry-run by default; pass `--yes` to terminate matching watcher process groups.
-
