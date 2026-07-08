@@ -387,22 +387,18 @@ class TestParseEndTurnBlocking:
 
 class TestParseGossip:
     def test_grievances_and_gossip(self):
+        # Real turn-380 capture (2026-07-08 live probe): gossip now emits the
+        # extracted text (entry[1]), not a table pointer.
         lines = [
-            "GRIEV|1|Gilgamesh|30|0",
-            "GRIEV|3|Gandhi|0|15",
-            "GOSSIP|1|41|Gilgamesh started building the Pyramids.",
-            "---END---",
+            "GRIEV|1|Elizabeth I|82|-82",
+            "GOSSIP|1|379|Your delegate, Frideswide, learned that Sweden completed research on Guidance Systems.",
         ]
         grievances, gossip = parse_gossip_response(lines)
-        assert len(grievances) == 2
-        assert grievances[0].player_id == 1
-        assert grievances[0].name == "Gilgamesh"
-        assert grievances[0].they_hold_against_me == 30
-        assert grievances[1].i_hold_against_them == 15
-        assert len(gossip) == 1
-        assert gossip[0].about_player == 1
-        assert gossip[0].turn == 41
-        assert "Pyramids" in gossip[0].text
+        assert grievances[0].player_id == 1 and grievances[0].they_hold_against_me == 82
+        assert grievances[0].i_hold_against_them == -82
+        assert gossip[0].about_player == 1 and gossip[0].turn == 379
+        assert "Guidance Systems" in gossip[0].text
+        assert "table:" not in gossip[0].text  # regression: old bug printed the table pointer
 
     def test_gossip_lines_optional(self):
         """The gossip-log API is a live-probe candidate; grievances alone parse."""
@@ -413,6 +409,15 @@ class TestParseGossip:
         grievances, gossip = parse_gossip_response(
             ["GRIEV|x|bad|row", "GOSSIP|notanint|q|t", "junk"])
         assert grievances == [] and gossip == []
+
+    def test_build_gossip_query_extracts_text_and_caps(self):
+        from civ_mcp.lua.diplomacy import build_gossip_query, _GOSSIP_MAX_PER_CIV
+        lua = build_gossip_query()
+        assert "entry[1]" in lua                 # emits the text field, not the table
+        assert "entry[2]" in lua                 # emits the turn field
+        assert "tostring(entry)" not in lua      # regression: old code printed the table pointer
+        assert "__GOSSIP_MAX__" not in lua       # cap placeholder was substituted
+        assert f"shown >= {_GOSSIP_MAX_PER_CIV}" in lua   # newest-first cap wired in
 
 
 # ---------------------------------------------------------------------------

@@ -1374,6 +1374,8 @@ def parse_pending_deals_response(lines: list[str]) -> list[PendingDeal]:
     return list(deals.values())
 
 
+_GOSSIP_MAX_PER_CIV = 15  # newest-first cap per met civ (live probe 2026-07-08: 13k uncapped)
+
 _GOSSIP_LUA = """
 local me = Game.GetLocalPlayer()
 local myDiplo = Players[me]:GetDiplomacy()
@@ -1394,14 +1396,18 @@ for pid = 0, 63 do
         end)
         print("GRIEV|" .. pid .. "|" .. name .. "|" .. theirs .. "|" .. mine)
         pcall(function()
-            -- PROBE(live): gossip-log query API (Task 15). Gossip normally
-            -- arrives as push events; if no retroactive query exists this
-            -- block prints nothing and the tool degrades to grievances-only
-            -- (degrade decision recorded in the spec).
+            -- entry is a table: entry[1]=text (string), entry[2]=turn (number).
+            -- Cap newest-first per civ; 13k+ lines/turn is unusable (live probe 2026-07-08).
             local gm = Game.GetGossipManager()
-            local turn = Game.GetCurrentGameTurn()
-            for _, entry in ipairs(gm:GetRecentVisibleGossipStrings(me, pid)) do
-                print("GOSSIP|" .. pid .. "|" .. turn .. "|" .. tostring(entry))
+            local entries = gm:GetRecentVisibleGossipStrings(me, pid)
+            table.sort(entries, function(a, b) return (a[2] or 0) > (b[2] or 0) end)
+            local shown = 0
+            for _, entry in ipairs(entries) do
+                if shown >= __GOSSIP_MAX__ then break end
+                local text = tostring(entry[1] or "")
+                local eturn = tostring(entry[2] or Game.GetCurrentGameTurn())
+                print("GOSSIP|" .. pid .. "|" .. eturn .. "|" .. text)
+                shown = shown + 1
             end
         end)
     end
@@ -1411,8 +1417,10 @@ print("{SENTINEL}")
 
 
 def build_gossip_query() -> str:
-    """InGame context: grievances both directions per met major + gossip log."""
-    return _GOSSIP_LUA.replace("{SENTINEL}", SENTINEL)
+    """InGame context: grievances both directions per met major + capped gossip log."""
+    return (_GOSSIP_LUA
+            .replace("__GOSSIP_MAX__", str(_GOSSIP_MAX_PER_CIV))
+            .replace("{SENTINEL}", SENTINEL))
 
 
 def parse_gossip_response(
