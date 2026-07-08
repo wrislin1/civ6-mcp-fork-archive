@@ -111,3 +111,12 @@ async def test_snapshot_failure_fails_open_and_run_continues(monkeypatch):
     result = await run_arena(conn, FakeGS(), _cfg(), policy=pol)
     assert pol.received is None            # kwarg default: full toolset
     assert result["puppet_turns_played"] == 1
+
+
+def test_parse_caps_real_capture():
+    from civ_mcp.arena.capabilities import parse_caps
+    flags = parse_caps([
+        "CAPS|spies=1|government=1|religious_unit=0|gp_unit=0|corps=1|army=1|air=1|archaeology=0|great_works=1"
+    ])
+    assert flags["corps"] and flags["army"] and flags["air"] and flags["great_works"]
+    assert flags["archaeology"] is False  # charge-0 archaeologist -> flag flips correctly
