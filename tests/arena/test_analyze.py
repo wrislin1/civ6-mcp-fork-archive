@@ -1693,3 +1693,24 @@ def test_counter_frozensets_only_name_real_tools():
                        if not n.startswith(analyze.MCP_CIV6_PREFIX)} - SERVER_ONLY
         unknown = local_names - set(TOOL_REGISTRY)
         assert not unknown, f"{setname} names not in registry: {unknown}"
+
+
+def test_gated_calls_do_not_count_as_invalid_rate():
+    from civ_mcp.arena.analyze import analyze
+
+    records = [{
+        "player_id": 1, "model": "m", "provider": "local", "driver": "in_process",
+        "turn": 1, "step_count": 2, "steps": [],
+        "invalid_tool_calls": [{"tool_name": "get_spies", "reason": "gated"}],
+    }]
+    report = analyze(records, [])
+    assert report["by_player"][1]["rates"]["invalid_call_rate"] == 0.0
+
+
+def test_behavior_counters_cover_new_slice4_tools():
+    from civ_mcp.arena.analyze import (
+        _count_tool_calls, _GREAT_PEOPLE_TOOLS, _RELIGION_WC_TOOLS)
+    gp = [{"tool_name": "activate_great_person", "tool_args": {}}]
+    rel = [{"tool_name": "spread_religion", "tool_args": {}}]
+    assert _count_tool_calls(gp, _GREAT_PEOPLE_TOOLS) == 1
+    assert _count_tool_calls(rel, _RELIGION_WC_TOOLS) == 1

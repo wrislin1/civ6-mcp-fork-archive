@@ -72,7 +72,7 @@ def _counted_invalid_calls(rec: dict) -> list[dict]:
         if not isinstance(item, dict):
             counted.append(item)
             continue
-        if item.get("reason") == "out_of_tier":
+        if item.get("reason") in ("out_of_tier", "gated"):
             continue
         counted.append(item)
     return counted
@@ -102,7 +102,7 @@ def _is_local_driver(rec: dict) -> bool:
 # used to count per-system tool calls for the neutral behavior/performance metrics.
 _GREAT_PEOPLE_TOOLS: frozenset[str] = frozenset({
     "recruit_great_person", "patronize_great_person", "reject_great_person",
-    "get_great_people", "get_gp_advisor",
+    "get_great_people", "get_gp_advisor", "activate_great_person",
 })
 _TRADE_ROUTE_TOOLS: frozenset[str] = frozenset({
     "get_trade_routes", "get_trade_destinations", "start_trade_route", "teleport_trader",
@@ -112,7 +112,7 @@ _TRADE_ROUTE_TOOLS: frozenset[str] = frozenset({
 _TRADE_ROUTE_UNIT_ACTIONS: frozenset[str] = frozenset({"trade_route", "teleport"})
 _RELIGION_WC_TOOLS: frozenset[str] = frozenset({
     "found_religion", "get_religion_beliefs", "get_religion_spread",
-    "queue_wc_votes", "get_world_congress",
+    "queue_wc_votes", "get_world_congress", "spread_religion",
 })
 
 
