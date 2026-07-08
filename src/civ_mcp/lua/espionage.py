@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from civ_mcp.lua._helpers import SENTINEL, _bail, _bail_lua, _int, _lua_get_unit
 from civ_mcp.lua.models import SpyInfo
 
@@ -184,9 +186,11 @@ def build_spy_mission(
     sentinel = SENTINEL
     if op_hash is None:
         valid = ", ".join(k for k in _SPY_OP_HASHES if k != "TRAVEL")
-        # Escape the mission_type for Lua string embedding
-        safe_mission = mission_type.replace('"', '\\"')
-        return " ".join(
+        # This is only echoed into an error message. Whitelist to a display-safe
+        # subset so a crafted action string cannot break out of the Lua literal
+        # (backslash+quote escaping is too fragile — see review finding #1).
+        safe_mission = re.sub(r"[^A-Za-z0-9_ ]", "", mission_type)[:40] or "?"
+        return "".join(
             [
                 f'print("ERR:UNKNOWN_MISSION|Unknown mission type {safe_mission}. Valid missions: {valid}")',
                 f'print("{sentinel}")',

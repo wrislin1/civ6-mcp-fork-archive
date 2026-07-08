@@ -532,3 +532,25 @@ def test_build_unit_operation_shape():
     assert lua.rstrip().endswith('print("---END---")')
     with pytest.raises(ValueError):
         build_unit_operation(3, "MAKE_TEA", 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# build_spy_mission (espionage builders)
+# ---------------------------------------------------------------------------
+
+
+def test_build_spy_mission_unknown_type_cannot_inject_lua():
+    from civ_mcp.lua.espionage import build_spy_mission
+    # An unknown mission whose name is a Lua-breakout payload must be neutralized:
+    # the echoed name contributes ZERO quote characters, so the only quotes in the
+    # generated Lua are the four from the two wrapping print() literals.
+    lua = build_spy_mission(5, 'EVIL") do print("pwned") end --', 10, 12)
+    assert "UNKNOWN_MISSION" in lua
+    assert lua.count('"') == 4
+    assert '") ' not in lua
+
+
+def test_build_spy_mission_unknown_type_still_names_valid_missions():
+    from civ_mcp.lua.espionage import build_spy_mission
+    lua = build_spy_mission(5, "NOPE", 10, 12)
+    assert "NOPE" in lua and "SIPHON_FUNDS" in lua
