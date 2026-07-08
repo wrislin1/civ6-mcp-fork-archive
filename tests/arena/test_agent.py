@@ -78,8 +78,9 @@ async def test_transcript_payload():
     # --- behavior-neutral: existing action/message lines unchanged ---
     # actions list truncated to [:300] as before
     assert out["actions"][0]["result"] == str("FORTIFIED")[:300]
-    # dispatch for unknown tool still returns ERROR string
-    assert out["actions"][1]["result"].startswith("ERROR:")
+    # unknown tool never dispatches; result is an informative UNAVAILABLE string
+    assert out["actions"][1]["result"].startswith("UNAVAILABLE:")
+    assert "KeyError" not in out["actions"][1]["result"]
 
     # tool messages sent to model were [:1500] (verified via messages captured
     # in the SECOND backend.chat call, which receives the tool replies)
@@ -322,7 +323,8 @@ async def test_options_cap_and_steps():
 @pytest.mark.asyncio
 async def test_out_of_tier_tool_never_executes():
     """A minimal-tier civ calling an in-registry but out-of-tier tool gets an
-    ERROR result; the GameState method must NOT run (A/B control integrity)."""
+    informative UNAVAILABLE result; the GameState method must NOT run (A/B
+    control integrity)."""
 
     tool_reply = Reply(
         text=None,
@@ -339,7 +341,8 @@ async def test_out_of_tier_tool_never_executes():
     pol = LLMPolicy(be, FakeCost(), options=CivOptions(tools="minimal"))
     out = await pol(FakeGSLocal(), 3, 5)
     tool_msg = [m for m in be.calls[1]["messages"] if m["role"] == "tool"][0]
-    assert tool_msg["content"].startswith("ERROR")
+    assert tool_msg["content"].startswith("UNAVAILABLE")
+    assert "KeyError" not in tool_msg["content"]
     assert any(
         c["tool_name"] == "get_map_area"
         for c in out["transcript"]["invalid_tool_calls"]
@@ -649,3 +652,20 @@ async def test_no_caps_means_full_tier_unchanged():
     names = {t["function"]["name"] for t in be.seen_tools}
     assert names == {"fortify_unit", "get_spies"}
     assert gs.spy_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5: informative UNAVAILABLE result for gated tool calls (not raw KeyError)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_gated_call_returns_informative_result_not_keyerror():
+    gs, be, cost = FakeGSSpies(), FakeBackendCapturesTools(), FakeCost()
+    opts = CivOptions(max_steps=3, tools=["fortify_unit", "get_spies"])
+    pol = LLMPolicy(be, cost, options=opts)
+    out = await pol(gs, player_id=1, turn=2, caps={"spies": False})
+    step = out["transcript"]["steps"][0]
+    assert step["tool_name"] == "get_spies"
+    assert step["tool_result_full"].startswith("UNAVAILABLE")
+    assert "KeyError" not in step["tool_result_full"]
+    assert gs.spy_calls == 0            # still hard-blocked, never dispatched

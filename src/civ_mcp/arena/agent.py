@@ -29,6 +29,18 @@ async def _dispatch(gs, name, args, allowed=_MINIMAL_NAMES):
     return await _registry_dispatch(gs, name, a, allowed=allowed)
 
 
+_UNAVAILABLE_REASON = {
+    "gated": "not available this turn — it is era/state-gated and unlocks when you meet "
+             "its requirement (research/civic/unit). Do not retry it now.",
+    "out_of_tier": "not part of your toolset for this run.",
+    "unknown_tool": "not a real tool.",
+}
+
+
+def _unavailable_result(name: str, reason: str) -> str:
+    return f"UNAVAILABLE: {name} is {_UNAVAILABLE_REASON.get(reason, 'not available.')}"
+
+
 @lru_cache(maxsize=1)
 def load_playbook() -> str:
     return (Path(__file__).parent / "playbook.md").read_text()
@@ -189,16 +201,17 @@ class LLMPolicy:
                     invalid_tool_calls.append({"tool_name": tc["name"],
                                                "arguments": tc["arguments"],
                                                "reason": reason})
+                    result = _unavailable_result(tc["name"], reason)
                 else:
                     try:
                         json.loads(tc["arguments"] or "{}")
                     except (json.JSONDecodeError, ValueError):
                         invalid_tool_calls.append({"tool_name": tc["name"], "arguments": tc["arguments"],
                                                    "reason": "bad_arguments"})
-                try:
-                    result = await _dispatch(gs, tc["name"], tc["arguments"], visible_names)
-                except Exception as e:
-                    result = f"ERROR: {e!r}"
+                    try:
+                        result = await _dispatch(gs, tc["name"], tc["arguments"], visible_names)
+                    except Exception as e:
+                        result = f"ERROR: {e!r}"
                 # transcript step (uses same result object, before truncation)
                 _s = str(result)
                 _l = len(_s)
