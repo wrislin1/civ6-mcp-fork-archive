@@ -1060,7 +1060,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Choose an era dedication.",
         {"dedication_index": _int_param("Dedication index from get_dedications.")},
         ("dedication_index",),
-        lambda gs, args: gs.choose_dedication(args["dedication_index"]),
+        lambda gs, args: gs.choose_dedication(int(args["dedication_index"])),
         verb="choose_dedication",
     ),
     "found_religion": _tool(
@@ -1082,7 +1082,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Recruit a Great Person candidate using accumulated points.",
         {"individual_id": _int_param("Great Person individual ID from get_great_people.")},
         ("individual_id",),
-        lambda gs, args: gs.recruit_great_person(args["individual_id"]),
+        lambda gs, args: gs.recruit_great_person(int(args["individual_id"])),
         verb="recruit_great_person",
     ),
     "patronize_great_person": _tool(
@@ -1094,7 +1094,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         },
         ("individual_id",),
         lambda gs, args: gs.patronize_great_person(
-            args["individual_id"], args.get("yield_type", "YIELD_GOLD")
+            int(args["individual_id"]), args.get("yield_type", "YIELD_GOLD")
         ),
         verb="patronize_great_person",
     ),
@@ -1103,7 +1103,7 @@ TOOL_REGISTRY: dict[str, ToolDef] = {
         "Pass on a Great Person candidate, advancing to the next in that class.",
         {"individual_id": _int_param("Great Person individual ID from get_great_people.")},
         ("individual_id",),
-        lambda gs, args: gs.reject_great_person(args["individual_id"]),
+        lambda gs, args: gs.reject_great_person(int(args["individual_id"])),
         verb="reject_great_person",
     ),
     "start_trade_route": _tool(

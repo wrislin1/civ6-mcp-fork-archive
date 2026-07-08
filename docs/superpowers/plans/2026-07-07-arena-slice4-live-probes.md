@@ -77,13 +77,33 @@ Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
       actual formatting (integer vs float) of `GetClimateChangeLevel` /
       `GetSeaLevel` / `GetTotalCO2Footprint`.
 - [ ] **Residual id-arg coercion** (registry.py, follow-up to finding #6 sweep):
-      the flat `unit_index`/`unit_id` numeric tools (including the minimal-tier
-      `found_city`/`fortify_unit`/`skip_unit`) are now coerced — this fix closed
-      that gap. **Residual un-coerced LLM→Lua surface still to harden (tracked,
-      out of this branch's scope):** (a) `city_id`/`player_id` args that
-      interpolate into Lua (e.g. via `_lua_get_city`'s `{city_id} % 65536`); (b)
-      **string params interpolated into Lua string-literal contexts** —
-      `improvement_name`, `promotion_type`, `civic_name`, `tech`,
-      `item_name`/`item_type`, `focus`, `government_type`, `belief_type` — which
-      cannot be int-cast and need a whitelist/escaping pass. Decide whether to
-      extend the sweep to these or accept them as validated upstream.
+      all always-on NUMERIC LLM args reaching bare Lua are now coerced. Round 1
+      closed the flat `unit_index`/`unit_id` numeric tools (including the
+      minimal-tier `found_city`/`fortify_unit`/`skip_unit`). Round 2 closed
+      `individual_id` (`recruit_great_person`/`patronize_great_person`/
+      `reject_great_person`) and `dedication_index` (`choose_dedication`).
+      `move_great_work`'s `work_id`/`slot` were checked and left uncast at the
+      wrapper: `build_move_great_work` (src/civ_mcp/lua/great_works.py) already
+      runs `int(work_index)`/`int(target_city_id)`/`int(slot)` internally before
+      Lua interpolation, so a non-numeric value raises `ValueError` before it can
+      reach Lua — no wrapper-level gap there. `votes` (`queue_wc_votes`) and
+      `merge_unit_id` (`form_corps`/`form_army`) were re-verified already safe
+      (JSON-parsed + per-field int-coerced; wrapped in `_unit_index(...)`,
+      respectively) and left untouched. **Residual un-coerced LLM→Lua surface
+      still to harden (tracked, out of this branch's scope):** (a) the numeric
+      **id family** — `city_id`/`target_city_id`/`other_player_id`/
+      `city_state_player_id`/`joint_war_target` — which splice into Lua (e.g. via
+      `_lua_get_city`'s `{city_id} % 65536`) but are id-typed; decide int-cast vs
+      accept-as-validated-upstream. (No bare `player_id` arg name exists in the
+      registry — every player-id param is one of the names above.) (b) **string
+      params interpolated into Lua string-literal contexts** — the full set
+      found: `improvement_name`, `promotion_type`, `governor_type`,
+      `belief_type`, `follower_belief`, `founder_belief`, `district_type`,
+      `civic_name`, `tech`, `item_name`, `item_type`, `focus`,
+      `government_type`, `religion_name`, `wonder_name`, `alliance_type`,
+      `building` (already has an `isalnum()`-style guard in
+      `build_move_great_work`), `yield_type`, plus policy `policy_type` values
+      via the `assignments` dict in `set_policies` (spliced into
+      `GameInfo.Policies["{policy_type}"]`) — none of these can be int-cast;
+      they need a whitelist/escaping pass. Decide whether to extend the sweep to
+      these or accept them as validated upstream.

@@ -1433,3 +1433,62 @@ async def test_unit_index_and_unit_id_cast_preserves_happy_path():
         ("promote_unit", 65541, "PROMOTION_BATTLECRY"),
         ("get_unit_promotions", 65541),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("recruit_great_person", {"individual_id": "1) print(1) --"}),
+    ("patronize_great_person", {"individual_id": "z", "yield_type": "YIELD_GOLD"}),
+    ("reject_great_person", {"individual_id": "z"}),
+    ("choose_dedication", {"dedication_index": "1) print(1) --"}),
+])
+async def test_dispatch_coerces_individual_id_and_dedication_index_and_rejects_injection(
+    name, args
+):
+    """A non-numeric individual_id/dedication_index must raise before any Lua is
+    built, so an in-process LLM civ cannot inject Lua through these indices."""
+    class FakeGS:
+        def __getattr__(self, _n):
+            async def _boom(*a, **k):
+                raise AssertionError("must not reach GS")
+            return _boom
+    with pytest.raises((ValueError, TypeError)):
+        await dispatch(FakeGS(), name, args)
+
+
+@pytest.mark.asyncio
+async def test_individual_id_and_dedication_index_cast_preserves_happy_path():
+    """A valid numeric individual_id/dedication_index (int or numeric string) must
+    reach the GS builder as the identical int the wrapper produced before this fix -
+    the injection-hardening cast must not change legitimate-input behavior."""
+    class FakeGS:
+        def __init__(self):
+            self.calls = []
+
+        async def recruit_great_person(self, individual_id):
+            self.calls.append(("recruit_great_person", individual_id)); return "OK"
+
+        async def patronize_great_person(self, individual_id, yield_type):
+            self.calls.append(("patronize_great_person", individual_id, yield_type))
+            return "OK"
+
+        async def reject_great_person(self, individual_id):
+            self.calls.append(("reject_great_person", individual_id)); return "OK"
+
+        async def choose_dedication(self, dedication_index):
+            self.calls.append(("choose_dedication", dedication_index)); return "OK"
+
+    gs = FakeGS()
+    await dispatch(gs, "recruit_great_person", {"individual_id": "12"})
+    await dispatch(
+        gs, "patronize_great_person", {"individual_id": 12, "yield_type": "YIELD_FAITH"}
+    )
+    await dispatch(gs, "reject_great_person", {"individual_id": "12"})
+    await dispatch(gs, "choose_dedication", {"dedication_index": 3})
+
+    assert gs.calls == [
+        ("recruit_great_person", 12),
+        ("patronize_great_person", 12, "YIELD_FAITH"),
+        ("reject_great_person", 12),
+        ("choose_dedication", 3),
+    ]
