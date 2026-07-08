@@ -172,7 +172,13 @@ The checklist was worked; three systems resolved to degrade/cut decisions here
   (`get_great_works`) is fully retained.
 - **Gossip / excavate — FIXED (not degraded).** Gossip now emits `entry[1]` text
   capped newest-first (15/civ); excavate uses the hardcoded op hash `1548958412`
-  (`UnitOperationTypes.EXCAVATE` is nil in the tuner context).
+  (`UnitOperationTypes.EXCAVATE` is nil in the tuner context). *Re-verified live
+  on a turn-381 game (2026-07-08): all five outcomes above re-confirmed, and the
+  excavate success path — which the turn-380 save's 0-charge archaeologist could
+  not exercise — was fully exercised: a charged archaeologist dug an antiquity
+  site at (98,56), the op returned `EXCAVATE requested` with no nil-enum error,
+  and the `[ANTIQUITY_SITE]` marker was consumed. No fixtures were re-pinned; the
+  turn-380 captures remain authoritative.*
 
 ## Section 4 — Completion Cap
 

@@ -11,6 +11,15 @@
 > API → UNAVAILABLE), **2 degrades** (loyalty breakdown, climate sea-level),
 > **1 cut** (great-works move). Real fixtures are pinned in
 > `tests/test_live_probe_fixtures.py` + `tests/arena/test_capabilities.py`.
+>
+> **Re-verification 2026-07-08 (live turn-381 game, Korea, score 3077).** All
+> five slice-4 probes were re-confirmed directly against a later save through the
+> single freed FireTuner slot: gossip (real `entry[1]` text), climate + loyalty
+> (the two degrades), `move_great_work` (the `UNAVAILABLE:` cut), and `excavate`
+> — the last now with its **full success path exercised** (a charged
+> archaeologist dug a real antiquity site; see the excavate box below). No
+> fixtures were re-pinned: the turn-380 captures remain the authoritative
+> regression anchors and behavior is unchanged at turn 381.
 
 No greenfield-backed tool reaches a live run until its probe below captures a
 real fixture, or the spec records a degrade/cut decision
@@ -82,8 +91,13 @@ the degrade/cut in the spec and tick with "DEGRADED"/"CUT".
       **→ RESULT:** `UnitOperationTypes.EXCAVATE` is **nil** → the op was
       silently failing. FIXED by hardcoding the hash `1548958412`
       (`DB.MakeHash("UNITOPERATION_EXCAVATE")`), mirroring espionage.py
-      (commit `8706814`). Needs a charged archaeologist on a revealed site to
-      exercise the full success path (this save's archaeologist had 0 charges).
+      (commit `8706814`). **Full success path exercised live (turn-381
+      re-verification, 2026-07-08):** a charged archaeologist (Yeon-ghui,
+      `id:18612333`, 4/4 moves) moved onto an antiquity site at (98,56), then
+      `excavate_artifact` returned `EXCAVATE requested to (98,56)` with no
+      nil-enum error, and a radius-1 re-read confirmed the `[ANTIQUITY_SITE]`
+      marker consumed — the dig executed. (The turn-380 capture could not
+      exercise this: that save's archaeologist had 0 charges.)
 
 Results are recorded inline above (real snippet / "DEGRADED" / "CUT"); the two
 degrades and one cut are mirrored into the spec §3.
