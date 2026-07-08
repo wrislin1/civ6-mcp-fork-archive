@@ -102,8 +102,17 @@ Record results inline here (output snippet or "DEGRADED: <reason>" / "CUT:
       `civic_name`, `tech`, `item_name`, `item_type`, `focus`,
       `government_type`, `religion_name`, `wonder_name`, `alliance_type`,
       `building` (already has an `isalnum()`-style guard in
-      `build_move_great_work`), `yield_type`, plus policy `policy_type` values
-      via the `assignments` dict in `set_policies` (spliced into
-      `GameInfo.Policies["{policy_type}"]`) — none of these can be int-cast;
-      they need a whitelist/escaping pass. Decide whether to extend the sweep to
-      these or accept them as validated upstream.
+      `build_move_great_work`), `yield_type`, `response` (`respond_to_diplomacy`
+      — spliced into `AddResponse(sid, me, "{response}")`; `.upper()` does not
+      neutralize embedded quotes), `action` (`send_diplomatic_action` — spliced
+      into `local action = "{action_name}"`; NOTE `spy_action` and
+      `resolve_city_capture` action params are ALREADY whitelist-guarded via
+      exact-match against `_SPY_OP_HASHES` / `_CITY_CAPTURE_ACTIONS` and are
+      safe — do not re-flag them), `offer_resources`/`request_resources`
+      (`propose_trade`, both `mode="test"` and `mode="send"` — resource names
+      spliced into `GameInfo.Resources["{res_name}"]` after only a `.split(",")`;
+      cheapest to close with the same `isalnum()`-style guard as `building`),
+      plus policy `policy_type` values via the `assignments` dict in
+      `set_policies` (spliced into `GameInfo.Policies["{policy_type}"]`) — none
+      of these can be int-cast; they need a whitelist/escaping pass. Decide
+      whether to extend the sweep to these or accept them as validated upstream.
