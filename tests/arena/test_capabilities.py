@@ -21,6 +21,15 @@ def test_build_caps_query_shape():
     assert "CAPS|" in lua
 
 
+def test_caps_query_counts_naval_formations_and_guards_enum():
+    lua = build_caps_query(3)
+    # #2: Fleets (naval) count toward the corps mergeable-pair check
+    assert "FORMATION_CLASS_NAVAL" in lua
+    # #3: corps/army only override their fail-open default when the enum resolves
+    assert "MilitaryFormationTypes.CORPS_FORMATION ~= nil" in lua
+    assert "MilitaryFormationTypes.STANDARD_FORMATION ~= nil" in lua
+
+
 def test_parse_caps_happy_path():
     flags = parse_caps([CAPS_LINE, "---END---"])
     assert flags == {"spies": False, "government": True, "religious_unit": False,

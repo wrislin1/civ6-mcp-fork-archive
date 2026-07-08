@@ -51,7 +51,8 @@ pcall(function()
         local okF, mf = pcall(function() return u:GetMilitaryFormation() end)
         if okF and mf then
             if mf == MilitaryFormationTypes.CORPS_FORMATION then corpsOwned = true end
-            if info and info.FormationClass == "FORMATION_CLASS_LAND_COMBAT"
+            if info and (info.FormationClass == "FORMATION_CLASS_LAND_COMBAT"
+                    or info.FormationClass == "FORMATION_CLASS_NAVAL")
                     and mf == MilitaryFormationTypes.STANDARD_FORMATION then
                 counts[info.UnitType] = (counts[info.UnitType] or 0) + 1
                 if counts[info.UnitType] >= 2 then pair = true end
@@ -62,8 +63,13 @@ pcall(function()
     flags.gp_unit = gpu
     flags.air = air
     flags.archaeology = arch
-    flags.corps = natl and pair
-    flags.army = mob and corpsOwned
+    -- Only override the fail-open defaults when the formation enums resolved:
+    -- a wrong constant name yields nil (no raise) and would fail these CLOSED.
+    if MilitaryFormationTypes.CORPS_FORMATION ~= nil
+            and MilitaryFormationTypes.STANDARD_FORMATION ~= nil then
+        flags.corps = natl and pair
+        flags.army = mob and corpsOwned
+    end
 end)
 pcall(function()
     -- PROBE(live): great-work count API (Task 15). On error flag stays true.
