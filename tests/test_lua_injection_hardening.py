@@ -1,4 +1,5 @@
 import pytest
+from civ_mcp.game_state import GameState
 from civ_mcp.lua._helpers import _safe_enum, _one_of, _lua_escape, _lua_get_city
 
 
@@ -50,3 +51,61 @@ def test_lua_get_city_rejects_nonnumeric():
 
 def test_lua_get_city_accepts_numeric():
     assert "% 65536" in _lua_get_city(65792)
+
+
+# NOTE on the omitted `item_name`-only case: `_lua_escape` (used for item_name)
+# is a neutralize-not-reject primitive by design (see
+# docs/superpowers/specs/2026-07-08-arena-lua-injection-hardening-design.md —
+# "item_name legitimately carries mixed-case, space-containing display names
+# ... A crafted item_name is neutralized ... and falls through to the existing
+# 'not found' bail"). A call with an otherwise-valid city_id/item_type and only
+# a crafted item_name therefore does NOT raise — it proceeds (safely) to
+# conn.execute_write, same as any other well-formed call. Confirmed empirically:
+# adding that case to the "must raise" parametrize below fails with
+# AssertionError (NoExecConn reached), not ValueError/TypeError — the
+# unconditional-raise double is the wrong tool for that case. Escaping
+# correctness for item_name is covered by test_lua_escape_neutralizes_and_preserves_display_names
+# above (primitive-level) and by test_set_city_production_escapes_item_name_at_entry /
+# test_purchase_item_escapes_item_name_at_entry below (GameState-entry wiring).
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,args,kwargs", [
+    ("set_city_production", (), {"city_id": '1) e() --', "item_name": "Scout", "item_type": "UNIT"}),
+    ("set_city_production", (), {"city_id": 1, "item_name": "Scout", "item_type": 'UNIT" --'}),
+    ("set_city_production", (), {"city_id": 1, "item_name": "Scout", "item_type": "UNIT",
+                                 "target_x": '9)--', "target_y": 3}),
+    ("purchase_item",       (), {"city_id": 1, "item_type": 'UNIT"--', "item_name": "Scout"}),
+    ("purchase_item",       (), {"city_id": 1, "item_type": "UNIT", "item_name": "Scout",
+                                 "yield_type": 'YIELD_GOLD" --'}),
+    ("set_city_focus",      (), {"city_id": 1, "focus": 'FOOD" .. e() .. "'}),
+    ("set_city_focus",      (), {"city_id": '1)--', "focus": "FOOD"}),
+    ("list_city_production",(), {"city_id": '1) print(1) --'}),
+])
+async def test_cities_methods_reject_injection(method, args, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_set_city_production_escapes_item_name_at_entry():
+    """item_name is neutralized (not rejected) — verify the GameState entry
+    actually routes it through _lua_escape before it reaches conn, so no
+    unescaped quote from a crafted item_name survives into the built Lua."""
+    conn = CannedConn()
+    gs = GameState(conn)
+    await gs.set_city_production(city_id=1, item_type="UNIT", item_name='x" .. e() .. "')
+    assert conn.calls, "execute_write should have been reached (escape, not reject)"
+    lua = conn.calls[-1]
+    assert 'x\\" .. e() .. \\"' in lua
+    assert ' .. e() .. "' not in lua.replace('x\\" .. e() .. \\"', "")
+
+
+@pytest.mark.asyncio
+async def test_purchase_item_escapes_item_name_at_entry():
+    conn = CannedConn()
+    gs = GameState(conn)
+    await gs.purchase_item(city_id=1, item_type="UNIT", item_name='x" .. e() .. "')
+    assert conn.calls, "execute_write should have been reached (escape, not reject)"
+    lua = conn.calls[-1]
+    assert 'x\\" .. e() .. \\"' in lua
+    assert ' .. e() .. "' not in lua.replace('x\\" .. e() .. \\"', "")

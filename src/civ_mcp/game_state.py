@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from civ_mcp import lua as lq
 from civ_mcp.connection import GameConnection
+from civ_mcp.lua._helpers import _lua_escape, _one_of, _safe_enum
 from civ_mcp.narrate import (
     narrate_combat_estimate,
     narrate_move_discoveries,
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
     from civ_mcp.spatial import SpatialTracker
 
 log = logging.getLogger(__name__)
+
+# Closed allowlists for cities/production GameState-entry validation
+# (see civ_mcp.lua._helpers for the validation primitives).
+_PURCHASE_ITEM_TYPES = frozenset({"UNIT", "BUILDING", "DISTRICT", "PROJECT"})
+_PURCHASE_YIELDS = frozenset({"YIELD_GOLD", "YIELD_FAITH"})
 
 
 class GameState:
@@ -612,6 +618,14 @@ class GameState:
         target_x: int | None = None,
         target_y: int | None = None,
     ) -> str:
+        city_id = int(city_id)
+        item_name = _lua_escape(item_name)
+        item_type = _one_of(item_type, _PURCHASE_ITEM_TYPES, "item_type")
+        if target_x is not None:
+            target_x = int(target_x)
+        if target_y is not None:
+            target_y = int(target_y)
+
         itype = item_type.upper()
 
         lua = lq.build_produce_item(city_id, item_type, item_name, target_x, target_y)
@@ -705,11 +719,17 @@ class GameState:
         item_name: str,
         yield_type: str = "YIELD_GOLD",
     ) -> str:
+        city_id = int(city_id)
+        item_type = _one_of(item_type, _PURCHASE_ITEM_TYPES, "item_type")
+        item_name = _lua_escape(item_name)
+        yield_type = _one_of(yield_type, _PURCHASE_YIELDS, "yield_type")
+
         lua = lq.build_purchase_item(city_id, item_type, item_name, yield_type)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
     async def list_city_production(self, city_id: int) -> list[lq.ProductionOption]:
+        city_id = int(city_id)
         lua = lq.build_city_production_query(city_id)
         # Must use InGame context — bq:CanProduce() throws "Not Implemented" in GameCore
         lines = await self.conn.execute_write(lua)
@@ -1462,6 +1482,9 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def set_city_focus(self, city_id: int, focus: str) -> str:
+        city_id = int(city_id)
+        focus = _safe_enum(focus, "focus")
+
         lua = lq.build_set_yield_focus(city_id, focus)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
