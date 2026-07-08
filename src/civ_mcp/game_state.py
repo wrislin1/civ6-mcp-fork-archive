@@ -1188,6 +1188,7 @@ class GameState:
         return lq.parse_pantheon_status_response(lines)
 
     async def choose_pantheon(self, belief_type: str) -> str:
+        belief_type = _safe_enum(belief_type, "belief_type")
         lua = lq.build_choose_pantheon(belief_type)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
@@ -1204,6 +1205,9 @@ class GameState:
     async def found_religion(
         self, religion_type: str, follower_belief: str, founder_belief: str
     ) -> str:
+        religion_type = _safe_enum(religion_type, "religion")
+        follower_belief = _safe_enum(follower_belief, "follower_belief")
+        founder_belief = _safe_enum(founder_belief, "founder_belief")
         lua = lq.build_found_religion(religion_type, follower_belief, founder_belief)
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)

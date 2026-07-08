@@ -131,3 +131,16 @@ async def test_set_policies_rejects_injection():
     gs = GameState(NoExecConn())
     with pytest.raises((ValueError, TypeError)):
         await gs.set_policies({0: 'POLICY_X" .. e() .. "'})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,kwargs", [
+    ("choose_pantheon", {"belief_type": 'BELIEF_X" --'}),
+    ("found_religion",  {"religion_type": 'RELIGION_X" --', "follower_belief": "BELIEF_A", "founder_belief": "BELIEF_B"}),
+    ("found_religion",  {"religion_type": "RELIGION_BUDDHISM", "follower_belief": 'X"--', "founder_belief": "BELIEF_B"}),
+    ("found_religion",  {"religion_type": "RELIGION_BUDDHISM", "follower_belief": "BELIEF_A", "founder_belief": 'X"--'}),
+])
+async def test_religion_methods_reject_injection(method, kwargs):
+    gs = GameState(NoExecConn())
+    with pytest.raises((ValueError, TypeError)):
+        await getattr(gs, method)(**kwargs)
