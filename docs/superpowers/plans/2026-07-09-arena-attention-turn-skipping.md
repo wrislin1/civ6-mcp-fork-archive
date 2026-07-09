@@ -1,5 +1,8 @@
 # Arena Attention & Turn Skipping Implementation Plan
 
+> **Status:** ✓ DONE — executed 2026-07-09 (12/12 tasks + final-review fix wave,
+> commits `9eb00dd..331fe56`); merged to main at `7f1ac2c`. Do not re-execute.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let arena puppets skip quiet turns without an LLM call — a coordinator-side deterministic trigger detector with unconditional veto, plus model-expressed `SKIP: n` / `WAKE IF:` directives, per-civ mode knob `off/auto/model/hybrid`.

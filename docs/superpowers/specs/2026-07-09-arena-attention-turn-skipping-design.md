@@ -1,10 +1,15 @@
 # Arena Attention & Turn Skipping — Quiet-Turn Fast Path (Design)
 
 **Date:** 2026-07-09
-**Status:** Approved by riz (brainstorming session, this date)
+**Status:** Implemented + review-hardened (three separate-session review waves), **merged to main 2026-07-09** at `7f1ac2c` — 998 tests green. Live probes P1–P4 (`docs/superpowers/plans/2026-07-09-arena-attention-live-probes.md`) remain the hard gate before any attention-enabled run.
 **Revised:** 2026-07-09 — six findings from riz's separate-session review applied
 (standing-plan collision, decoupled directive wiring, config contract, slept
 record schema, scan contract, TASK_COMPLETED hard wake)
+**Revised:** 2026-07-09 — body re-aligned with the review-2 fix wave (`8b76fb5`)
+and the review-3 fix wave (`ffabff6`, `ebbfc6e`): ATTN_ERR error-detail third
+segment, NOTIFY failure propagation, directive value-type validation +
+transcript `wake_detail`, filler-word SKIP grammar, max_skip-rendered prompt,
+digest failure stub, parameterized clamp wording.
 **Predecessor:** Slice 4 (full toolset + era gating), merged at `b3540d8`, docs through `39fe27c`.
 **Sequencing:** riz decided this slice slots **before A (LLM↔LLM interaction)** in the D → A → C → B roadmap.
 

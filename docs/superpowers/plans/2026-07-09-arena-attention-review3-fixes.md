@@ -1,5 +1,8 @@
 # Arena Attention Review-3 Fixes Implementation Plan
 
+> **Status:** ✓ DONE — executed 2026-07-09 (10/10 tasks + final-review fixups,
+> commits `e1f1822..7f1ac2c`); merged to main at `7f1ac2c`. Do not re-execute.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix the 6 actionable residuals from riz's third review of branch `arena-attention-turn-skipping` (re-review of the 12-commit fix wave at `abdfb7e`), plus 3 observability/robustness improvements the review's remaining findings reduce to after adjudication.

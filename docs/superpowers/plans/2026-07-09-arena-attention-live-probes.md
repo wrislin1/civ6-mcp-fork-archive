@@ -1,17 +1,23 @@
 # Attention & turn-skipping live-probe checklist
 
-> **Status 2026-07-09 (feature branch `arena-attention-turn-skipping`):** the
-> attention system (digest-based wake triggers, turn-skipping framework) and
-> playbook guidance are **implementation-complete** at 935 tests passed. Live
-> probes below exercise the core behaviors on a real game before merge. Fixtures
-> pinned per P1 become the regression anchors; P2-P4 validate end-to-end workflows.
+> **Status 2026-07-09 (updated post-merge):** the attention system (digest-based
+> wake triggers, turn-skipping framework) and playbook guidance are
+> **implementation-complete and MERGED to main** at `7f1ac2c` (998 tests green,
+> after three separate-session review-fix waves). riz merged ahead of the probes;
+> the probes below are now the **hard gate before any attention-enabled run**.
+> P1 especially: check the wake_cause distribution for SCAN_PARTIAL dominance —
+> each SCAN_PARTIAL record now carries the Lua error text in `wake_detail`, and
+> the 120-char Lua cap should leave useful text after the `query:NN:` prefix.
+> Fixtures pinned per P1 become the regression anchors; P2-P4 validate
+> end-to-end workflows.
 
 No greenfield-backed tool reaches production until its probe below captures a
 real fixture or the spec records a degrade/cut decision.
 
-**Preconditions:** the feature branch is checked out; a live game is loaded past
-the early era (turn 50+ recommended for robust GREAT_PERSON_AVAILABLE detection).
-Run each probe from the branch checkout with a direct FireTuner connection.
+**Preconditions:** `main` at `7f1ac2c` or later is checked out (the slice is
+merged); a live game is loaded past the early era (turn 50+ recommended for
+robust GREAT_PERSON_AVAILABLE detection). Run each probe with a direct FireTuner
+connection.
 
 - [ ] **P1 scan:** `build_attention_query` returns and parses on a live game
       (all 11 families, no ATTN_ERR); pin the captured lines as a fixture in

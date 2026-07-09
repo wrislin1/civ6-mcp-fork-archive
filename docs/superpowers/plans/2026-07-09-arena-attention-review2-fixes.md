@@ -1,5 +1,8 @@
 # Arena Attention Review-2 Fixes Implementation Plan
 
+> **Status:** ✓ DONE — executed 2026-07-09 (11/11 tasks, commits
+> `56fe296..abdfb7e`); merged to main at `7f1ac2c`. Do not re-execute.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix the 10 confirmed findings (plus 2 quick follow-ups) from riz's second separate-session review of branch `arena-attention-turn-skipping`.
