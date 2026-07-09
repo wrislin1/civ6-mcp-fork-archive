@@ -1,6 +1,7 @@
 import pytest
 from civ_mcp.arena.config import (
     ArenaConfig,
+    AttentionOptions,
     BriefingOptions,
     CivOptions,
     MemoryOptions,
@@ -145,3 +146,30 @@ def test_civ_options_standing_plan_summary_chars_matches_enabled_capture_budget(
         memory=MemoryOptions(enabled=True, max_chars=6000),
         task_tracker=TaskTrackerOptions(enabled=True, max_tasks=12),
     ).standing_plan_summary_chars == 6000
+
+
+def test_attention_defaults_off():
+    opts = CivOptions()
+    assert opts.attention.mode == "off"
+    assert opts.attention.max_skip == 5
+    assert opts.attention.max_streak == 5
+    assert opts.attention.threat_radius == 4
+
+
+def test_attention_in_fingerprint():
+    opts = CivOptions(attention=AttentionOptions(mode="hybrid", max_skip=3))
+    fp = opts.fingerprint()
+    assert fp["attention"] == {
+        "mode": "hybrid", "max_skip": 3, "max_streak": 5, "threat_radius": 4,
+    }
+
+
+def test_attention_directives_enabled_property():
+    assert not CivOptions().attention_directives_enabled
+    assert not CivOptions(attention=AttentionOptions(mode="auto")).attention_directives_enabled
+    assert CivOptions(attention=AttentionOptions(mode="model")).attention_directives_enabled
+    assert CivOptions(attention=AttentionOptions(mode="hybrid")).attention_directives_enabled
+
+
+def test_arena_config_max_game_turns_default_uncapped():
+    assert ArenaConfig(players=[]).max_game_turns == 0

@@ -49,6 +49,14 @@ class TaskTrackerOptions:
     max_tasks: int = 8
 
 @dataclass(frozen=True)
+class AttentionOptions:
+    """Quiet-turn attention policy (spec 2026-07-09). mode: off|auto|model|hybrid."""
+    mode: str = "off"
+    max_skip: int = 5        # upper clamp for a model's SKIP: n
+    max_streak: int = 5      # coordinator-side consecutive-sleep cap
+    threat_radius: int = 4   # hostile-scan radius around cities/civilians
+
+@dataclass(frozen=True)
 class CivOptions:
     tools: str | tuple = "minimal"
     result_char_cap: int = 1500
@@ -58,6 +66,7 @@ class CivOptions:
     briefing: BriefingOptions = field(default_factory=BriefingOptions)
     memory: MemoryOptions = field(default_factory=MemoryOptions)
     task_tracker: TaskTrackerOptions = field(default_factory=TaskTrackerOptions)
+    attention: AttentionOptions = field(default_factory=AttentionOptions)
 
     def fingerprint(self) -> dict:
         return {
@@ -77,11 +86,21 @@ class CivOptions:
                 "max_age_turns": self.memory.max_age_turns,
             },
             "task_tracker": {"enabled": self.task_tracker.enabled, "max_tasks": self.task_tracker.max_tasks},
+            "attention": {
+                "mode": self.attention.mode,
+                "max_skip": self.attention.max_skip,
+                "max_streak": self.attention.max_streak,
+                "threat_radius": self.attention.threat_radius,
+            },
         }
 
     @property
     def standing_plan_enabled(self) -> bool:
         return self.memory.enabled or self.task_tracker.enabled
+
+    @property
+    def attention_directives_enabled(self) -> bool:
+        return self.attention.mode in ("model", "hybrid")
 
     @property
     def _standing_plan_task_capture_chars(self) -> int:
@@ -140,6 +159,7 @@ def parse_player_spec(s: str) -> PlayerSpec:
 class ArenaConfig:
     players: list[PlayerSpec]
     max_puppet_turns: int = 1
+    max_game_turns: int = 0  # caps ALL captured turns (played+slept+failed); 0 = uncapped
     gateway_url: str = DEFAULT_GATEWAY_URL  # overridden by CLI
     api_key_env: str = "LITELLM_OPENAI_API_KEY"
     dry_run: bool = False
