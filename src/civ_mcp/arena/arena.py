@@ -45,6 +45,8 @@ def build_args(argv=None):
     ap.add_argument("--config", default="",
                     help="YAML experiment file (mutually exclusive with --player)")
     ap.add_argument("--max-puppet-turns", type=int, default=None)
+    ap.add_argument("--max-game-turns", type=int, default=None,
+                    help="cap on ALL captured turns incl. slept (0 = uncapped)")
     ap.add_argument("--gateway-url", default=None)
     ap.add_argument("--api-key-env", default="LITELLM_OPENAI_API_KEY")
     ap.add_argument("--cost-path", default="", help="path for cost log (default: auto under run dir)")
@@ -56,6 +58,7 @@ def build_args(argv=None):
                     help="number of 1s polls to wait for puppet turns before exiting")
     ap.add_argument("--dry-run", action="store_true", help="scripted policy, no LLM")
     ap.add_argument("--config-default-max-puppet-turns", type=int, default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--config-default-max-game-turns", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--config-default-idle-poll-limit", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--config-default-gateway-url", default=None, help=argparse.SUPPRESS)
     return ap.parse_args(argv)
@@ -87,6 +90,7 @@ def resolve_config(args) -> ArenaConfig:
     if config_path and args.player:
         raise SystemExit("--config and --player are mutually exclusive")
     max_puppet_turns_arg = getattr(args, "max_puppet_turns", None)
+    max_game_turns_arg = getattr(args, "max_game_turns", None)
     gateway_url_arg = getattr(args, "gateway_url", None)
     idle_poll_limit_arg = getattr(args, "idle_poll_limit", None)
     max_agent_steps_arg = getattr(args, "max_agent_steps", None)
@@ -94,6 +98,8 @@ def resolve_config(args) -> ArenaConfig:
         rejected = []
         if max_puppet_turns_arg is not None:
             rejected.append("--max-puppet-turns")
+        if max_game_turns_arg is not None:
+            rejected.append("--max-game-turns")
         if gateway_url_arg is not None:
             rejected.append("--gateway-url")
         if idle_poll_limit_arg is not None:
@@ -108,6 +114,10 @@ def resolve_config(args) -> ArenaConfig:
             max_puppet_turns=_value_or_default(
                 getattr(args, "config_default_max_puppet_turns", None),
                 defaults.max_puppet_turns,
+            ),
+            max_game_turns=_value_or_default(
+                getattr(args, "config_default_max_game_turns", None),
+                defaults.max_game_turns,
             ),
             idle_poll_limit=_value_or_default(
                 getattr(args, "config_default_idle_poll_limit", None),
@@ -142,6 +152,7 @@ def resolve_config(args) -> ArenaConfig:
         specs = updated
     return ArenaConfig(players=specs,
                        max_puppet_turns=_value_or_default(max_puppet_turns_arg, defaults.max_puppet_turns),
+                       max_game_turns=_value_or_default(max_game_turns_arg, defaults.max_game_turns),
                        gateway_url=_value_or_default(gateway_url_arg, defaults.gateway_url),
                        api_key_env=args.api_key_env,
                        dry_run=args.dry_run, max_agent_steps=max_agent_steps,

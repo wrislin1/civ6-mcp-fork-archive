@@ -353,3 +353,22 @@ def test_run_rejects_path_traversal_run_id(tmp_path):
         asyncio.run(_run(Args()))
     # Nothing should have been created outside the transcript dir.
     assert not (tmp_path.parent / "evil").exists()
+
+
+def test_max_game_turns_cli_flag():
+    args = build_args(["--player", "1:local:m", "--max-game-turns", "150"])
+    cfg = resolve_config(args)
+    assert cfg.max_game_turns == 150
+
+
+def test_max_game_turns_defaults_uncapped():
+    args = build_args(["--player", "1:local:m"])
+    assert resolve_config(args).max_game_turns == 0
+
+
+def test_max_game_turns_rejected_with_config(tmp_path):
+    exp = tmp_path / "e.yaml"
+    exp.write_text("run_id: t1\ncivs:\n  - {player: 1, provider: local, model: m}\n")
+    args = build_args(["--config", str(exp), "--max-game-turns", "5"])
+    with pytest.raises(SystemExit, match="config-owned"):
+        resolve_config(args)
