@@ -1935,3 +1935,67 @@ async def test_tampered_snapshot_value_degrades_slept_delta(tmp_path):
     rec = sink.records[-1]
     assert rec["turn_kind"] == "slept"
     assert rec["state_delta"] is None         # unknowable delta, not an abort
+
+
+@pytest.mark.asyncio
+async def test_corrupt_snapshot_resets_and_wakes_not_aborts(tmp_path):
+    """Review-2 finding 1: a dict-shaped but wrong-typed persisted snapshot
+    passes load's shape validation and used to explode inside evaluate()'s
+    comparisons, killing run_arena. Contract: reset + wake (STATE_CORRUPT)."""
+    from civ_mcp.arena.attention import (
+        AttentionState, load_attention_state, save_attention_state,
+    )
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="rc1", puppet_ids=[1])
+    corrupt = dict(_ATTN_BASELINE_SNAPSHOT)
+    corrupt["units"] = "5"          # int < str -> TypeError in _hard_triggers
+    save_attention_state(str(tmp_path), "rc1", 1, AttentionState(
+        run_id="rc1", player_id=1, last_snapshot=corrupt,
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 1                       # woke; the run did not die
+    assert result["puppet_turns_played"] == 1
+    rec = sink.records[-1]
+    assert rec["attention"]["wake_cause"] == "STATE_CORRUPT"
+    healed = load_attention_state(str(tmp_path), "rc1", 1)
+    assert healed.last_snapshot is not None
+    # note_wake rewrote the baseline from the post-turn overview snapshot
+    # (_OV_AFTER's units field -- see FakeConnWithOverview above), not the
+    # corrupt persisted "5" string -- the key assertion is that it's a real
+    # int again, healing the file.
+    assert healed.last_snapshot["units"] == 6
+
+
+@pytest.mark.asyncio
+async def test_corrupt_directive_resets_and_wakes_not_aborts(tmp_path):
+    """Same contract for a corrupt directive: wake_if=5 makes the subscription
+    tuple() call raise; must degrade to STATE_CORRUPT wake, not abort."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="hybrid"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="rc2", puppet_ids=[1])
+    save_attention_state(str(tmp_path), "rc2", 1, AttentionState(
+        run_id="rc2", player_id=1,
+        directive={"skip": 2, "wake_if": 5},    # dict-shaped, corrupt value
+        skips_remaining=2,
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 1
+    assert result["puppet_turns_played"] == 1
+    assert sink.records[-1]["attention"]["wake_cause"] == "STATE_CORRUPT"

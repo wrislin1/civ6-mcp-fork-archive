@@ -8,6 +8,7 @@ from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.attention import (
     AttentionState,
+    Decision,
     build_attention_query,
     cancel_remainder,
     evaluate,
@@ -282,10 +283,24 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     task_event = any(
                         r.get("status") not in (None, "active") for r in task_results
                     )
-                    decision = evaluate(
-                        attention_mode, att_state, att_scan, state_before,
-                        max_streak=opts.attention.max_streak, task_event=task_event,
-                    )
+                    try:
+                        decision = evaluate(
+                            attention_mode, att_state, att_scan, state_before,
+                            max_streak=opts.attention.max_streak, task_event=task_event,
+                        )
+                    except Exception as e:
+                        # Corrupt persisted values (dict-shaped but wrong-typed,
+                        # e.g. last_snapshot={"units":"5"} or directive
+                        # wake_if=5) pass load's shape check and explode inside
+                        # evaluate's comparisons. Contract (attention.py module
+                        # docstring): state corrupt -> reset + wake, never
+                        # abort (review-2 finding 1). note_wake on the fresh
+                        # state rewrites the baselines and its save self-heals
+                        # the file.
+                        att_state = AttentionState(run_id=run_id, player_id=st.local)
+                        decision = Decision("wake", "STATE_CORRUPT")
+                        print(f"[arena] attention evaluate failed; reset + wake: {e!r}",
+                              file=sys.stderr)
                 if decision is not None and decision.action == "sleep":
                     prev_snapshot = att_state.last_snapshot
                     task_notes = [
