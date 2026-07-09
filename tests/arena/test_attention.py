@@ -205,6 +205,21 @@ def test_scan_scalars_shape():
     assert scan_scalars(scan) == {"at_war_with": [], "era_index": 1, "total_population": 12}
 
 
+def _lua_family_segment(query: str, name: str, next_name: str) -> str:
+    start = query.index(f'fam("{name}"')
+    end = query.index(f'fam("{next_name}"')
+    return query[start:end]
+
+
+def test_hard_family_lua_propagates_errors():
+    """Review-2 findings 3+4: CITYHP and LOYALTY must not swallow API errors
+    in inner pcalls -- a failure has to reach fam()'s pcall so the family
+    reports ATTN_ERR and evaluate() wakes on SCAN_PARTIAL."""
+    q = build_attention_query(1, 4)
+    assert "pcall" not in _lua_family_segment(q, "CITYHP", "LOYALTY")
+    assert "pcall" not in _lua_family_segment(q, "LOYALTY", "WC")
+
+
 from civ_mcp.arena.attention import Decision, evaluate
 
 QUIET = parse_attention_scan(QUIET_LINES)

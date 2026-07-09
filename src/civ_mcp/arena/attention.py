@@ -419,8 +419,9 @@ def scan_scalars(scan: AttentionScan) -> dict:
 #   CITYHP   - cities.py:48-61 (city-center district GetMaxDamage/GetDamage
 #              for DISTRICT_GARRISON and DISTRICT_OUTER)
 #   WAR      - diplomacy.py:43 (alive-major loop + pDiplo:IsAtWarWith(i))
-#   LOYALTY  - cities.py:852-878 (_LOYALTY_LUA; degrade-tolerant double pcall
-#              around GetCulturalIdentity()/GetLoyaltyPerTurn())
+#   LOYALTY  - cities.py:852-878 (_LOYALTY_LUA accessor names; unlike that
+#              read tool, failures here PROPAGATE to fam() -> ATTN_ERR --
+#              a hard-trigger family must wake on failure, not degrade)
 #   WC       - congress.py build_world_congress_query (GetWorldCongress() +
 #              GetMeetingStatus().TurnsLeft)
 #   ERA      - tech.py:93 (Game.GetEras():GetCurrentEra())
@@ -524,10 +525,12 @@ fam("CITYHP", function()
         local garDmg, wallDmg = 0, 0
         for _, d in c:GetDistricts():Members() do
             if d:GetType() == ccIdx then
-                pcall(function()
-                    garDmg = d:GetDamage(DefenseTypes.DISTRICT_GARRISON) or 0
-                    wallDmg = d:GetDamage(DefenseTypes.DISTRICT_OUTER) or 0
-                end)
+                -- No inner protected-call wrapper: a GetDamage/DefenseTypes
+                -- failure must reach fam()'s error boundary -> ATTN_ERR|CITYHP
+                -- -> SCAN_PARTIAL wake, never an empty damaged= that
+                -- blind-skips a siege (review-2 f3).
+                garDmg = d:GetDamage(DefenseTypes.DISTRICT_GARRISON) or 0
+                wallDmg = d:GetDamage(DefenseTypes.DISTRICT_OUTER) or 0
                 break
             end
         end
@@ -540,14 +543,14 @@ end)
 fam("LOYALTY", function()
     local negative = {}
     for _, c in p:GetCities():Members() do
-        pcall(function()
-            local ci = c:GetCulturalIdentity()
-            local pt = 0
-            pcall(function() pt = ci:GetLoyaltyPerTurn() end)
-            if pt < 0 then
-                table.insert(negative, tostring(c:GetID()))
-            end
-        end)
+        -- No inner protected-call wrappers: a GetCulturalIdentity/
+        -- GetLoyaltyPerTurn failure must reach fam()'s error boundary ->
+        -- ATTN_ERR|LOYALTY -> SCAN_PARTIAL wake, never an empty negative=
+        -- that blind-skips a loyalty flip (review-2 f4).
+        local pt = c:GetCulturalIdentity():GetLoyaltyPerTurn()
+        if pt < 0 then
+            table.insert(negative, tostring(c:GetID()))
+        end
     end
     print("ATTN|LOYALTY|negative=" .. table.concat(negative, ","))
 end)
@@ -569,6 +572,9 @@ fam("GP", function()
             for _, entry in ipairs(timeline) do
                 if entry.Class ~= nil and entry.Individual ~= nil then
                     local canRecruit = false
+                    -- Soft-trigger tier: swallowing is deliberate here and in
+                    -- TRADE (a loud failure would wake every turn for an
+                    -- opt-in signal). Hard families must NOT copy this.
                     pcall(function()
                         canRecruit = gp:CanRecruitPerson(me, entry.Individual)
                     end)
