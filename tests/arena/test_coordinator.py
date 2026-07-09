@@ -1521,3 +1521,236 @@ async def test_policy_failure_is_skipped_not_crashed_and_restores_human():
     assert conn.restored is True       # human handed back despite the failure
     # The failure is surfaced in the log rather than silently swallowed.
     assert any(entry.get("skipped") for entry in result["log"])
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — attention & turn-skipping coordinator integration
+# ---------------------------------------------------------------------------
+
+QUIET_SCAN_LINES = [
+    "ATTN|THREAT|count=0|nearest=", "ATTN|CITYHP|damaged=", "ATTN|WAR|with=",
+    "ATTN|LOYALTY|negative=", "ATTN|WC|turns=5", "ATTN|ERA|index=1",
+    "ATTN|POP|total=12", "ATTN|GP|available=0", "ATTN|TRADE|idle=0",
+    "ATTN|DIPLO|pending=0", "ATTN|BLOCKERS|types=",
+]
+
+# Overview snapshot matching FakeConnWithOverview's canned _OV_BEFORE line
+# (score=50, gold=100.0, science=10.0, culture=8.0, faith=20.0, cities=2,
+# units=5 -- see overview.py:584-598 field order). Seeding an attention
+# baseline with THESE values (rather than zeros) means the freshly-read
+# current-turn snapshot equals the seeded baseline, so no hard
+# "CITY_COUNT_CHANGED"/"UNITS_LOST" trigger fires from a fixture mismatch
+# that has nothing to do with the scenario under test.
+_ATTN_BASELINE_SNAPSHOT = {
+    "score": 50, "gold": 100.0, "science": 10.0, "culture": 8.0,
+    "faith": 20.0, "research": "Mining", "civic": "Drama",
+    "cities": 2, "units": 5,
+}
+
+
+class AttnConn(FakeConnWithOverview):
+    async def execute_read(self, lua, timeout=5.0):
+        if "ATTN" in lua:
+            return list(QUIET_SCAN_LINES)
+        return await super().execute_read(lua, timeout)
+
+
+class CountingPolicy:
+    def __init__(self, options):
+        self.options = options
+        self.calls = 0
+    async def __call__(self, gs, player_id, turn, *, digest_block="", **kw):
+        self.calls += 1
+        self.last_digest = digest_block
+        return {"summary": "played", "actions": [], "transcript": {"steps": [], "final_summary": "played"}}
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_sleeps_quiet_turn(tmp_path):
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=3, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r1", puppet_ids=[1])
+    # seed a baseline so NO_BASELINE doesn't force a wake on the first capture
+    # (matching FakeConnWithOverview's _OV_BEFORE fields -- see
+    # _ATTN_BASELINE_SNAPSHOT above -- so the freshly-read current-turn
+    # snapshot exactly matches it and no hard trigger fires from fixture
+    # mismatch alone)
+    save_attention_state(str(tmp_path), "r1", 1, AttentionState(
+        run_id="r1", player_id=1,
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+    assert pol.calls == 0                       # no model invocation
+    assert result["turns_slept"] == 1
+    assert result["puppet_turns_played"] == 0   # max_puppet_turns NOT consumed
+    rec = sink.records[-1]
+    assert rec["slept"] is True and rec["turn_kind"] == "slept"
+    assert rec["step_count"] == 0 and rec["usd"] == 0.0
+    assert "skipped" not in rec                 # that key means FAILED
+    assert conn.restored                        # handback still happened
+
+
+@pytest.mark.asyncio
+async def test_first_capture_wakes_no_baseline(tmp_path, monkeypatch):
+    """No seeded attention state -> load_attention_state returns a fresh state
+    whose last_snapshot is None -> evaluate() returns NO_BASELINE -> the model
+    runs this turn (a played turn), and the transcript record is annotated
+    with the wake cause."""
+    from civ_mcp.arena.config import AttentionOptions
+
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r2", puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 1
+    assert result["puppet_turns_played"] == 1
+    assert result["turns_slept"] == 0
+    rec = sink.records[-1]
+    assert rec["turn_kind"] == "played" and rec["attention"]["wake_cause"] == "NO_BASELINE"
+    assert rec["attention"]["decision"] == "woke"
+
+
+@pytest.mark.asyncio
+async def test_off_mode_bit_for_bit_today(tmp_path, monkeypatch):
+    """mode="off" (the default): no ATTN read is ever issued and no "attention"
+    key appears on the record -- except "turn_kind" IS added to played records
+    unconditionally, regardless of attention mode."""
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions()  # attention.mode == "off" by default
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r3", puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 1
+    assert result["puppet_turns_played"] == 1
+    assert result["turns_slept"] == 0
+    assert not any("ATTN" in c for c in conn.read_calls)   # scan never issued
+    rec = sink.records[-1]
+    assert rec["turn_kind"] == "played"     # added unconditionally
+    assert "attention" not in rec           # off mode never produces this
+
+
+@pytest.mark.asyncio
+async def test_wake_digest_injected_after_sleep(tmp_path):
+    """Two captured turns: the first sleeps (quiet scan); by the second, the
+    streak (1, from the first sleep) has reached max_streak=1 -> STREAK_CAP
+    wake. The wake digest rendered from the accumulated sleep record must
+    reach the policy as digest_block, and the record must show a wake."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto", max_streak=1))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r4", puppet_ids=[1])
+    # Two consecutive active puppet polls, no idle detour needed: turn 2
+    # sleeps (quiet scan matches the seeded baseline); turn 3's streak (1,
+    # set by turn 2's sleep) meets max_streak (1) -> STREAK_CAP wake, and
+    # remaining (1) is consumed so the loop stops there.
+    conn._polls = iter([
+        ["LOCAL|1", "TURN|2", "ACTIVE|true", "LAST|1"],
+        ["LOCAL|1", "TURN|3", "ACTIVE|true", "LAST|1"],
+    ])
+    save_attention_state(str(tmp_path), "r4", 1, AttentionState(
+        run_id="r4", player_id=1,
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert result["turns_slept"] == 1
+    assert result["puppet_turns_played"] == 1
+    assert pol.calls == 1
+    assert "WHILE YOU SLEPT" in pol.last_digest
+    rec = sink.records[-1]
+    assert rec["turn_kind"] == "played"
+    assert rec["attention"]["decision"] == "woke"
+    assert rec["attention"]["wake_cause"] == "STREAK_CAP"
+
+
+@pytest.mark.asyncio
+async def test_directive_captured_without_memory(tmp_path, monkeypatch):
+    """mode="model", memory+tracker disabled (CivOptions defaults): the
+    model's final_summary carries a SKIP directive. With no seeded baseline
+    the first capture wakes on NO_BASELINE regardless of mode, so the model
+    runs; its directive is still parsed and persisted post-turn, and no
+    standing-memory file is ever created since memory is disabled."""
+    from civ_mcp.arena.attention import load_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+    from civ_mcp.arena.memory import memory_path
+
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    opts = CivOptions(attention=AttentionOptions(mode="model"))
+
+    class DirectivePolicy:
+        provider = "local"
+        options = opts
+        async def __call__(self, gs, player_id, turn, **kwargs):
+            return {
+                "summary": "done",
+                "transcript": {"steps": [], "final_summary": "done\nSKIP: 3"},
+            }
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r5", puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=DirectivePolicy())
+
+    assert result["puppet_turns_played"] == 1
+    state = load_attention_state(str(tmp_path), "r5", 1)
+    assert state.skips_remaining == 3
+    assert not memory_path(str(tmp_path), "r5", 1).exists()
+
+
+@pytest.mark.asyncio
+async def test_max_game_turns_caps_run(tmp_path, monkeypatch):
+    """max_game_turns=1 caps the run after exactly one slept turn even though
+    max_puppet_turns=5 remains almost entirely unused -- game_turns counts
+    ALL captured turns (played + slept + failed), not just played ones."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=5, max_game_turns=1, idle_poll_limit=10,
+                      transcript_dir=str(tmp_path), run_id="r6", puppet_ids=[1])
+    save_attention_state(str(tmp_path), "r6", 1, AttentionState(
+        run_id="r6", player_id=1,
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 0
+    assert result["turns_slept"] == 1
+    assert result["puppet_turns_played"] == 0

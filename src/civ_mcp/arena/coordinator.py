@@ -6,6 +6,19 @@ from datetime import datetime, timezone
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
+from civ_mcp.arena.attention import (
+    build_attention_query,
+    evaluate,
+    has_directive_lines,
+    load_attention_state,
+    note_sleep,
+    note_wake,
+    parse_attention_scan,
+    parse_directive,
+    render_digest,
+    save_attention_state,
+    scan_scalars,
+)
 from civ_mcp.arena.budget import explicit_n_ctx
 from civ_mcp.arena.capabilities import build_caps_query, parse_caps
 from civ_mcp.arena.config import CivOptions
@@ -151,14 +164,18 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
         # local run_id), so records stay joinable to the state dir without
         # mutating config.
         run_id = generate_run_id()
-    played, log = 0, []
+    played, slept, game_turns, log = 0, 0, 0, []
     _tx_on = transcript is not None and getattr(transcript, "enabled", True)
     try:
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
         deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
         idle_streak = 0  # consecutive idle polls since the last puppet capture
-        while remaining > 0 and deadline_polls > 0:
+        max_game_turns = getattr(config, "max_game_turns", 0)  # tolerate old test-stub configs
+        while (
+            remaining > 0 and deadline_polls > 0
+            and (max_game_turns <= 0 or game_turns < max_game_turns)
+        ):
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
                 idle_streak = 0
@@ -166,7 +183,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
                 opts = getattr(pol, "options", CivOptions())
                 transcript_dir = config.transcript_dir
-                state_before = await _overview_snapshot(gs) if _tx_on else None
+                attention_mode = opts.attention.mode
+                attention_on = attention_mode in ("auto", "model", "hybrid")
+                state_before = (
+                    await _overview_snapshot(gs) if (_tx_on or attention_on) else None
+                )
 
                 # --- Load standing memory / task tracker state and run deterministic
                 # pre-model task follow-through. This MUST happen before the exclusive
@@ -232,6 +253,113 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         task_tracker_error = repr(e)
                         print(f"[arena] task tracker pre-model failed: {e!r}", file=sys.stderr)
 
+                # --- Attention skip-evaluation (spec §2-4): once per captured puppet
+                # turn, decide whether this civ can sleep through it. Every failure
+                # here degrades toward MORE model turns (fail-open), never a blind
+                # skip -- see attention.py module docstring.
+                att_state = None
+                att_scan = None
+                digest_block = ""
+                decision = None
+                if attention_on:
+                    try:
+                        att_state = load_attention_state(transcript_dir, run_id, st.local)
+                        scan_lines = await conn.execute_read(
+                            build_attention_query(st.local, opts.attention.threat_radius)
+                        )
+                        att_scan = parse_attention_scan(scan_lines)
+                    except Exception as e:
+                        att_scan = None
+                        print(f"[arena] attention scan failed; waking: {e!r}", file=sys.stderr)
+                    if att_state is None:
+                        att_state = load_attention_state(transcript_dir, run_id, st.local)
+                    task_event = any(
+                        r.get("status") not in (None, "active") for r in task_results
+                    )
+                    decision = evaluate(
+                        attention_mode, att_state, att_scan, state_before,
+                        max_streak=opts.attention.max_streak, task_event=task_event,
+                    )
+                if decision is not None and decision.action == "sleep":
+                    prev_snapshot = att_state.last_snapshot
+                    task_notes = [
+                        f"{r.get('kind', '?')} {r.get('action', '')}: {r.get('result', '')}"
+                        for r in task_results
+                    ]
+                    att_state = note_sleep(
+                        att_state, turn=st.turn, snapshot=state_before,
+                        scan_scalars=scan_scalars(att_scan),
+                        task_notes=task_notes, notifications=list(att_scan.notifications),
+                    )
+                    try:
+                        save_attention_state(transcript_dir, run_id, st.local, att_state)
+                    except Exception as e:
+                        print(f"[arena] attention state save failed: {e!r}", file=sys.stderr)
+                    attention_fields = {
+                        "mode": attention_mode, "decision": "slept",
+                        "directive": att_state.directive,
+                        "skips_remaining": att_state.skips_remaining,
+                        "streak": att_state.streak, "wake_cause": None,
+                    }
+                    log.append({
+                        "player": st.local, "turn": st.turn,
+                        "slept": True, "attention": attention_fields,
+                    })
+                    if _tx_on:
+                        _num = ("score", "gold", "science", "culture", "faith", "cities", "units")
+                        if prev_snapshot is not None and state_before is not None:
+                            state_delta = {
+                                k: state_before[k] - prev_snapshot[k] for k in _num
+                            }
+                            state_delta["research"] = state_before["research"]
+                            state_delta["civic"] = state_before["civic"]
+                        else:
+                            state_delta = None
+                        _pol_backend = getattr(pol, "backend", None)
+                        transcript.write({
+                            "schema_version": 1,
+                            "run_id": run_id,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "player_id": st.local,
+                            "turn": st.turn,
+                            "provider": getattr(pol, "provider", "local"),
+                            "model": getattr(_pol_backend, "model", getattr(pol, "model", "")),
+                            "driver": "cli" if str(getattr(pol, "provider", "local")).startswith("cli") else "in_process",
+                            "turn_kind": "slept",
+                            "slept": True,
+                            "step_count": 0,
+                            "usd": 0.0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "state_before": prev_snapshot,
+                            "state_after": state_before,
+                            "state_delta": state_delta,
+                            "standing_memory": {
+                                "loaded": bool(memory), "injected": False,
+                                "injected_chars": 0, "captured_chars": 0,
+                                "error": memory_error,
+                            },
+                            "task_tracker": {
+                                "active_before": len(active_tasks_before),
+                                "pre_model_results": task_results,
+                                "active_after": len(active_tasks_after),
+                                "error": task_tracker_error,
+                            },
+                            "attention": attention_fields,
+                        })
+                    await hook.finish_units(conn, st.local)
+                    await hook.restore_local(conn, 0)
+                    slept += 1
+                    game_turns += 1
+                    deadline_polls -= 1
+                    continue
+                if decision is not None and att_state.slept:
+                    digest_block = render_digest(
+                        att_state, wake_turn=st.turn,
+                        wake_cause=decision.wake_cause or "",
+                        wake_detail=decision.wake_detail,
+                    )
+
                 # Gate every injected kwarg on the policy's signature (the
                 # briefing precedent): a pre-slice-3 policy with a bare
                 # (gs, player_id, turn) __call__ must keep working.
@@ -240,6 +368,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     for name, value in (
                         ("memory_block", memory_block),
                         ("task_block", task_block),
+                        ("digest_block", digest_block),
                     )
                     if _policy_accepts_kwarg(pol, name)
                 }
@@ -315,6 +444,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     await hook.finish_units(conn, st.local)
                     await hook.restore_local(conn, 0)
                     remaining -= 1
+                    game_turns += 1
                     deadline_polls -= 1
                     continue
                 if exclusive and not conn.is_connected:
@@ -330,11 +460,12 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 # task tracking both parse the same STANDING PLAN block.
                 captured_plan = ""
                 final_summary = ""
-                if opts.standing_plan_enabled:
+                if opts.standing_plan_enabled or opts.attention_directives_enabled:
                     final_summary = (
                         result.get("transcript", {}).get("final_summary")
                         or result.get("summary", "")
                     )
+                if opts.standing_plan_enabled:
                     captured_plan = extract_standing_plan(
                         final_summary,
                         opts.standing_plan_capture_chars,
@@ -369,6 +500,43 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         print(f"[arena] task tracker capture failed: {e!r}", file=sys.stderr)
 
                 state_after = await _overview_snapshot(gs) if _tx_on else None
+                directive = None
+                directive_ack = ""
+                wake_attention_fields = None
+                if attention_on and att_state is not None:
+                    if opts.attention_directives_enabled:
+                        directive = parse_directive(final_summary, opts.attention.max_skip)
+                        if directive is not None:
+                            note = " (clamped)" if directive.clamped else ""
+                            directive_ack = f"SKIP {directive.skip} accepted{note}"
+                            if directive.unknown_tokens:
+                                directive_ack += (
+                                    f"; unknown tokens dropped: {','.join(directive.unknown_tokens)}"
+                                )
+                        elif has_directive_lines(final_summary):
+                            directive_ack = "directive not recognized"
+                    wake_cause = decision.wake_cause if decision is not None else None
+                    wake_attention_fields = {
+                        "mode": attention_mode, "decision": "woke",
+                        "wake_cause": wake_cause,
+                        "directive": (
+                            {"skip": directive.skip, "wake_if": list(directive.wake_if)}
+                            if directive else None
+                        ),
+                        "digest_chars": len(digest_block),
+                        "directive_ack": directive_ack,
+                    }
+                    att_state = note_wake(
+                        att_state, turn=st.turn,
+                        wake_cause=wake_cause or "", directive=directive,
+                        directive_ack=directive_ack,
+                        snapshot=state_after if state_after is not None else state_before,
+                        scan_scalars=scan_scalars(att_scan) if att_scan is not None else None,
+                    )
+                    try:
+                        save_attention_state(transcript_dir, run_id, st.local, att_state)
+                    except Exception as e:
+                        print(f"[arena] attention state save failed: {e!r}", file=sys.stderr)
                 _log_entry = {
                     k: v
                     for k, v in result.items()
@@ -434,7 +602,10 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         "promotion_sweep": swept,
                         "standing_memory": _standing_memory_fields,
                         "task_tracker": _task_tracker_fields,
+                        "turn_kind": "played",
                     }
+                    if wake_attention_fields is not None:
+                        record["attention"] = wake_attention_fields
                     transcript.write(record)
                 # End this puppet's turn and hand control back toward the human.
                 # DESIGN NOTE — the turn-end method is validated by the live dry-run gate (Task 9).
@@ -446,6 +617,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 await hook.restore_local(conn, 0)
                 played += 1
                 remaining -= 1
+                game_turns += 1
             else:
                 # Human seat is idle. Do NOT auto-clear VIEW-level diplomacy here:
                 # _clear_blocking_diplomacy cannot distinguish an orphaned first-meet
@@ -468,7 +640,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         log.append({"turn": st.turn, "orphan_sweep": swept_sessions})
                 await asyncio.sleep(1.0)
             deadline_polls -= 1
-        return {"puppet_turns_played": played, "log": log}
+        return {"puppet_turns_played": played, "turns_slept": slept, "log": log}
     finally:
         # Human safety invariant: ALWAYS hand control back. Reclaim a released connection first,
         # then restore the human, then disable — run all three best-effort so a failure in one
