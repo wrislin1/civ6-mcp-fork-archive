@@ -39,3 +39,9 @@ def test_garbage_no_directive():
 
 def test_prose_mentioning_skip_mid_sentence_does_not_match():
     assert parse_directive("I will skip: nothing important this turn happened", 5) is None
+
+def test_first_parsed_skip_wins():
+    # two valid SKIP lines: the first parsed one wins
+    assert parse_directive("SKIP: 2\nSKIP: 4", 5).skip == 2
+    # a SKIP line with no integer does not block a later parseable one
+    assert parse_directive("SKIP: soon\nSKIP: 4", 5).skip == 4

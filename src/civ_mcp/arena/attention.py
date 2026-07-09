@@ -56,9 +56,11 @@ def has_directive_lines(summary: str) -> bool:
 def parse_directive(summary: str, max_skip: int) -> Directive | None:
     """Extract a SKIP/WAKE IF directive from a final summary, or None.
 
-    First SKIP line wins. WAKE IF without SKIP is inert (spec: sleep must be
-    freshly and explicitly chosen). Unknown WAKE IF tokens are collected, not
-    fatal. SKIP body must contain an integer ("SKIP: 3 turns" tolerated).
+    First parsed SKIP line wins; later SKIP lines never override it, and a
+    SKIP line with no integer does not block a later parseable one. WAKE IF
+    without SKIP is inert (spec: sleep must be freshly and explicitly
+    chosen). Unknown WAKE IF tokens are collected, not fatal. SKIP body must
+    contain an integer ("SKIP: 3 turns" tolerated).
     """
     skip: int | None = None
     clamped = False
