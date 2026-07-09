@@ -100,10 +100,9 @@ Trigger scan raises → wake. Failures can only produce *more* model turns, neve
 more blind skips. Persisted-but-wrong-typed state (dict-shaped, e.g.
 `last_snapshot={"units":"5"}`) passes the load-time shape check but raises
 inside `evaluate()`'s comparisons; the coordinator wraps `evaluate()` in its own
-try/except for exactly this, producing wake cause **`STATE_CORRUPT`** —
-persisted attention state was dict-shaped but wrong-typed; state reset + wake
-(never abort). `note_wake`'s save on the fresh state self-heals the file, same
-as any other corrupt-state path.
+try/except for exactly this, producing wake cause **`STATE_CORRUPT`**: state
+reset + wake, never abort. `note_wake`'s save on the fresh state self-heals
+the file, same as any other corrupt-state path.
 
 ### Config contract
 
@@ -129,7 +128,9 @@ as any other corrupt-state path.
 
 **`max_game_turns`** — new `ArenaConfig` field capping ALL captured turns
 (played, slept, or failed). Default `0` = uncapped (slept turns stay bounded
-by `idle_poll_limit` and the streak cap). `idle_poll_limit` is a
+by the streak cap: `max_streak` forces a STREAK_CAP wake — a played turn,
+which consumes `max_puppet_turns` — so total captured turns stay ≤
+`max_puppet_turns` × (`max_streak` + 1)). `idle_poll_limit` is a
 **consecutive-idle** poll budget, not a whole-run cap: `deadline_polls`
 refills to its configured value on every captured puppet turn — played,
 slept, or failed — so it only bites during a genuinely idle stretch (no
