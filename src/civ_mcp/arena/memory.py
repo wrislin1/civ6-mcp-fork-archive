@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from civ_mcp.arena.attention import SKIP_LINE_RE, WAKE_IF_LINE_RE
 from civ_mcp.arena.task_tracker import CANCEL_LINE_RE, TASK_LINE_RE
 from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
@@ -152,7 +153,7 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
     intentionally not treated as a plan (see
     test_bare_marker_requires_end_of_line_so_prose_does_not_match).
 
-    Stops at an unbulleted
+    Stops at an attention-directive line (SKIP: or WAKE IF:), an unbulleted
     known reflection header (case-insensitive), an unbulleted ALL-CAPS section
     header, a known bulleted reflection header such as ``- TACTICAL:``, or end
     of string. Left-edge markdown bullets are stripped per line. Returns ""
@@ -177,6 +178,11 @@ def extract_standing_plan(summary: str, max_chars: int) -> str:
 
     following = lines[start_idx + 1 :]
     for offset, line in enumerate(following):
+        # Attention directives (SKIP:/WAKE IF:) terminate the plan and are
+        # never plan content -- without this they'd be persisted and
+        # re-injected every turn (external-review catch).
+        if SKIP_LINE_RE.match(line) or WAKE_IF_LINE_RE.match(line):
+            break
         if _is_section_header(line, following[offset + 1 :]):
             break
         if line.strip() == "":

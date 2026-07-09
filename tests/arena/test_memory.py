@@ -540,3 +540,23 @@ def test_injected_memory_header_never_rematches_on_capture():
 
     assert block.startswith("== STANDING PLAN (")
     assert find_standing_plan_start(block) == -1
+
+
+def test_directive_after_plan_not_persisted():
+    summary = (
+        "STANDING PLAN:\n- finish Campus in Suwon\n- settler -> (14,22)\n"
+        "SKIP: 3\nWAKE IF: GREAT_PERSON_AVAILABLE"
+    )
+    plan = extract_standing_plan(summary, 1200)
+    assert "finish Campus" in plan and "settler" in plan
+    assert "SKIP" not in plan and "WAKE IF" not in plan
+
+
+def test_directive_markdown_form_still_terminates():
+    plan = extract_standing_plan("STANDING PLAN: hold the line\n**SKIP:** 2", 1200)
+    assert plan == "hold the line"
+
+
+def test_directive_before_plan_leaves_capture_intact():
+    plan = extract_standing_plan("SKIP: 2\nSTANDING PLAN: expand east", 1200)
+    assert plan == "expand east"
