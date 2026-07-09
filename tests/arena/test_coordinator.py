@@ -2031,3 +2031,32 @@ async def test_wake_baseline_is_post_play_with_transcripts_off(tmp_path, monkeyp
     assert len(calls) == 2                       # before AND after now taken
     st = load_attention_state(str(tmp_path), "rt2", 1)
     assert st.last_snapshot["units"] == 7        # the POST-play (2nd) snapshot
+
+
+@pytest.mark.asyncio
+async def test_slept_turns_refill_idle_budget(tmp_path):
+    """Review-2 finding 8: slept turns burned deadline_polls (never refilled)
+    while leaving `remaining` untouched, so a quiet game could end far short
+    of its budget. A captured turn is activity: it must refill the budget."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto", max_streak=10))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, max_game_turns=5, idle_poll_limit=3,
+                      transcript_dir=str(tmp_path), run_id="r8", puppet_ids=[1])
+    conn._polls = iter([
+        ["LOCAL|1", f"TURN|{t}", "ACTIVE|true", "LAST|1"] for t in range(2, 9)
+    ])
+    save_attention_state(str(tmp_path), "r8", 1, AttentionState(
+        run_id="r8", player_id=1,
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    # idle_poll_limit=3 < 5 slept turns: pre-fix the run died after 3 polls.
+    assert result["turns_slept"] == 5     # stopped by max_game_turns, not the idle budget
+    assert pol.calls == 0

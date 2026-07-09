@@ -133,9 +133,18 @@ async def test_puppet_capture_resets_idle_streak(monkeypatch):
         + [["LOCAL|0", "TURN|2", "ACTIVE|false", "LAST|1"]] * half
     )
     conn._polls = iter(polls)
+    # deadline_polls is now a consecutive-idle budget refilled on every
+    # captured turn (Task 7 / review-2 f8), not a fixed whole-run budget --
+    # `half + 1` is exactly enough to survive one `half`-length idle stretch
+    # (with margin to still reach the capture) and, after the mid-run
+    # refill, the second `half`-length stretch too, landing on 0 right as
+    # the canned polls run out. A larger limit would let the loop run past
+    # the canned iterator into FakeConn's StopIteration fallback (idle
+    # forever), racking up idle_streak past ORPHAN_SWEEP_IDLE_POLLS and
+    # firing a sweep the test isn't exercising.
     cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m")], max_puppet_turns=2,
                       dry_run=True, puppet_ids=[1],
-                      idle_poll_limit=2 * half + 2)
+                      idle_poll_limit=half + 1)
 
     await run_arena(conn, FakeGS(), cfg, policy=ScriptedPolicy())
 

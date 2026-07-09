@@ -172,7 +172,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
     try:
         await hook.inject(conn, sorted(puppet_ids))
         remaining = config.max_puppet_turns
-        deadline_polls = config.idle_poll_limit  # ~poll budget; human may take a while to end their turn
+        deadline_polls = config.idle_poll_limit  # consecutive-idle poll budget; refilled on every captured turn
         idle_streak = 0  # consecutive idle polls since the last puppet capture
         max_game_turns = getattr(config, "max_game_turns", 0)  # tolerate old test-stub configs
         while (
@@ -182,6 +182,11 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
             st = await hook.poll(conn)
             if st.active and st.local in puppet_ids:
                 idle_streak = 0
+                # A captured puppet turn is ACTIVITY: refill the idle budget.
+                # deadline_polls means "consecutive polls with nothing to do",
+                # not a whole-run cap that slept turns burn through without
+                # consuming max_puppet_turns (review-2 f8).
+                deadline_polls = config.idle_poll_limit
                 pol = policy_for(st.local)
                 exclusive = bool(getattr(pol, "needs_exclusive_tuner", False))
                 opts = getattr(pol, "options", CivOptions())
