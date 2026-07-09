@@ -364,6 +364,212 @@ def config_summary(records: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Task 11 — attention metrics (skip rate, wake causes, savings, false-quiet)
+# ---------------------------------------------------------------------------
+
+# Wake causes that legitimately explain a harmful outcome discovered on waking
+# (Task 8's exact vocabulary). Any other ending cause paired with harm is a
+# "false quiet" — the run stayed asleep through something that mattered and
+# only woke for an unrelated reason (or the run simply ended).
+_FALSE_QUIET_EXPECTED_CAUSES: frozenset[str] = frozenset({
+    "UNITS_LOST", "CITY_COUNT_CHANGED", "GOLD_CRASH", "ENEMY_NEAR", "CITY_DAMAGED",
+})
+
+
+def _turn_kind(rec: dict) -> str:
+    """Classify a transcript record as "slept" or "played".
+
+    Only ``slept is True`` counts as slept — defensive against any other
+    truthy-but-not-True value. Records with no ``slept`` key (pre-feature
+    transcripts, or a "skipped" turn that never reaches the transcript) read
+    as played.
+    """
+    return "slept" if rec.get("slept") is True else "played"
+
+
+def _attention_group_key(rec: dict) -> object:
+    pid = rec.get("player_id")
+    return pid if pid is not None else (rec.get("model") or rec.get("provider") or "unknown")
+
+
+def _attention_streaks(records: list[dict]) -> list[tuple[list[dict], str]]:
+    """Split ascending-turn records into (streak, ending_wake_cause) pairs.
+
+    A streak is a maximal run of consecutive slept records. Its ending wake
+    cause is the ``attention.wake_cause`` of the first played record after it,
+    or ``"RUN_END"`` if the streak runs to the end of the player's records.
+    """
+    streaks: list[tuple[list[dict], str]] = []
+    i, n = 0, len(records)
+    while i < n:
+        if _turn_kind(records[i]) != "slept":
+            i += 1
+            continue
+        j = i
+        while j < n and _turn_kind(records[j]) == "slept":
+            j += 1
+        streak = records[i:j]
+        if j < n:
+            att = records[j].get("attention") or {}
+            ending_cause = att.get("wake_cause") or "RUN_END"
+        else:
+            ending_cause = "RUN_END"
+        streaks.append((streak, ending_cause))
+        i = j
+    return streaks
+
+
+def _streak_is_false_quiet(streak: list[dict], ending_cause: str) -> bool:
+    """Harm = summed units < 0, summed cities < 0, or gold ended < 0 (started >= 0).
+
+    Records with ``state_delta is None`` contribute nothing (degrade, not
+    abort — mirrors the coordinator's own None-on-unknown-delta convention).
+    """
+    units_sum = 0
+    cities_sum = 0
+    gold_sum = 0
+    for rec in streak:
+        state_delta = rec.get("state_delta")
+        if state_delta is None:
+            continue
+        units_sum += state_delta.get("units", 0) or 0
+        cities_sum += state_delta.get("cities", 0) or 0
+        gold_sum += state_delta.get("gold", 0) or 0
+
+    harm = units_sum < 0 or cities_sum < 0 or gold_sum < 0
+    return harm and ending_cause not in _FALSE_QUIET_EXPECTED_CAUSES
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def attention_metrics(records: list[dict]) -> dict:
+    """Aggregate attention/turn-skipping metrics per player.
+
+    Returns a dict keyed per player (``player_id``, falling back to
+    ``model``/``provider``/``"unknown"`` for records without one — same
+    fallback as :func:`analyze`) with shape::
+
+        {
+          <player>: {
+            "captured": int,
+            "model_turns": int,
+            "slept_turns": int,
+            "skip_rate": float,
+            "max_streak": int,
+            "streak_histogram": {<streak length>: <count>},
+            "wake_causes": {<cause>: <count>},
+            "directive": {
+                "issued": int, "not_recognized": int,
+                "clamped": int, "unknown_tokens": int,
+            },
+            "savings": {
+                "llm_calls_avoided": int, "est_usd": float, "est_wall_clock_s": float,
+            },
+            "false_quiet": {
+                "streaks": int, "false_quiet_streaks": int, "rate": float,
+            },
+          }
+        }
+    """
+    by_player: dict = defaultdict(list)
+    for rec in records:
+        by_player[_attention_group_key(rec)].append(rec)
+
+    for key in by_player:
+        by_player[key].sort(key=lambda r: r.get("turn", 0))
+
+    result: dict = {}
+    for key, recs in by_player.items():
+        captured = len(recs)
+        slept_turns = sum(1 for r in recs if _turn_kind(r) == "slept")
+        model_turns = captured - slept_turns
+        skip_rate = slept_turns / captured if captured else 0.0
+
+        streaks = _attention_streaks(recs)
+        streak_lengths = [len(streak) for streak, _cause in streaks]
+        max_streak = max(streak_lengths) if streak_lengths else 0
+        streak_histogram: dict[int, int] = {}
+        for length in streak_lengths:
+            streak_histogram[length] = streak_histogram.get(length, 0) + 1
+
+        wake_causes: dict[str, int] = {}
+        for _streak, cause in streaks:
+            wake_causes[cause] = wake_causes.get(cause, 0) + 1
+
+        played_recs = [r for r in recs if _turn_kind(r) == "played"]
+        usd_values = [r.get("usd") for r in played_recs if r.get("usd") is not None]
+        wall_values = [
+            r.get("wall_clock_s") for r in played_recs if r.get("wall_clock_s") is not None
+        ]
+        est_usd = slept_turns * _mean(usd_values)
+        est_wall_clock_s = slept_turns * _mean(wall_values)
+
+        directive_issued = 0
+        directive_not_recognized = 0
+        directive_clamped = 0
+        directive_unknown_tokens = 0
+        for rec in played_recs:
+            att = rec.get("attention") or {}
+            if att.get("directive") is not None:
+                directive_issued += 1
+            ack = att.get("directive_ack") or ""
+            if ack == "directive not recognized":
+                directive_not_recognized += 1
+            if "(clamped)" in ack:
+                directive_clamped += 1
+            if "unknown tokens" in ack:
+                directive_unknown_tokens += 1
+
+        false_quiet_streaks = sum(
+            1 for streak, cause in streaks if _streak_is_false_quiet(streak, cause)
+        )
+        num_streaks = len(streaks)
+
+        result[key] = {
+            "captured": captured,
+            "model_turns": model_turns,
+            "slept_turns": slept_turns,
+            "skip_rate": skip_rate,
+            "max_streak": max_streak,
+            "streak_histogram": streak_histogram,
+            "wake_causes": wake_causes,
+            "directive": {
+                "issued": directive_issued,
+                "not_recognized": directive_not_recognized,
+                "clamped": directive_clamped,
+                "unknown_tokens": directive_unknown_tokens,
+            },
+            "savings": {
+                "llm_calls_avoided": slept_turns,
+                "est_usd": est_usd,
+                "est_wall_clock_s": est_wall_clock_s,
+            },
+            "false_quiet": {
+                "streaks": num_streaks,
+                "false_quiet_streaks": false_quiet_streaks,
+                "rate": (false_quiet_streaks / num_streaks) if num_streaks else 0.0,
+            },
+        }
+
+    return result
+
+
+def _has_attention_data(records: list[dict]) -> bool:
+    """True if any record carries a Task 10 attention/turn-skipping marker.
+
+    Guards ``analyze()``'s ``"attention"`` key so a pre-feature transcript
+    (no ``turn_kind``/``slept``/``attention`` keys anywhere) reads as falsy
+    and ``render_markdown`` skips the section entirely, instead of growing an
+    all-zeros "## Attention" table for runs that never had the feature on.
+    """
+    return any(
+        "turn_kind" in rec or "slept" in rec or "attention" in rec for rec in records
+    )
+
+
+# ---------------------------------------------------------------------------
 # Rubric helpers (turns 1-20, purely heuristic)
 # ---------------------------------------------------------------------------
 
@@ -690,6 +896,11 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
         "by_player": result,
         "config_summary": config_summary(transcript_records),
         "behavior": behavior_metrics(transcript_records),
+        "attention": (
+            attention_metrics(transcript_records)
+            if _has_attention_data(transcript_records)
+            else {}
+        ),
     }
 
 
@@ -781,6 +992,34 @@ def render_markdown(report: dict) -> str:
                 f"{pb.get('task_failed', 0)} | "
                 f"{pb.get('great_people_tool_calls', 0)} | {pb.get('trade_route_tool_calls', 0)} | "
                 f"{pb.get('religion_wc_tool_calls', 0)} |"
+            )
+        lines.append("")
+
+    attention: dict = report.get("attention", {})
+    if attention:
+        lines.append("## Attention\n")
+        lines.append(
+            "| player | captured | slept | skip rate | top wake causes | "
+            "est USD saved | false-quiet rate |"
+        )
+        lines.append(
+            "|--------|----------|-------|-----------|------------------|"
+            "---------------|-------------------|"
+        )
+        for pid, data in sorted(attention.items(), key=lambda item: _config_summary_sort_key(item[0])):
+            wake_causes = data.get("wake_causes", {})
+            top_causes = ", ".join(
+                f"{cause}={count}"
+                for cause, count in sorted(
+                    wake_causes.items(), key=lambda kv: (-kv[1], str(kv[0]))
+                )[:3]
+            ) or "—"
+            skip_rate = data.get("skip_rate", 0.0)
+            fq_rate = (data.get("false_quiet") or {}).get("rate", 0.0)
+            est_usd = (data.get("savings") or {}).get("est_usd", 0.0)
+            lines.append(
+                f"| {pid} | {data.get('captured', 0)} | {data.get('slept_turns', 0)} | "
+                f"{skip_rate:.1%} | {top_causes} | ${est_usd:.4f} | {fq_rate:.1%} |"
             )
         lines.append("")
 

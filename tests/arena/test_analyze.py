@@ -1714,3 +1714,53 @@ def test_behavior_counters_cover_new_slice4_tools():
     rel = [{"tool_name": "spread_religion", "tool_args": {}}]
     assert _count_tool_calls(gp, _GREAT_PEOPLE_TOOLS) == 1
     assert _count_tool_calls(rel, _RELIGION_WC_TOOLS) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — attention metrics (skip rate, wake causes, savings, false-quiet)
+# ---------------------------------------------------------------------------
+
+from civ_mcp.arena.analyze import attention_metrics
+
+
+def _slept(turn, units_delta=0, cities_delta=0):
+    return {"player_id": 1, "turn": turn, "turn_kind": "slept", "slept": True,
+            "usd": 0.0, "state_delta": {"units": units_delta, "cities": cities_delta,
+                                        "gold": 5, "score": 1, "science": 0,
+                                        "culture": 0, "faith": 0}}
+
+
+def _played(turn, wake_cause=None, usd=0.02):
+    rec = {"player_id": 1, "turn": turn, "turn_kind": "played", "usd": usd,
+           "transcript_noise": True}
+    if wake_cause is not None:
+        rec["attention"] = {"decision": "woke", "wake_cause": wake_cause,
+                            "directive": None, "directive_ack": ""}
+    return rec
+
+
+def test_attention_metrics_counts_and_savings():
+    recs = [_played(1), _slept(2), _slept(3), _played(4, "STREAK_CAP")]
+    m = attention_metrics(recs)[1]
+    assert m["captured"] == 4 and m["slept_turns"] == 2 and m["model_turns"] == 2
+    assert m["skip_rate"] == 0.5 and m["max_streak"] == 2
+    assert m["wake_causes"] == {"STREAK_CAP": 1}
+    assert m["savings"]["llm_calls_avoided"] == 2
+    assert abs(m["savings"]["est_usd"] - 0.04) < 1e-9
+
+
+def test_false_quiet_detected():
+    # a unit died mid-streak but the wake was STREAK_CAP -> false quiet
+    recs = [_played(1), _slept(2, units_delta=-1), _played(3, "STREAK_CAP")]
+    m = attention_metrics(recs)[1]
+    assert m["false_quiet"] == {"streaks": 1, "false_quiet_streaks": 1, "rate": 1.0}
+
+
+def test_true_quiet_not_flagged():
+    recs = [_played(1), _slept(2, units_delta=-1), _played(3, "UNITS_LOST")]
+    assert attention_metrics(recs)[1]["false_quiet"]["false_quiet_streaks"] == 0
+
+
+def test_pre_feature_records_read_as_played():
+    m = attention_metrics([{"player_id": 1, "turn": 1, "usd": 0.0}])
+    assert m[1]["captured"] == 1 and m[1]["slept_turns"] == 0
