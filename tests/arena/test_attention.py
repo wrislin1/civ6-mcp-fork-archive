@@ -51,6 +51,9 @@ def test_first_parsed_skip_wins():
     "hold until turn 340",
     "maybe in 3 if peaceful",
     "after 2 more builds",
+    "for3",
+    "sleeping 3",
+    "for skip 3",
 ])
 def test_digit_bearing_prose_is_not_a_directive(body):
     """Review-2 finding 6: a stray digit inside prose must not become a
