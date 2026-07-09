@@ -96,6 +96,18 @@ def test_attention_independent_of_standing_plan():
     assert "STANDING PLAN" not in out and "SKIP:" in out
 
 
+def test_attention_instruction_skip_range_matches_default_max_skip():
+    """The '1-5' range is literal prompt text on purpose (no invisible
+    drift); this pin breaks loudly if AttentionOptions.max_skip's default
+    changes without the prompt following (review-2 scope note)."""
+    from civ_mcp.arena.agent import load_playbook
+    from civ_mcp.arena.config import AttentionOptions
+
+    default = AttentionOptions().max_skip
+    assert f"<1-{default}>" in ATTENTION_INSTRUCTION
+    assert f"SKIP n (1-{default})" in load_playbook()
+
+
 # ---------------------------------------------------------------------------
 # Local policy uses build_opening_prompt via a fake backend
 # ---------------------------------------------------------------------------

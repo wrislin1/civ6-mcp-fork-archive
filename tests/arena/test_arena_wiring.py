@@ -372,3 +372,12 @@ def test_max_game_turns_rejected_with_config(tmp_path):
     args = build_args(["--config", str(exp), "--max-game-turns", "5"])
     with pytest.raises(SystemExit, match="config-owned"):
         resolve_config(args)
+
+
+def test_negative_max_game_turns_rejected_on_cli():
+    """YAML validates max_game_turns >= 0; the CLI path must too -- a
+    negative silently means 'uncapped' via the `<= 0` loop guard
+    (review-2 scope note)."""
+    args = build_args(["--player", "1:local:m", "--max-game-turns", "-3"])
+    with pytest.raises(SystemExit):
+        resolve_config(args)

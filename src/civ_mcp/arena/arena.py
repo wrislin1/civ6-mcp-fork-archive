@@ -91,6 +91,11 @@ def resolve_config(args) -> ArenaConfig:
         raise SystemExit("--config and --player are mutually exclusive")
     max_puppet_turns_arg = getattr(args, "max_puppet_turns", None)
     max_game_turns_arg = getattr(args, "max_game_turns", None)
+    if max_game_turns_arg is not None and max_game_turns_arg < 0:
+        # The YAML path enforces >= 0 (experiment._top_non_negative_int); a
+        # negative from the CLI silently reads as "uncapped" through the
+        # `max_game_turns <= 0` loop guard (review-2 scope note).
+        raise SystemExit("--max-game-turns must be an integer >= 0")
     gateway_url_arg = getattr(args, "gateway_url", None)
     idle_poll_limit_arg = getattr(args, "idle_poll_limit", None)
     max_agent_steps_arg = getattr(args, "max_agent_steps", None)
