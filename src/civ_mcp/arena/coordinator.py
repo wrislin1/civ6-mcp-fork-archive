@@ -303,7 +303,7 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         # state rewrites the baselines and its save self-heals
                         # the file.
                         att_state = AttentionState(run_id=run_id, player_id=st.local)
-                        decision = Decision("wake", "STATE_CORRUPT")
+                        decision = Decision("wake", "STATE_CORRUPT", repr(e)[:200])
                         print(f"[arena] attention evaluate failed; reset + wake: {e!r}",
                               file=sys.stderr)
                 if decision is not None and decision.action == "sleep":
@@ -579,6 +579,9 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     wake_attention_fields = {
                         "mode": attention_mode, "decision": "woke",
                         "wake_cause": wake_cause,
+                        "wake_detail": (
+                            decision.wake_detail if decision is not None else ""
+                        ),
                         "directive": (
                             {"skip": directive.skip, "wake_if": list(directive.wake_if)}
                             if directive else None

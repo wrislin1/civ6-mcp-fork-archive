@@ -1965,6 +1965,8 @@ async def test_corrupt_snapshot_resets_and_wakes_not_aborts(tmp_path):
     assert result["puppet_turns_played"] == 1
     rec = sink.records[-1]
     assert rec["attention"]["wake_cause"] == "STATE_CORRUPT"
+    assert rec["attention"]["wake_detail"]  # exception repr recorded (review-3 f5)
+    assert "Error" in rec["attention"]["wake_detail"]  # repr(e) carries the class name
     healed = load_attention_state(str(tmp_path), "rc1", 1)
     assert healed.last_snapshot is not None
     # note_wake rewrote the baseline from the post-turn overview snapshot
@@ -2002,7 +2004,9 @@ async def test_corrupt_directive_resets_and_wakes_not_aborts(tmp_path):
 
     assert pol.calls == 1
     assert result["puppet_turns_played"] == 1
-    assert sink.records[-1]["attention"]["wake_cause"] == "NO_BASELINE"
+    rec = sink.records[-1]
+    assert rec["attention"]["wake_cause"] == "NO_BASELINE"
+    assert rec["attention"]["wake_detail"] == ""
 
 
 @pytest.mark.asyncio
