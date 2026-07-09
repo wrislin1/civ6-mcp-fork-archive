@@ -302,3 +302,20 @@ def test_wake_detail_not_misattributed():
     d = evaluate("auto", _st(), busy, SNAP, max_streak=5, task_event=True)
     assert d.wake_cause == "TASK_EVENT" and d.wake_detail == ""
     assert "TASK_EVENT" in d.hard and "ENEMY_NEAR" in d.hard
+
+
+def test_cancel_remainder_keeps_digest_and_streak():
+    """Final-review Important 2 helper: cancelling a stale directive must zero
+    only skips_remaining -- the slept accumulator (digest) and streak (its cap
+    keeps bounding model-free turns) survive, and the issued-directive record
+    stays for the ack/metrics trail."""
+    from civ_mcp.arena.attention import cancel_remainder
+
+    st = _st(directive={"skip": 3, "wake_if": []}, skips_remaining=3)
+    st = note_sleep(st, turn=45, snapshot=st.last_snapshot, scan_scalars=st.last_scan,
+                    task_notes=[], notifications=[])
+    assert st.skips_remaining == 2 and st.streak == 1
+    st = cancel_remainder(st)
+    assert st.skips_remaining == 0
+    assert len(st.slept) == 1 and st.streak == 1
+    assert st.directive == {"skip": 3, "wake_if": []}

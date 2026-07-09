@@ -9,6 +9,7 @@ from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.attention import (
     AttentionState,
     build_attention_query,
+    cancel_remainder,
     evaluate,
     has_directive_lines,
     load_attention_state,
@@ -451,6 +452,19 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                           f"skipping: {e!r}", file=sys.stderr)
                     log.append({"turn": st.turn, "player_id": st.local,
                                 "skipped": True, "error": repr(e)})
+                    if attention_on and att_state is not None and att_state.skips_remaining > 0:
+                        # Spec section 3: ANY wake cancels the directive remainder.
+                        # This failed turn WAS a wake decision -- note_wake never
+                        # runs on this path, so cancel here or the seat resumes a
+                        # stale sleep right after the system misbehaved
+                        # (final-review Important 2). Keeps the slept accumulator
+                        # so the digest survives to the eventual successful wake.
+                        att_state = cancel_remainder(att_state)
+                        try:
+                            save_attention_state(transcript_dir, run_id, st.local, att_state)
+                        except Exception as save_exc:
+                            print(f"[arena] attention state save failed: {save_exc!r}",
+                                  file=sys.stderr)
                     if not conn.is_connected:
                         await _reconnect_with_retry(conn)
                     await hook.finish_units(conn, st.local)

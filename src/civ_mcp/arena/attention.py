@@ -217,6 +217,20 @@ def note_wake(
     )
 
 
+def cancel_remainder(state: AttentionState) -> AttentionState:
+    """Cancel an active directive's remaining sleeps without the full wake
+    bookkeeping.
+
+    For the failed-policy-turn seam (final-review Important 2): a wake whose
+    LLM call failed never reaches ``note_wake``, and spec section 3 says any
+    wake cancels the remainder -- otherwise the seat resumes a stale sleep
+    right after the system misbehaved. Keeps the ``slept`` accumulator (the
+    digest must survive to the eventual successful wake) and the streak (its
+    cap keeps bounding the run of model-free turns).
+    """
+    return replace(state, skips_remaining=0)
+
+
 def render_digest(
     state: AttentionState, *, wake_turn: int, wake_cause: str, wake_detail: str
 ) -> str:

@@ -1824,3 +1824,53 @@ async def test_partial_snapshot_state_delta_none(tmp_path):
     assert rec["turn_kind"] == "slept"
     assert rec["state_delta"] is None          # unknown delta, degrade not abort
     assert conn.restored
+
+
+class RaisingPolicy:
+    def __init__(self, options):
+        self.options = options
+    async def __call__(self, gs, player_id, turn, **kw):
+        raise RuntimeError("boom")
+
+
+@pytest.mark.asyncio
+async def test_failed_wake_cancels_directive_remainder(tmp_path, monkeypatch):
+    """Final-review Important 2: a wake decision whose policy call fails never
+    reaches note_wake -- the failed-turn branch must still cancel the directive
+    remainder (spec section 3: ANY wake cancels), or the seat resumes a stale
+    sleep on the next captured turn. The slept accumulator survives so the
+    digest reaches the eventual successful wake."""
+    from civ_mcp.arena.attention import (
+        AttentionState,
+        load_attention_state,
+        save_attention_state,
+    )
+    from civ_mcp.arena.config import AttentionOptions
+
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="model"))
+    pol = RaisingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r7", puppet_ids=[1])
+    slept_record = {"turn": 1, "snapshot": dict(_ATTN_BASELINE_SNAPSHOT),
+                    "task_notes": [], "notifications": []}
+    save_attention_state(str(tmp_path), "r7", 1, AttentionState(
+        run_id="r7", player_id=1,
+        directive={"skip": 3, "wake_if": []},
+        skips_remaining=2, streak=1,
+        last_snapshot=None,   # no baseline -> NO_BASELINE wake regardless of directive
+        last_scan=None,
+        slept=[slept_record]))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert result["puppet_turns_played"] == 0
+    assert any(entry.get("skipped") for entry in result["log"])   # the failed turn
+    st = load_attention_state(str(tmp_path), "r7", 1)
+    assert st.skips_remaining == 0            # stale sleep cancelled
+    assert len(st.slept) == 1                 # digest accumulator survives
+    assert st.streak == 1                     # streak keeps bounding model-free turns
