@@ -273,7 +273,7 @@ explicitly **v2**.
 
 ### Cadence & caps
 
-- `SKIP: n` clamps to **1–5**.
+- `SKIP: n` clamps to **1–`max_skip`** (default 5).
 - Coordinator-side **max skip streak: 5**, independent of directives — the bound on
   everything the scan structurally can't see (including `auto` mode's
   proactive-opportunity blindness: trade routes to start, tiles to buy, policies to
