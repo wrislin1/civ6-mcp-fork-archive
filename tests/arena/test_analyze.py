@@ -1851,3 +1851,15 @@ def test_has_attention_data_ignores_bare_turn_kind():
     assert _has_attention_data([{"attention": {"decision": "woke"}}]) is True
     assert _has_attention_data([{"slept": True}]) is True
     assert _has_attention_data([]) is False
+
+
+def test_rubric_ignores_slept_records():
+    """Review-3 f4: a slept turn's state_delta spans the whole sleep; an
+    AI-founded city during sleep must not set founded_extra_city."""
+    from civ_mcp.arena.analyze import _rubric_for_model
+
+    slept = {"turn": 5, "slept": True, "state_delta": {"cities": 1}}
+    assert _rubric_for_model([slept])["founded_extra_city"] is None
+
+    played = {"turn": 6, "state_delta": {"cities": 1}}
+    assert _rubric_for_model([played])["founded_extra_city"] is not None

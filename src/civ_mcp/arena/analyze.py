@@ -664,7 +664,13 @@ def _rubric_for_model(records: list[dict]) -> dict:
         "truncation_bad_move": None,
     }
 
-    early = [r for r in records if r.get("turn", 0) <= 20]
+    # Slept turns carry a cross-sleep state_delta and no model steps; an
+    # AI-founded city during sleep must not read as model competence
+    # (review-3 f4).
+    early = [
+        r for r in records
+        if r.get("turn", 0) <= 20 and _turn_kind(r) == "played"
+    ]
 
     for rec in early:
         turn: int = rec.get("turn", 0)
