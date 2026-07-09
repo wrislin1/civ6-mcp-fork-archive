@@ -203,3 +203,92 @@ def test_build_query_int_casts():
 def test_scan_scalars_shape():
     scan = parse_attention_scan(QUIET_LINES)
     assert scan_scalars(scan) == {"at_war_with": [], "era_index": 1, "total_population": 12}
+
+
+from civ_mcp.arena.attention import Decision, evaluate
+
+QUIET = parse_attention_scan(QUIET_LINES)
+SNAP = {"score": 100, "gold": 200, "units": 4, "cities": 2}
+
+
+def _st(**kw):
+    base = dict(run_id="r", player_id=1, last_snapshot=dict(SNAP),
+                last_scan={"at_war_with": [], "era_index": 1, "total_population": 12})
+    base.update(kw)
+    return AttentionState(**base)
+
+
+# (mode, state kwargs, scan, snapshot, task_event) -> (action, wake_cause)
+MATRIX = [
+    # quiet world, no directive
+    ("auto",   {},                                        QUIET, SNAP, False, "sleep", None),
+    ("model",  {},                                        QUIET, SNAP, False, "wake", "NO_DIRECTIVE"),
+    ("hybrid", {},                                        QUIET, SNAP, False, "sleep", None),
+    # quiet world, active directive
+    ("model",  {"skips_remaining": 2, "directive": {"skip": 3, "wake_if": []}},
+                                                          QUIET, SNAP, False, "sleep", None),
+    # streak cap beats everything quiet
+    ("auto",   {"streak": 5},                             QUIET, SNAP, False, "wake", "STREAK_CAP"),
+    # scan/baseline failures
+    ("auto",   {},                                        None,  SNAP, False, "wake", "SCAN_ERROR"),
+    ("auto",   {"last_snapshot": None, "last_scan": None}, QUIET, SNAP, False, "wake", "NO_BASELINE"),
+    # task event is a hard wake in every mode (external-review finding 6)
+    ("auto",   {},                                        QUIET, SNAP, True,  "wake", "TASK_EVENT"),
+    ("hybrid", {"skips_remaining": 3, "directive": {"skip": 3, "wake_if": []}},
+                                                          QUIET, SNAP, True,  "wake", "TASK_EVENT"),
+]
+
+
+@pytest.mark.parametrize("mode,st_kw,scan,snap,task_event,action,cause", MATRIX)
+def test_skip_decision_matrix(mode, st_kw, scan, snap, task_event, action, cause):
+    d = evaluate(mode, _st(**st_kw), scan, snap, max_streak=5, task_event=task_event)
+    assert (d.action, d.wake_cause) == (action, cause)
+
+
+def test_hard_triggers_fire():
+    busy = parse_attention_scan([
+        "ATTN|THREAT|count=1|nearest=Warrior d2 near Suwon", *QUIET_LINES[1:],
+    ])
+    d = evaluate("auto", _st(), busy, SNAP, max_streak=5, task_event=False)
+    assert d.action == "wake" and d.wake_cause == "ENEMY_NEAR"
+    assert "Suwon" in d.wake_detail
+
+def test_units_lost_delta_wakes():
+    d = evaluate("auto", _st(), QUIET, {**SNAP, "units": 3}, max_streak=5, task_event=False)
+    assert d.wake_cause == "UNITS_LOST"
+
+def test_gold_crash_projection():
+    st = _st(last_snapshot={**SNAP, "gold": 100})
+    d = evaluate("auto", st, QUIET, {**SNAP, "gold": 60}, max_streak=5, task_event=False)
+    assert d.wake_cause == "GOLD_CRASH"  # 60 + 5*(-40) < 0
+
+def test_scan_partial_wakes():
+    partial = parse_attention_scan([*QUIET_LINES[1:], "ATTN_ERR|THREAT"])
+    d = evaluate("auto", _st(), partial, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "SCAN_PARTIAL"
+
+def test_soft_trigger_requires_subscription():
+    grown = parse_attention_scan([l.replace("total=12", "total=13") for l in QUIET_LINES])
+    st_sub = _st(skips_remaining=2, directive={"skip": 3, "wake_if": ["CITY_GREW"]})
+    st_nosub = _st(skips_remaining=2, directive={"skip": 3, "wake_if": []})
+    assert evaluate("hybrid", st_sub, grown, SNAP, max_streak=5, task_event=False).wake_cause == "CITY_GREW"
+    assert evaluate("hybrid", st_nosub, grown, SNAP, max_streak=5, task_event=False).action == "sleep"
+
+def test_soft_triggers_ignored_in_auto():
+    grown = parse_attention_scan([l.replace("total=12", "total=13") for l in QUIET_LINES])
+    st = _st(skips_remaining=2, directive={"skip": 3, "wake_if": ["CITY_GREW"]})
+    assert evaluate("auto", st, grown, SNAP, max_streak=5, task_event=False).action == "sleep"
+
+def test_blocker_wakes_with_type_name():
+    blocked = parse_attention_scan([
+        *QUIET_LINES[:10], "ATTN|BLOCKERS|types=NOTIFICATION_PRODUCTION",
+    ])
+    d = evaluate("auto", _st(), blocked, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "BLOCKER_NOTIFICATION_PRODUCTION"
+
+def test_notification_wake_list():
+    noisy = parse_attention_scan([
+        *QUIET_LINES, "ATTN|NOTIFY|type=NOTIFICATION_REBELLION|msg=Rebels!",
+    ])
+    d = evaluate("auto", _st(), noisy, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "NOTIFICATION_WAKE"

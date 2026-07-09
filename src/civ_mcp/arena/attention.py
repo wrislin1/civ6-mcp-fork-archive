@@ -650,3 +650,103 @@ def build_attention_query(player_id: int, threat_radius: int) -> str:
     return _ATTENTION_LUA.replace("__PID__", str(int(player_id))).replace(
         "__RADIUS__", str(int(threat_radius))
     )
+
+
+# --- Decision & evaluation (Task 8) -----------------------------------------------
+
+GOLD_STOCKPILE_THRESHOLD = 500
+
+
+@dataclass(frozen=True)
+class Decision:
+    action: str                    # "sleep" | "wake"
+    wake_cause: str | None = None
+    wake_detail: str = ""
+    hard: tuple[str, ...] = ()
+    soft: tuple[str, ...] = ()
+
+
+def _hard_triggers(
+    state: AttentionState, scan: AttentionScan, snapshot: dict, task_event: bool
+) -> "tuple[list[str], str]":
+    prev = state.last_snapshot or {}
+    prev_scan = state.last_scan or {}
+    hard: list[str] = []
+    detail = ""
+    if task_event:
+        hard.append("TASK_EVENT")
+    if snapshot.get("units", 0) < prev.get("units", 0):
+        hard.append("UNITS_LOST")
+    if snapshot.get("cities", 0) != prev.get("cities", 0):
+        hard.append("CITY_COUNT_CHANGED")
+    gold, prev_gold = snapshot.get("gold"), prev.get("gold")
+    if (
+        isinstance(gold, (int, float)) and isinstance(prev_gold, (int, float))
+        and gold < prev_gold and gold + 5 * (gold - prev_gold) < 0
+    ):
+        hard.append("GOLD_CRASH")
+    if scan.blocker_types:
+        hard.append(f"BLOCKER_{scan.blocker_types[0]}")
+    if scan.hostile_count > 0:
+        hard.append("ENEMY_NEAR")
+        detail = detail or scan.nearest_hostile
+    if scan.damaged_city_ids:
+        hard.append("CITY_DAMAGED")
+    if set(scan.at_war_with) != set(prev_scan.get("at_war_with", [])):
+        hard.append("WAR_PEACE_CHANGED")
+    if scan.negative_loyalty_city_ids:
+        hard.append("LOYALTY_NEGATIVE")
+    if scan.wc_turns_until_next == 0:
+        hard.append("WC_SESSION")
+    prev_era = prev_scan.get("era_index", -1)
+    if scan.era_index >= 0 and prev_era >= 0 and scan.era_index != prev_era:
+        hard.append("ERA_CHANGED")
+    if any(ntype in NOTIFICATION_WAKE_LIST for ntype, _ in scan.notifications):
+        hard.append("NOTIFICATION_WAKE")
+    if scan.pending_diplomacy:
+        hard.append("BLOCKER_DIPLOMACY_SESSION")
+    return hard, detail
+
+
+def evaluate(
+    mode: str, state: AttentionState, scan: AttentionScan | None,
+    snapshot: dict | None, *, max_streak: int, task_event: bool,
+) -> Decision:
+    if scan is None or snapshot is None:
+        return Decision("wake", "SCAN_ERROR")
+    if scan.failed_families:
+        return Decision("wake", "SCAN_PARTIAL", ",".join(scan.failed_families))
+    if state.last_snapshot is None or state.last_scan is None:
+        return Decision("wake", "NO_BASELINE")
+    hard, detail = _hard_triggers(state, scan, snapshot, task_event)
+    if hard:
+        return Decision("wake", hard[0], detail, hard=tuple(hard))
+    if state.streak >= max_streak:
+        return Decision("wake", "STREAK_CAP")
+    directive_active = state.skips_remaining > 0
+    if mode in ("model", "hybrid") and directive_active:
+        subscribed = tuple((state.directive or {}).get("wake_if", []))
+        soft: list[str] = []
+        if "GREAT_PERSON_AVAILABLE" in subscribed and scan.great_person_available:
+            soft.append("GREAT_PERSON_AVAILABLE")
+        if (
+            "CITY_GREW" in subscribed
+            and scan.total_population > state.last_scan.get("total_population", 0)
+        ):
+            soft.append("CITY_GREW")
+        if "TRADE_ROUTE_IDLE" in subscribed and scan.trade_route_idle:
+            soft.append("TRADE_ROUTE_IDLE")
+        if (
+            "GOLD_STOCKPILE_HIGH" in subscribed
+            and snapshot.get("gold", 0) >= GOLD_STOCKPILE_THRESHOLD
+        ):
+            soft.append("GOLD_STOCKPILE_HIGH")
+        if soft:
+            return Decision("wake", soft[0], soft=tuple(soft))
+    if mode == "auto":
+        return Decision("sleep")
+    if mode == "model":
+        return Decision("sleep") if directive_active else Decision("wake", "NO_DIRECTIVE")
+    if mode == "hybrid":
+        return Decision("sleep")
+    return Decision("wake", "SCAN_ERROR")  # unknown mode: defensive fail-open
