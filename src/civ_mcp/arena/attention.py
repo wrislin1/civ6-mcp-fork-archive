@@ -441,6 +441,7 @@ def scan_scalars(scan: AttentionScan) -> dict:
 _ATTENTION_LUA = """
 local me = __PID__
 local radius = __RADIUS__
+local wakeTypes = {__WAKELIST__}
 local p = Players[me]
 local pDiplo = p:GetDiplomacy()
 local function fam(name, fn)
@@ -644,22 +645,33 @@ fam("BLOCKERS", function()
 end)
 fam("NOTIFY", function()
     local list = NotificationManager.GetList(me)
+    if not list then return end
     local emitted = 0
-    if list then
-        for _, nid in ipairs(list) do
-            if emitted >= 10 then break end
-            -- per-entry pcall (notifications.py:53-102 idiom): one malformed
-            -- notification skips itself, not the rest of the list
-            pcall(function()
-                local entry = NotificationManager.Find(me, nid)
-                if entry and not entry:IsDismissed() then
-                    local typeName = entry:GetTypeName() or "UNKNOWN"
+    local function tryEmit(nid, wantWake)
+        -- per-entry pcall (notifications.py:53-102 idiom): one malformed
+        -- notification skips itself, not the rest of the list
+        pcall(function()
+            local entry = NotificationManager.Find(me, nid)
+            if entry and not entry:IsDismissed() then
+                local typeName = entry:GetTypeName() or "UNKNOWN"
+                if (wakeTypes[typeName] == true) == wantWake then
                     local msg = (entry:GetMessage() or ""):gsub("|", "/")
                     print("ATTN|NOTIFY|type=" .. typeName .. "|msg=" .. msg)
                     emitted = emitted + 1
                 end
-            end)
-        end
+            end
+        end)
+    end
+    -- pass 1: wake-list types always make the cut, whatever their list
+    -- position (review-2 f5: SPY_CAUGHT has no redundant trigger family)
+    for _, nid in ipairs(list) do
+        if emitted >= 10 then break end
+        tryEmit(nid, true)
+    end
+    -- pass 2: fill the remaining slots with everything else, list order
+    for _, nid in ipairs(list) do
+        if emitted >= 10 then break end
+        tryEmit(nid, false)
     end
 end)
 print("{SENTINEL}")
@@ -667,8 +679,15 @@ print("{SENTINEL}")
 
 
 def build_attention_query(player_id: int, threat_radius: int) -> str:
-    return _ATTENTION_LUA.replace("__PID__", str(int(player_id))).replace(
-        "__RADIUS__", str(int(threat_radius))
+    # sorted() so the query text is deterministic (test + cache friendliness)
+    wake_entries = ", ".join(
+        f'["{name}"]=true' for name in sorted(NOTIFICATION_WAKE_LIST)
+    )
+    return (
+        _ATTENTION_LUA
+        .replace("__PID__", str(int(player_id)))
+        .replace("__RADIUS__", str(int(threat_radius)))
+        .replace("__WAKELIST__", wake_entries)
     )
 
 

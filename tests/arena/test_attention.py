@@ -134,6 +134,7 @@ def test_run_or_player_mismatch_resets(tmp_path):
 
 from civ_mcp.arena.attention import (
     AttentionScan,
+    NOTIFICATION_WAKE_LIST,
     build_attention_query,
     parse_attention_scan,
     scan_scalars,
@@ -218,6 +219,16 @@ def test_hard_family_lua_propagates_errors():
     q = build_attention_query(1, 4)
     assert "pcall" not in _lua_family_segment(q, "CITYHP", "LOYALTY")
     assert "pcall" not in _lua_family_segment(q, "LOYALTY", "WC")
+
+
+def test_attention_query_embeds_wake_list_priority():
+    """Review-2 finding 5: NOTIFY must emit wake-list types first so they can
+    never be truncated out by the 10-line cap (SPY_CAUGHT has no redundant
+    trigger family)."""
+    q = build_attention_query(1, 4)
+    for name in NOTIFICATION_WAKE_LIST:
+        assert f'["{name}"]=true' in q
+    assert "__WAKELIST__" not in q
 
 
 from civ_mcp.arena.attention import Decision, evaluate
