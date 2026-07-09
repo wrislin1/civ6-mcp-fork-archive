@@ -548,7 +548,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         task_tracker_error = repr(e)
                         print(f"[arena] task tracker capture failed: {e!r}", file=sys.stderr)
 
-                state_after = await _overview_snapshot(gs) if _tx_on else None
+                # Attention needs the POST-play snapshot as the next wake
+                # baseline even with transcripts off (review-2 finding 2) --
+                # note_wake's state_before fallback would otherwise bake the
+                # puppet's own turn into the next quiet-turn delta.
+                state_after = (
+                    await _overview_snapshot(gs) if (_tx_on or attention_on) else None
+                )
                 directive = None
                 directive_ack = ""
                 wake_attention_fields = None

@@ -1999,3 +1999,35 @@ async def test_corrupt_directive_resets_and_wakes_not_aborts(tmp_path):
     assert pol.calls == 1
     assert result["puppet_turns_played"] == 1
     assert sink.records[-1]["attention"]["wake_cause"] == "STATE_CORRUPT"
+
+
+@pytest.mark.asyncio
+async def test_wake_baseline_is_post_play_with_transcripts_off(tmp_path, monkeypatch):
+    """Review-2 finding 2: state_after was gated on _tx_on only, so with
+    transcripts off note_wake stored the PRE-play snapshot as the next wake
+    baseline -- the following quiet turn's hard triggers would compare
+    against a state that predates the puppet's own actions."""
+    from civ_mcp.arena import coordinator as coord
+    from civ_mcp.arena.attention import load_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    calls = []
+    async def fake_snapshot(_gs):
+        calls.append(1)
+        return {**_ATTN_BASELINE_SNAPSHOT, "units": 5 + len(calls)}
+    monkeypatch.setattr(coord, "_overview_snapshot", fake_snapshot)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn)
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="rt2", puppet_ids=[1])
+
+    # transcripts OFF; no seeded baseline -> NO_BASELINE wake
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=None)
+
+    assert result["puppet_turns_played"] == 1
+    assert len(calls) == 2                       # before AND after now taken
+    st = load_attention_state(str(tmp_path), "rt2", 1)
+    assert st.last_snapshot["units"] == 7        # the POST-play (2nd) snapshot
