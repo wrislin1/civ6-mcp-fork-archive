@@ -97,7 +97,13 @@ already proven live — low engine risk, still probed (Section 6).
 behavior, never abort the run. Directive unparseable → no directive. Skip-state
 file corrupt → reset + wake (the `save_memory` poison-file self-heal convention).
 Trigger scan raises → wake. Failures can only produce *more* model turns, never
-more blind skips.
+more blind skips. Persisted-but-wrong-typed state (dict-shaped, e.g.
+`last_snapshot={"units":"5"}`) passes the load-time shape check but raises
+inside `evaluate()`'s comparisons; the coordinator wraps `evaluate()` in its own
+try/except for exactly this, producing wake cause **`STATE_CORRUPT`** —
+persisted attention state was dict-shaped but wrong-typed; state reset + wake
+(never abort). `note_wake`'s save on the fresh state self-heals the file, same
+as any other corrupt-state path.
 
 ### Config contract
 
@@ -123,7 +129,12 @@ more blind skips.
 
 **`max_game_turns`** — new `ArenaConfig` field capping ALL captured turns
 (played, slept, or failed). Default `0` = uncapped (slept turns stay bounded
-by `idle_poll_limit` and the streak cap). Wired everywhere `max_puppet_turns`
+by `idle_poll_limit` and the streak cap). `idle_poll_limit` is a
+**consecutive-idle** poll budget, not a whole-run cap: `deadline_polls`
+refills to its configured value on every captured puppet turn — played,
+slept, or failed — so it only bites during a genuinely idle stretch (no
+puppet civ active), never as a side effect of a long sleep streak. Wired
+everywhere `max_puppet_turns`
 already is: top-level YAML key (`_TOP_KEYS`), CLI `--max-game-turns`, and the
 suppressed `--config-default-max-game-turns` passthrough.
 
@@ -167,9 +178,19 @@ fields, one per hard-trigger family:
   orphan-sweep session-read idiom)
 - `total_population`, `great_person_available`, `trade_route_idle` — feed the
   soft triggers (`CITY_GREW` via stored-population delta, the others directly)
-- `notifications`: (type, summary) pairs for wake-list matching + digest
-- Every family is individually `pcall`-guarded in the Lua; a failed family is
-  reported and → WAKE (partial scans never silently narrow attention)
+- `notifications`: (type, summary) pairs for wake-list matching + digest.
+  NOTIFY reads the list in two passes — wake-list types first, then
+  everything else — so a wake-worthy entry is never crowded out of the
+  shared 10-line cap by list position.
+- Every family is individually `pcall`-guarded in the Lua, but the two tiers
+  handle a failed guard differently. Hard-trigger families — e.g. **CITYHP**
+  and **LOYALTY** — are strict: a failure propagates to `ATTN_ERR|<FAMILY>` →
+  `failed_families` → `SCAN_PARTIAL` wake (partial scans never silently
+  narrow attention). **GP** and **TRADE** are the deliberate exception —
+  soft-trigger tier, degrade-tolerant by design: their inner `pcall`s swallow
+  failures locally (a loud failure would wake every turn for an opt-in
+  signal), so a GP/TRADE glitch degrades that one soft signal instead of
+  forcing a wake.
 
 **Attention snapshots are not transcript-gated.** Today `_overview_snapshot`
 runs only when transcripts are on (`_tx_on`); with attention mode ≠ `off`, the
@@ -293,6 +314,13 @@ tracker-off civ can still sleep.
   it re-issues the directive if it still wants quiet — sleep is always freshly
   chosen against current information.
 - `WAKE IF:` without `SKIP:` is inert (logged). Directives in `off`/`auto` are ignored.
+- `WAKE IF:` subscriptions are gated on **the issuing directive standing** —
+  cleared/replaced on every wake (`note_wake`) — not on skips remaining. In
+  `hybrid`, once the `SKIP: n` count is spent the seat keeps auto-sleeping
+  under the mode's own quiet test, and subscriptions keep being honored
+  through that auto-sleep tail after the skip count is spent; a subscription
+  never outlives its sleep streak because the directive itself is cleared at
+  wake.
 - Playbook gains a short section: exact format, the trigger enum, when skipping is
   smart (consolidation, long builds, peacetime fortification) and when not (war,
   unsettled settlers, crisis).
