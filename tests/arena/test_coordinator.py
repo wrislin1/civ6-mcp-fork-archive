@@ -1976,8 +1976,12 @@ async def test_corrupt_snapshot_resets_and_wakes_not_aborts(tmp_path):
 
 @pytest.mark.asyncio
 async def test_corrupt_directive_resets_and_wakes_not_aborts(tmp_path):
-    """Same contract for a corrupt directive: wake_if=5 makes the subscription
-    tuple() call raise; must degrade to STATE_CORRUPT wake, not abort."""
+    """Same contract for a corrupt directive: wake_if=5 is now caught by
+    load_attention_state's value-type validation (review-3 f1) before
+    evaluate() ever runs -- fresh state, NO_BASELINE wake, not abort. (The
+    evaluate()-level TypeError backstop this used to exercise now only fires
+    for state constructed outside load; see
+    test_evaluate_raises_on_non_list_wake_if in test_attention.py.)"""
     from civ_mcp.arena.attention import AttentionState, save_attention_state
     from civ_mcp.arena.config import AttentionOptions
 
@@ -1998,7 +2002,7 @@ async def test_corrupt_directive_resets_and_wakes_not_aborts(tmp_path):
 
     assert pol.calls == 1
     assert result["puppet_turns_played"] == 1
-    assert sink.records[-1]["attention"]["wake_cause"] == "STATE_CORRUPT"
+    assert sink.records[-1]["attention"]["wake_cause"] == "NO_BASELINE"
 
 
 @pytest.mark.asyncio

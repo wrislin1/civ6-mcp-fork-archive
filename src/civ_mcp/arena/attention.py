@@ -137,6 +137,21 @@ def load_attention_state(transcript_dir: str, run_id: str, player_id: int) -> At
             value = data.get(key)
             if value is not None and not isinstance(value, dict):
                 raise TypeError(f"{key} must be a dict or null")
+        directive = data.get("directive")
+        if directive is not None:
+            # Value-type validation (review-3 f1): a dict-shaped directive
+            # with wake_if as a str tuple()s into per-character tokens
+            # WITHOUT raising -- the one corruption class that produces a
+            # masked skip instead of a loud failure. Reject it here so the
+            # established contract (corrupt file -> fresh state -> wake ->
+            # save self-heals) covers it.
+            if not isinstance(directive.get("skip"), int):
+                raise TypeError("directive.skip must be an int")
+            wake_if_val = directive.get("wake_if", [])
+            if not isinstance(wake_if_val, list) or not all(
+                isinstance(t, str) for t in wake_if_val
+            ):
+                raise TypeError("directive.wake_if must be a list of str")
         slept = data.get("slept", [])
         if not isinstance(slept, list) or not all(isinstance(r, dict) for r in slept):
             raise TypeError("slept must be a list of dicts")
@@ -777,7 +792,17 @@ def evaluate(
     # and the model's explicit WAKE IF must keep being honored for that
     # whole streak (review-2 f10). note_wake clears/replaces the directive
     # on every wake, so a subscription never outlives its sleep streak.
-    subscribed = tuple((state.directive or {}).get("wake_if", ()))
+    wake_if_raw = (state.directive or {}).get("wake_if", ())
+    if not isinstance(wake_if_raw, (list, tuple)):
+        # A non-list wake_if would tuple() into per-character tokens and
+        # silently drop the model's subscription -- a masked skip, the
+        # unsafe direction. Raise instead: the coordinator's STATE_CORRUPT
+        # guard resets + wakes and note_wake's save self-heals the file
+        # (review-3 f1 backstop; load_attention_state validates first).
+        raise TypeError(
+            f"directive.wake_if must be a list, got {type(wake_if_raw).__name__}"
+        )
+    subscribed = tuple(wake_if_raw)
     if mode in ("model", "hybrid") and subscribed:
         soft: list[str] = []
         if "GREAT_PERSON_AVAILABLE" in subscribed and scan.great_person_available:

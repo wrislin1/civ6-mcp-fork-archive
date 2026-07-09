@@ -154,6 +154,53 @@ def test_run_or_player_mismatch_resets(tmp_path):
     assert mismatched_player.skips_remaining == 0 and mismatched_player.last_snapshot is None
 
 
+def _write_state_json(tmp_path, payload):
+    import json
+    path = attention_path(str(tmp_path), "run1", 3)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+
+
+_VALID_STATE_PAYLOAD = {
+    "schema_version": 1, "run_id": "run1", "player_id": 3,
+    "directive": {"skip": 2, "wake_if": ["CITY_GREW"]},
+    "skips_remaining": 2, "streak": 1, "last_wake_turn": 10,
+    "last_snapshot": {"units": 3}, "last_scan": {"era_index": 1},
+    "slept": [], "directive_ack": "",
+}
+
+
+def test_load_accepts_valid_directive(tmp_path):
+    _write_state_json(tmp_path, _VALID_STATE_PAYLOAD)
+    st = load_attention_state(str(tmp_path), "run1", 3)
+    assert st.directive == {"skip": 2, "wake_if": ["CITY_GREW"]}
+    assert st.skips_remaining == 2
+
+
+@pytest.mark.parametrize("wake_if", [
+    "CITY_GREW",             # str: tuple()s to 9 char tokens, never matches
+    {"CITY_GREW": True},     # dict: tuple()s to keys today, still wrong type
+    [1, 2],                  # list of non-str
+    ["CITY_GREW", 5],        # mixed
+])
+def test_load_rejects_corrupt_wake_if(tmp_path, wake_if):
+    """Review-3 f1: wake_if that isn't a list of str must NOT load clean --
+    the model's subscription would be silently dropped (masked skip, unsafe
+    direction). Corrupt file -> fresh state -> wake -> save self-heals."""
+    _write_state_json(tmp_path, {
+        **_VALID_STATE_PAYLOAD, "directive": {"skip": 2, "wake_if": wake_if},
+    })
+    st = load_attention_state(str(tmp_path), "run1", 3)
+    assert st.directive is None and st.last_snapshot is None  # fresh
+
+
+def test_load_rejects_non_int_directive_skip(tmp_path):
+    _write_state_json(tmp_path, {
+        **_VALID_STATE_PAYLOAD, "directive": {"skip": "2", "wake_if": []},
+    })
+    assert load_attention_state(str(tmp_path), "run1", 3).directive is None
+
+
 from civ_mcp.arena.attention import (
     AttentionScan,
     NOTIFICATION_WAKE_LIST,
@@ -326,6 +373,14 @@ def test_soft_triggers_ignored_in_auto():
     grown = parse_attention_scan([l.replace("total=12", "total=13") for l in QUIET_LINES])
     st = _st(skips_remaining=2, directive={"skip": 3, "wake_if": ["CITY_GREW"]})
     assert evaluate("auto", st, grown, SNAP, max_streak=5, task_event=False).action == "sleep"
+
+def test_evaluate_raises_on_non_list_wake_if():
+    """Backstop for state constructed outside load (review-3 f1): raising
+    reaches the coordinator's STATE_CORRUPT reset+wake guard instead of a
+    masked sleep through the subscribed event."""
+    st = _st(skips_remaining=2, directive={"skip": 3, "wake_if": "CITY_GREW"})
+    with pytest.raises(TypeError):
+        evaluate("model", st, QUIET, SNAP, max_streak=5, task_event=False)
 
 def test_blocker_wakes_with_type_name():
     blocked = parse_attention_scan([
