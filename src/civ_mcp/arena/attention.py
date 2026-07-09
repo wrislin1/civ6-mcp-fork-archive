@@ -11,7 +11,10 @@ wake. Scan error or partial -> wake.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+
+from civ_mcp.json_io import read_json_file, write_json_file_atomic
 
 SOFT_TRIGGERS: tuple[str, ...] = (
     "GREAT_PERSON_AVAILABLE",
@@ -91,3 +94,160 @@ def parse_directive(summary: str, max_skip: int) -> Directive | None:
     return Directive(
         skip=skip, wake_if=tuple(wake_if), unknown_tokens=tuple(unknown), clamped=clamped
     )
+
+
+SCHEMA_VERSION = 1
+DIGEST_MAX_CHARS = 1200
+DIGEST_MAX_NOTIFICATIONS = 10  # the gossip lesson: never an unbounded feed
+
+
+@dataclass(frozen=True)
+class AttentionState:
+    """Per-civ persisted skip state. Corrupt file -> fresh state -> wake."""
+    schema_version: int = SCHEMA_VERSION
+    run_id: str = ""
+    player_id: int = -1
+    directive: dict | None = None      # {"skip": int, "wake_if": [...]} as issued
+    skips_remaining: int = 0
+    streak: int = 0                    # consecutive sleeps since last model turn
+    last_wake_turn: int = -1
+    last_snapshot: dict | None = None  # overview snapshot at previous captured turn
+    last_scan: dict | None = None      # stored scalars: at_war_with/era_index/total_population
+    slept: list = field(default_factory=list)   # digest accumulator, one dict per slept turn
+    directive_ack: str = ""            # reported in the next wake digest
+
+
+def attention_path(transcript_dir: str, run_id: str, player_id: int) -> Path:
+    return Path(transcript_dir) / run_id / "attention" / f"player_{player_id}.json"
+
+
+def load_attention_state(transcript_dir: str, run_id: str, player_id: int) -> AttentionState:
+    data = read_json_file(attention_path(transcript_dir, run_id, player_id))
+    fresh = AttentionState(run_id=run_id, player_id=player_id)
+    if not isinstance(data, dict):
+        return fresh
+    try:
+        st = AttentionState(
+            schema_version=int(data["schema_version"]),
+            run_id=str(data["run_id"]),
+            player_id=int(data["player_id"]),
+            directive=data.get("directive"),
+            skips_remaining=int(data.get("skips_remaining", 0)),
+            streak=int(data.get("streak", 0)),
+            last_wake_turn=int(data.get("last_wake_turn", -1)),
+            last_snapshot=data.get("last_snapshot"),
+            last_scan=data.get("last_scan"),
+            slept=list(data.get("slept", [])),
+            directive_ack=str(data.get("directive_ack", "")),
+        )
+    except (KeyError, TypeError, ValueError):
+        return fresh
+    if st.run_id != run_id or st.player_id != player_id:
+        return fresh
+    return st
+
+
+def save_attention_state(
+    transcript_dir: str, run_id: str, player_id: int, state: AttentionState
+) -> None:
+    payload = {
+        "schema_version": state.schema_version,
+        "run_id": state.run_id,
+        "player_id": state.player_id,
+        "directive": state.directive,
+        "skips_remaining": state.skips_remaining,
+        "streak": state.streak,
+        "last_wake_turn": state.last_wake_turn,
+        "last_snapshot": state.last_snapshot,
+        "last_scan": state.last_scan,
+        "slept": state.slept,
+        "directive_ack": state.directive_ack,
+    }
+    write_json_file_atomic(attention_path(transcript_dir, run_id, player_id), payload)
+
+
+def note_sleep(
+    state: AttentionState, *, turn: int, snapshot: dict | None,
+    scan_scalars: dict | None, task_notes: list, notifications: list,
+) -> AttentionState:
+    record = {
+        "turn": turn,
+        "snapshot": snapshot,
+        "task_notes": list(task_notes),
+        "notifications": [list(n) for n in notifications][:DIGEST_MAX_NOTIFICATIONS],
+    }
+    return replace(
+        state,
+        skips_remaining=max(0, state.skips_remaining - 1),
+        streak=state.streak + 1,
+        last_snapshot=snapshot if snapshot is not None else state.last_snapshot,
+        last_scan=scan_scalars if scan_scalars is not None else state.last_scan,
+        slept=[*state.slept, record],
+    )
+
+
+def note_wake(
+    state: AttentionState, *, turn: int, wake_cause: str, directive: "Directive | None",
+    directive_ack: str, snapshot: dict | None, scan_scalars: dict | None,
+) -> AttentionState:
+    # Any wake cancels the remainder (spec: sleep is always freshly chosen).
+    new_directive = None
+    remaining = 0
+    if directive is not None:
+        new_directive = {"skip": directive.skip, "wake_if": list(directive.wake_if)}
+        remaining = directive.skip
+    return replace(
+        state,
+        directive=new_directive,
+        skips_remaining=remaining,
+        streak=0,
+        last_wake_turn=turn,
+        last_snapshot=snapshot if snapshot is not None else state.last_snapshot,
+        last_scan=scan_scalars if scan_scalars is not None else state.last_scan,
+        slept=[],
+        directive_ack=directive_ack,
+    )
+
+
+def render_digest(
+    state: AttentionState, *, wake_turn: int, wake_cause: str, wake_detail: str
+) -> str:
+    """Priority order (spec section 4): wake cause, directive ack, accumulated
+    deltas, tracker progress, notifications (newest first, capped)."""
+    if not state.slept:
+        return ""
+    first = state.slept[0]["turn"]
+    last = state.slept[-1]["turn"]
+    n = len(state.slept)
+    lines = [f"== WHILE YOU SLEPT (turns {first}–{last}, {n} skipped) =="]
+    cause = wake_cause + (f" — {wake_detail}" if wake_detail else "")
+    lines.append(f"Woke because: {cause}")
+    if state.directive_ack:
+        lines.append(f"Your directive: {state.directive_ack}")
+    snaps = [r["snapshot"] for r in state.slept if r.get("snapshot")]
+    if snaps:
+        first_s, last_s = snaps[0], snaps[-1]
+        lines.append("Empire while asleep:")
+        deltas = []
+        for key in ("score", "gold", "science", "culture", "cities", "units"):
+            a, b = first_s.get(key), last_s.get(key)
+            if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                deltas.append(f"{key} {a}→{b}")
+        if deltas:
+            lines.append("- " + ", ".join(deltas))
+    notes = [note for r in state.slept for note in r.get("task_notes", [])]
+    if notes:
+        lines.append("Tracker: " + "; ".join(notes[-5:]))
+    tagged = [
+        (rec["turn"], pair[1] if len(pair) > 1 else str(pair))
+        for rec in state.slept
+        for pair in rec.get("notifications", [])
+    ]
+    if tagged:
+        lines.append(
+            f"Notifications during sleep (newest first, max {DIGEST_MAX_NOTIFICATIONS}):"
+        )
+        for turn_no, msg in list(reversed(tagged))[:DIGEST_MAX_NOTIFICATIONS]:
+            lines.append(f"- [T{turn_no}] {msg}")
+    text = "\n".join(lines)
+    return text[:DIGEST_MAX_CHARS].rstrip()
