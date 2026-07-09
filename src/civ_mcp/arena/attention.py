@@ -720,7 +720,11 @@ def evaluate(
         return Decision("wake", "NO_BASELINE")
     hard, detail = _hard_triggers(state, scan, snapshot, task_event)
     if hard:
-        return Decision("wake", hard[0], detail, hard=tuple(hard))
+        # detail describes ENEMY_NEAR; never attach it to a different winning
+        # cause (review catch)
+        return Decision(
+            "wake", hard[0], detail if hard[0] == "ENEMY_NEAR" else "", hard=tuple(hard)
+        )
     if state.streak >= max_streak:
         return Decision("wake", "STREAK_CAP")
     directive_active = state.skips_remaining > 0

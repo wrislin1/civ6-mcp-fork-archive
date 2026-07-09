@@ -292,3 +292,13 @@ def test_notification_wake_list():
     ])
     d = evaluate("auto", _st(), noisy, SNAP, max_streak=5, task_event=False)
     assert d.wake_cause == "NOTIFICATION_WAKE"
+
+def test_wake_detail_not_misattributed():
+    # ENEMY_NEAR fires alongside a higher-priority trigger: detail must not
+    # bleed onto the winning cause (review catch)
+    busy = parse_attention_scan([
+        "ATTN|THREAT|count=1|nearest=Warrior d2 near Suwon", *QUIET_LINES[1:],
+    ])
+    d = evaluate("auto", _st(), busy, SNAP, max_streak=5, task_event=True)
+    assert d.wake_cause == "TASK_EVENT" and d.wake_detail == ""
+    assert "TASK_EVENT" in d.hard and "ENEMY_NEAR" in d.hard
