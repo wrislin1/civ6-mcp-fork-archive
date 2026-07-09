@@ -6,7 +6,13 @@ import signal
 import pytest
 
 from civ_mcp.arena.cli_agent import CLIAgentPolicy, _clamp_final_summary
-from civ_mcp.arena.config import BriefingOptions, CivOptions, MemoryOptions, TaskTrackerOptions
+from civ_mcp.arena.config import (
+    AttentionOptions,
+    BriefingOptions,
+    CivOptions,
+    MemoryOptions,
+    TaskTrackerOptions,
+)
 
 def _prompt(pid=2, turn=3):
     """Build a representative prompt string for _build_argv tests that don't care
@@ -1142,6 +1148,39 @@ def test_call_uses_standing_plan_tail_instead_of_one_line_summary_when_memory_en
     assert "Do NOT end the turn — the host ends it for you." in joined
     assert "STANDING PLAN:" in joined
     assert "give a one-line summary" not in joined
+
+
+def test_call_accepts_digest_block_and_attention_instruction_in_model_mode(monkeypatch):
+    """Task 9: digest_block + ATTENTION_INSTRUCTION must reach the CLI prompt too,
+    signature-gated exactly like memory_block (Task 10's coordinator relies on this)."""
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(attention=AttentionOptions(mode="model")),
+    )
+    result = asyncio.run(
+        pol(None, player_id=3, turn=9, digest_block="DIGEST-MARKER")
+    )
+
+    joined = " ".join(captured["argv"])
+    assert "DIGEST-MARKER" in joined
+    assert "SKIP:" in joined
+    assert result["transcript"]["prompt_injections"]["digest"] is True
+    assert result["transcript"]["prompt_injections"]["attention_instruction"] is True
 
 
 def test_call_prepends_condensed_playbook_when_enabled(monkeypatch):

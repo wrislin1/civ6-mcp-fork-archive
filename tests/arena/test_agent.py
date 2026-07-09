@@ -2,7 +2,7 @@ import pytest
 import civ_mcp.arena.agent as agent
 from civ_mcp.arena.agent import LLMPolicy
 from civ_mcp.arena.backends import Reply
-from civ_mcp.arena.config import BriefingOptions, CivOptions
+from civ_mcp.arena.config import AttentionOptions, BriefingOptions, CivOptions
 from civ_mcp.arena.agent import load_playbook
 
 
@@ -510,6 +510,24 @@ async def test_briefing_disabled_is_todays_message():
     await pol(None, 3, 7)
     user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
     assert user_msg["content"] == "It is turn 7. You control player 3. Begin."
+
+
+# ---------------------------------------------------------------------------
+# Task 9: digest_block + ATTENTION_INSTRUCTION wiring
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_policy_accepts_digest_block_and_attention_instruction_in_model_mode():
+    be = SpyBackend([_no_tool_reply()])
+    opts = CivOptions(attention=AttentionOptions(mode="model"))
+    pol = LLMPolicy(be, FakeCost(), options=opts)
+    out = await pol(None, player_id=3, turn=7, digest_block="DIGEST-MARKER")
+
+    user_msg = [m for m in be.calls[0]["messages"] if m["role"] == "user"][0]
+    assert "DIGEST-MARKER" in user_msg["content"]
+    assert "SKIP:" in user_msg["content"]
+    assert out["transcript"]["prompt_injections"]["digest"] is True
+    assert out["transcript"]["prompt_injections"]["attention_instruction"] is True
 
 
 @pytest.mark.asyncio

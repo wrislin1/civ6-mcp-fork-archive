@@ -486,9 +486,11 @@ class CLIAgentPolicy:
         *,
         memory_block: str = "",
         task_block: str = "",
+        digest_block: str = "",
         briefing: Briefing | None = None,
     ) -> dict:
         include_standing_plan_instruction = self.options.standing_plan_enabled
+        include_attention_instruction = self.options.attention_directives_enabled
         playbook_chars = len(self._system_prefix)
         briefing = await maybe_build_briefing(
             gs,
@@ -504,7 +506,9 @@ class CLIAgentPolicy:
             briefing_text=briefing.text,
             memory_block=memory_block,
             task_block=task_block,
+            digest_block=digest_block,
             include_standing_plan_instruction=include_standing_plan_instruction,
+            include_attention_instruction=include_attention_instruction,
         )
         if not include_standing_plan_instruction:
             opening += _PROMPT_SUMMARY_TAIL
@@ -516,6 +520,8 @@ class CLIAgentPolicy:
             "memory": bool(memory_block),
             "task_tracker": bool(task_block),
             "standing_plan_instruction": include_standing_plan_instruction,
+            "digest": bool(digest_block),
+            "attention_instruction": include_attention_instruction,
         }
         # STANDING PLAN blocks (1-3 bullets + optional TASK lines) can exceed the plain
         # one-line-summary clamp; widen it whenever memory/task tracking are in play so the

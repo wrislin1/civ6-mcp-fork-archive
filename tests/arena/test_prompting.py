@@ -1,6 +1,10 @@
 import pytest
 
-from civ_mcp.arena.prompting import STANDING_PLAN_INSTRUCTION, build_opening_prompt
+from civ_mcp.arena.prompting import (
+    ATTENTION_INSTRUCTION,
+    STANDING_PLAN_INSTRUCTION,
+    build_opening_prompt,
+)
 from civ_mcp.arena.task_tracker import parse_task_lines
 
 
@@ -61,6 +65,38 @@ def test_partial_blocks_no_stray_blank_lines():
 
 
 # ---------------------------------------------------------------------------
+# Task 9 — digest_block ordering + ATTENTION_INSTRUCTION
+# ---------------------------------------------------------------------------
+
+def test_digest_block_ordered_after_task_block():
+    out = build_opening_prompt(
+        player_id=1, turn=5, briefing_text="B", memory_block="M",
+        task_block="T", digest_block="== WHILE YOU SLEPT ==",
+    )
+    assert out.index("T") < out.index("WHILE YOU SLEPT") < out.index("It is turn 5")
+
+
+def test_attention_instruction_appended_when_requested():
+    out = build_opening_prompt(player_id=1, turn=5, include_attention_instruction=True)
+    assert out.endswith(ATTENTION_INSTRUCTION)
+    assert "SKIP:" in ATTENTION_INSTRUCTION and "WAKE IF:" in ATTENTION_INSTRUCTION
+
+
+def test_attention_instruction_lists_exact_soft_enum():
+    from civ_mcp.arena.attention import SOFT_TRIGGERS
+    for token in SOFT_TRIGGERS:
+        assert token in ATTENTION_INSTRUCTION
+
+
+def test_attention_independent_of_standing_plan():
+    out = build_opening_prompt(
+        player_id=1, turn=5,
+        include_standing_plan_instruction=False, include_attention_instruction=True,
+    )
+    assert "STANDING PLAN" not in out and "SKIP:" in out
+
+
+# ---------------------------------------------------------------------------
 # Local policy uses build_opening_prompt via a fake backend
 # ---------------------------------------------------------------------------
 
@@ -118,6 +154,8 @@ async def test_local_policy_transcript_carries_prompt_injections(monkeypatch):
         "memory": False,
         "task_tracker": False,
         "standing_plan_instruction": False,
+        "digest": False,
+        "attention_instruction": False,
     }
 
 

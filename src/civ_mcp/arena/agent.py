@@ -93,6 +93,7 @@ class LLMPolicy:
         *,
         memory_block: str = "",
         task_block: str = "",
+        digest_block: str = "",
         briefing: Briefing | None = None,
         caps: dict | None = None,
     ) -> dict:
@@ -133,18 +134,23 @@ class LLMPolicy:
             supplied=briefing,
         )
         include_standing_plan_instruction = self.options.standing_plan_enabled
+        include_attention_instruction = self.options.attention_directives_enabled
         opening = build_opening_prompt(
             player_id=player_id,
             turn=turn,
             briefing_text=briefing.text,
             memory_block=memory_block,
             task_block=task_block,
+            digest_block=digest_block,
             include_standing_plan_instruction=include_standing_plan_instruction,
+            include_attention_instruction=include_attention_instruction,
         )
         prompt_injections = {
             "memory": bool(memory_block),
             "task_tracker": bool(task_block),
             "standing_plan_instruction": include_standing_plan_instruction,
+            "digest": bool(digest_block),
+            "attention_instruction": include_attention_instruction,
         }
         messages = [{"role": "system", "content": self._system},
                     {"role": "user", "content": opening}]
