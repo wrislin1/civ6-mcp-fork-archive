@@ -108,6 +108,28 @@ def test_attention_instruction_skip_range_matches_default_max_skip():
     assert f"SKIP n (1-{default})" in load_playbook()
 
 
+def test_attention_instruction_renders_configured_max_skip():
+    """Review-3 f8: the prompt's stated SKIP range must match the run's
+    actual clamp, not the default."""
+    from civ_mcp.arena.prompting import attention_instruction
+
+    assert "<1-3>" in attention_instruction(3)
+    assert "<1-10>" in attention_instruction(10)
+    out = build_opening_prompt(
+        player_id=1, turn=5,
+        include_attention_instruction=True, attention_max_skip=3,
+    )
+    assert "<1-3>" in out and "<1-5>" not in out
+
+
+def test_attention_instruction_constant_matches_default_max_skip():
+    from civ_mcp.arena.prompting import attention_instruction
+    from civ_mcp.arena.config import AttentionOptions
+
+    default = AttentionOptions().max_skip
+    assert ATTENTION_INSTRUCTION == attention_instruction(default)
+
+
 # ---------------------------------------------------------------------------
 # Local policy uses build_opening_prompt via a fake backend
 # ---------------------------------------------------------------------------

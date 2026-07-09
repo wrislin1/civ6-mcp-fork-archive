@@ -28,11 +28,22 @@ STANDING PLAN:
 # instruction is a prompt, and importing attention.SOFT_TRIGGERS to format it
 # would make prompt text drift with code changes invisibly. The prompting test
 # asserts the two stay in sync.
-ATTENTION_INSTRUCTION = """If nothing will need your judgment for a few turns, you may ALSO end with:
-SKIP: <1-5>
+_ATTENTION_INSTRUCTION_TEMPLATE = """If nothing will need your judgment for a few turns, you may ALSO end with:
+SKIP: <1-{max_skip}>
 WAKE IF: <optional, comma-separated from exactly: GREAT_PERSON_AVAILABLE, CITY_GREW, TRADE_ROUTE_IDLE, GOLD_STOCKPILE_HIGH>
 You will be woken early regardless for any threat, blocker, or task event.
 Skip during long builds or peacetime consolidation; never skip at war or with unsettled settlers."""
+
+
+def attention_instruction(max_skip: int) -> str:
+    """Render the SKIP/WAKE IF instruction for the run's actual clamp
+    (review-3 f8: a non-default max_skip must not misinform the model)."""
+    return _ATTENTION_INSTRUCTION_TEMPLATE.format(max_skip=max_skip)
+
+
+# Default-clamp render: kept as a constant for existing imports and the
+# default-drift pin (AttentionOptions.max_skip default == 5).
+ATTENTION_INSTRUCTION = attention_instruction(5)
 
 
 def build_opening_prompt(
@@ -45,13 +56,14 @@ def build_opening_prompt(
     digest_block: str = "",
     include_standing_plan_instruction: bool = False,
     include_attention_instruction: bool = False,
+    attention_max_skip: int = 5,
 ) -> str:
     """Assemble the opening user-turn message.
 
     Ordering (fixed): briefing_text, memory_block, task_block, digest_block,
     the turn/player announcement, then STANDING_PLAN_INSTRUCTION and
-    ATTENTION_INSTRUCTION (each independently gated) when requested. Empty
-    blocks are omitted with no extra blank lines.
+    attention_instruction(attention_max_skip) (each independently gated) when
+    requested. Empty blocks are omitted with no extra blank lines.
     """
     parts: list[str] = []
     if briefing_text:
@@ -66,5 +78,5 @@ def build_opening_prompt(
     if include_standing_plan_instruction:
         parts.append(STANDING_PLAN_INSTRUCTION)
     if include_attention_instruction:
-        parts.append(ATTENTION_INSTRUCTION)
+        parts.append(attention_instruction(attention_max_skip))
     return "\n\n".join(parts)

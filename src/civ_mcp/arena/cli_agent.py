@@ -513,6 +513,7 @@ class CLIAgentPolicy:
             digest_block=digest_block,
             include_standing_plan_instruction=include_standing_plan_instruction,
             include_attention_instruction=include_attention_instruction,
+            attention_max_skip=self.options.attention.max_skip,
         )
         if not include_standing_plan_instruction:
             opening += (
