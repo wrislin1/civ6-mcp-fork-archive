@@ -130,3 +130,76 @@ def test_run_or_player_mismatch_resets(tmp_path):
     assert mismatched_run.skips_remaining == 0 and mismatched_run.last_snapshot is None
     mismatched_player = load_attention_state(str(tmp_path), "r1", 4)
     assert mismatched_player.skips_remaining == 0 and mismatched_player.last_snapshot is None
+
+
+from civ_mcp.arena.attention import (
+    AttentionScan,
+    build_attention_query,
+    parse_attention_scan,
+    scan_scalars,
+)
+
+QUIET_LINES = [
+    "ATTN|THREAT|count=0|nearest=",
+    "ATTN|CITYHP|damaged=",
+    "ATTN|WAR|with=",
+    "ATTN|LOYALTY|negative=",
+    "ATTN|WC|turns=5",
+    "ATTN|ERA|index=1",
+    "ATTN|POP|total=12",
+    "ATTN|GP|available=0",
+    "ATTN|TRADE|idle=0",
+    "ATTN|DIPLO|pending=0",
+    "ATTN|BLOCKERS|types=",
+]
+
+
+def test_parse_quiet_scan():
+    scan = parse_attention_scan(QUIET_LINES)
+    assert scan.hostile_count == 0 and scan.blocker_types == ()
+    assert scan.at_war_with == () and scan.era_index == 1
+    assert scan.failed_families == ()
+
+def test_parse_busy_scan():
+    lines = [
+        "ATTN|THREAT|count=2|nearest=Barbarian Horseman d3 near Suwon",
+        "ATTN|CITYHP|damaged=17,42",
+        "ATTN|WAR|with=3",
+        "ATTN|LOYALTY|negative=17",
+        "ATTN|WC|turns=0",
+        "ATTN|ERA|index=3",
+        "ATTN|POP|total=23",
+        "ATTN|GP|available=1",
+        "ATTN|TRADE|idle=1",
+        "ATTN|DIPLO|pending=1",
+        "ATTN|BLOCKERS|types=NOTIFICATION_PRODUCTION,ENDTURN_BLOCKING_UNIT_PROMOTION",
+        "ATTN|NOTIFY|type=NOTIFICATION_REBELLION|msg=Rebels near Pusan",
+    ]
+    scan = parse_attention_scan(lines)
+    assert scan.hostile_count == 2 and "Horseman" in scan.nearest_hostile
+    assert scan.damaged_city_ids == (17, 42) and scan.at_war_with == (3,)
+    # promotion blocker filtered by BLOCKER_IGNORE
+    assert scan.blocker_types == ("NOTIFICATION_PRODUCTION",)
+    assert scan.notifications == (("NOTIFICATION_REBELLION", "Rebels near Pusan"),)
+
+def test_parse_failed_family_flagged():
+    scan = parse_attention_scan([*QUIET_LINES[:4], "ATTN_ERR|WC", *QUIET_LINES[5:]])
+    assert "WC" in scan.failed_families
+
+def test_parse_missing_family_flagged():
+    scan = parse_attention_scan([l for l in QUIET_LINES if "ATTN|ERA" not in l])
+    assert "ERA" in scan.failed_families
+
+def test_parse_no_attn_lines_none():
+    assert parse_attention_scan([]) is None
+    assert parse_attention_scan(None) is None
+    assert parse_attention_scan(["GARBAGE"]) is None
+
+def test_build_query_int_casts():
+    lua = build_attention_query("7", "4")  # str inputs must not splice raw
+    assert "__PID__" not in lua and "__RADIUS__" not in lua
+    assert " 7" in lua or "[7]" in lua or "(7)" in lua
+
+def test_scan_scalars_shape():
+    scan = parse_attention_scan(QUIET_LINES)
+    assert scan_scalars(scan) == {"at_war_with": [], "era_index": 1, "total_population": 12}

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from civ_mcp.json_io import read_json_file, write_json_file_atomic
+from civ_mcp.lua._helpers import SENTINEL
 
 SOFT_TRIGGERS: tuple[str, ...] = (
     "GREAT_PERSON_AVAILABLE",
@@ -262,3 +263,382 @@ def render_digest(
             lines.append(f"- [T{turn_no}] {msg}")
     text = "\n".join(lines)
     return text[:DIGEST_MAX_CHARS].rstrip()
+
+
+# --- Trigger scan (Task 7): batched read-only Lua build + parse ---------------
+#
+# Line protocol (spec section 3):
+#   ATTN|<FAMILY>|key=value|...     one line per family (NOTIFY repeats, max 10)
+#   ATTN_ERR|<FAMILY>               a family whose pcall failed
+#   ---END---                       sentinel, always last
+#
+# Every family runs in its own pcall so a single bad API name degrades that
+# family to ATTN_ERR (-> failed_families -> wake), never a crash or a blind
+# skip of the whole scan.
+
+_SCAN_FAMILIES = (
+    "THREAT", "CITYHP", "WAR", "LOYALTY", "WC", "ERA",
+    "POP", "GP", "TRADE", "DIPLO", "BLOCKERS",
+)
+BLOCKER_IGNORE = frozenset({"ENDTURN_BLOCKING_UNIT_PROMOTION"})
+NOTIFICATION_WAKE_LIST = frozenset({
+    "NOTIFICATION_CITY_UNDER_ATTACK",
+    "NOTIFICATION_CITY_LOW_LOYALTY",
+    "NOTIFICATION_REBELLION",
+    "NOTIFICATION_SPY_CAUGHT",
+})
+
+
+@dataclass(frozen=True)
+class AttentionScan:
+    hostile_count: int = 0
+    nearest_hostile: str = ""
+    damaged_city_ids: tuple[int, ...] = ()
+    at_war_with: tuple[int, ...] = ()
+    negative_loyalty_city_ids: tuple[int, ...] = ()
+    wc_turns_until_next: int = -1
+    era_index: int = -1
+    total_population: int = 0
+    great_person_available: bool = False
+    trade_route_idle: bool = False
+    pending_diplomacy: bool = False
+    blocker_types: tuple[str, ...] = ()
+    notifications: tuple[tuple[str, str], ...] = ()
+    failed_families: tuple[str, ...] = ()
+
+
+def _ids(value: str) -> tuple[int, ...]:
+    out = []
+    for part in value.split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+    return tuple(out)
+
+
+def parse_attention_scan(lines: "list[str] | None") -> AttentionScan | None:
+    if not lines:
+        return None
+    fields: dict = {}
+    seen: set[str] = set()
+    failed: list[str] = []
+    notifications: list[tuple[str, str]] = []
+    for line in lines:
+        if line.startswith("ATTN_ERR|"):
+            failed.append(line.split("|", 1)[1].strip())
+            continue
+        if not line.startswith("ATTN|"):
+            continue
+        parts = line.split("|")
+        family = parts[1] if len(parts) > 1 else ""
+        kv = {}
+        for part in parts[2:]:
+            key, sep, val = part.partition("=")
+            if sep:
+                kv[key] = val
+        try:
+            if family == "THREAT":
+                fields["hostile_count"] = int(kv.get("count", "0"))
+                fields["nearest_hostile"] = kv.get("nearest", "")
+            elif family == "CITYHP":
+                fields["damaged_city_ids"] = _ids(kv.get("damaged", ""))
+            elif family == "WAR":
+                fields["at_war_with"] = _ids(kv.get("with", ""))
+            elif family == "LOYALTY":
+                fields["negative_loyalty_city_ids"] = _ids(kv.get("negative", ""))
+            elif family == "WC":
+                fields["wc_turns_until_next"] = int(kv.get("turns", "-1"))
+            elif family == "ERA":
+                fields["era_index"] = int(kv.get("index", "-1"))
+            elif family == "POP":
+                fields["total_population"] = int(kv.get("total", "0"))
+            elif family == "GP":
+                fields["great_person_available"] = kv.get("available", "0") == "1"
+            elif family == "TRADE":
+                fields["trade_route_idle"] = kv.get("idle", "0") == "1"
+            elif family == "DIPLO":
+                fields["pending_diplomacy"] = kv.get("pending", "0") == "1"
+            elif family == "BLOCKERS":
+                types = tuple(
+                    t for t in kv.get("types", "").split(",")
+                    if t and t not in BLOCKER_IGNORE
+                )
+                fields["blocker_types"] = types
+            elif family == "NOTIFY":
+                notifications.append((kv.get("type", ""), kv.get("msg", "")))
+                continue  # repeated family; not part of `seen` accounting
+            else:
+                continue
+        except ValueError:
+            failed.append(family)
+            continue
+        seen.add(family)
+    if not seen and not failed:
+        return None
+    for family in _SCAN_FAMILIES:
+        if family not in seen and family not in failed:
+            failed.append(family)  # a missing family narrows attention -> treat as failed
+    return AttentionScan(
+        notifications=tuple(notifications), failed_families=tuple(failed), **fields
+    )
+
+
+def scan_scalars(scan: AttentionScan) -> dict:
+    return {
+        "at_war_with": list(scan.at_war_with),
+        "era_index": scan.era_index,
+        "total_population": scan.total_population,
+    }
+
+
+# --- Lua query build -----------------------------------------------------
+#
+# Idiom provenance (each family's body is copied from the cited accessor
+# idiom, not invented):
+#   THREAT   - overview.py:37-46 (city/unit asset plots, GameInfo.Units[u:GetType()]),
+#              units.py:200 (civilian FormationClass check), map.py:151-161
+#              (PlayersVisibility[me]:IsVisible(plotIdx)), diplomacy.py:43
+#              (alive-player loop shape; barbarians via Players[i]:IsBarbarian())
+#   CITYHP   - cities.py:48-61 (city-center district GetMaxDamage/GetDamage
+#              for DISTRICT_GARRISON and DISTRICT_OUTER)
+#   WAR      - diplomacy.py:43 (alive-major loop + pDiplo:IsAtWarWith(i))
+#   LOYALTY  - cities.py:852-878 (_LOYALTY_LUA; degrade-tolerant double pcall
+#              around GetCulturalIdentity()/GetLoyaltyPerTurn())
+#   WC       - congress.py build_world_congress_query (GetWorldCongress() +
+#              GetMeetingStatus().TurnsLeft)
+#   ERA      - tech.py:93 (Game.GetEras():GetCurrentEra())
+#   POP      - overview.py:35 (sum c:GetPopulation())
+#   GP       - great_people.py:147-156 (gp:CanRecruitPerson(me, entry.Individual)
+#              inside the GetTimeline() candidate loop)
+#   TRADE    - economy.py build_trade_capacity_check (GetOutgoingRouteCapacity()
+#              vs GetOutgoingRoutes() count) + build_trade_routes_query's
+#              uInfo.MakeTradeRoute trader-unit check
+#   DIPLO    - diplomacy.py:328-334 (build_close_orphan_sessions session-
+#              iteration idiom: DiplomacyManager.FindOpenSessionID both ways)
+#   BLOCKERS - notifications.py:20-39 (build_end_turn_blocking_query;
+#              EndTurnBlockingTypes reverse lookup), :33 sanitize idiom
+#   NOTIFY   - notifications.py:53-102 (build_notifications_query;
+#              entry:GetTypeName(), entry:GetMessage():gsub("|", "/"))
+
+_ATTENTION_LUA = """
+local me = __PID__
+local radius = __RADIUS__
+local p = Players[me]
+local pDiplo = p:GetDiplomacy()
+local function fam(name, fn)
+    local ok = pcall(fn)
+    if not ok then print("ATTN_ERR|" .. name) end
+end
+fam("ERA", function()
+    print("ATTN|ERA|index=" .. tostring(Game.GetEras():GetCurrentEra()))
+end)
+fam("WAR", function()
+    local ids = {}
+    for _, other in ipairs(PlayerManager.GetAliveMajors()) do
+        local i = other:GetID()
+        if i ~= me and pDiplo:IsAtWarWith(i) then ids[#ids + 1] = tostring(i) end
+    end
+    print("ATTN|WAR|with=" .. table.concat(ids, ","))
+end)
+fam("POP", function()
+    local total = 0
+    for _, c in p:GetCities():Members() do total = total + c:GetPopulation() end
+    print("ATTN|POP|total=" .. tostring(total))
+end)
+fam("THREAT", function()
+    -- my assets = my city plots + my civilian-unit plots (overview.py:37-46 shape)
+    local myAssets = {}
+    for _, c in p:GetCities():Members() do
+        table.insert(myAssets, {x = c:GetX(), y = c:GetY(), label = Locale.Lookup(c:GetName())})
+    end
+    for _, u in p:GetUnits():Members() do
+        local entry = GameInfo.Units[u:GetType()]
+        if entry and entry.FormationClass == "FORMATION_CLASS_CIVILIAN" then
+            table.insert(myAssets, {x = u:GetX(), y = u:GetY(), label = Locale.Lookup(entry.Name)})
+        end
+    end
+    local count = 0
+    local bestDist = nil
+    local bestLabel = ""
+    for i = 0, 63 do
+        if i ~= me and Players[i] ~= nil and Players[i]:IsAlive() then
+            local hostile = Players[i]:IsBarbarian() or pDiplo:IsAtWarWith(i)
+            if hostile then
+                for _, u in Players[i]:GetUnits():Members() do
+                    local ux, uy = u:GetX(), u:GetY()
+                    local plot = Map.GetPlot(ux, uy)
+                    if plot then
+                        local plotIdx = plot:GetIndex()
+                        if PlayersVisibility[me]:IsVisible(plotIdx) then
+                            local minD = nil
+                            local minLabel = ""
+                            for _, asset in ipairs(myAssets) do
+                                local d = Map.GetPlotDistance(ux, uy, asset.x, asset.y)
+                                if minD == nil or d < minD then
+                                    minD = d
+                                    minLabel = asset.label
+                                end
+                            end
+                            if minD ~= nil and minD <= radius then
+                                count = count + 1
+                                if bestDist == nil or minD < bestDist then
+                                    local uEntry = GameInfo.Units[u:GetType()]
+                                    local uName = uEntry and Locale.Lookup(uEntry.Name) or "Unknown"
+                                    bestDist = minD
+                                    bestLabel = (uName .. " d" .. minD .. " near " .. minLabel):gsub("|", "/")
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    print("ATTN|THREAT|count=" .. count .. "|nearest=" .. bestLabel)
+end)
+fam("CITYHP", function()
+    local damaged = {}
+    local ccIdx = GameInfo.Districts["DISTRICT_CITY_CENTER"].Index
+    for _, c in p:GetCities():Members() do
+        local garDmg, wallDmg = 0, 0
+        for _, d in c:GetDistricts():Members() do
+            if d:GetType() == ccIdx then
+                pcall(function()
+                    garDmg = d:GetDamage(DefenseTypes.DISTRICT_GARRISON) or 0
+                    wallDmg = d:GetDamage(DefenseTypes.DISTRICT_OUTER) or 0
+                end)
+                break
+            end
+        end
+        if garDmg > 0 or wallDmg > 0 then
+            table.insert(damaged, tostring(c:GetID()))
+        end
+    end
+    print("ATTN|CITYHP|damaged=" .. table.concat(damaged, ","))
+end)
+fam("LOYALTY", function()
+    local negative = {}
+    for _, c in p:GetCities():Members() do
+        pcall(function()
+            local ci = c:GetCulturalIdentity()
+            local pt = 0
+            pcall(function() pt = ci:GetLoyaltyPerTurn() end)
+            if pt < 0 then
+                table.insert(negative, tostring(c:GetID()))
+            end
+        end)
+    end
+    print("ATTN|LOYALTY|negative=" .. table.concat(negative, ","))
+end)
+fam("WC", function()
+    local turns = -1
+    local wc = Game.GetWorldCongress()
+    if wc then
+        local meeting = wc:GetMeetingStatus()
+        turns = (meeting and meeting.TurnsLeft) or -1
+    end
+    print("ATTN|WC|turns=" .. tostring(turns))
+end)
+fam("GP", function()
+    local available = false
+    local gp = Game.GetGreatPeople()
+    if gp then
+        local timeline = gp:GetTimeline()
+        if timeline then
+            for _, entry in ipairs(timeline) do
+                if entry.Class ~= nil and entry.Individual ~= nil then
+                    local canRecruit = false
+                    pcall(function()
+                        canRecruit = gp:CanRecruitPerson(me, entry.Individual)
+                    end)
+                    if canRecruit then available = true end
+                end
+            end
+        end
+    end
+    print("ATTN|GP|available=" .. (available and "1" or "0"))
+end)
+fam("TRADE", function()
+    local tr = p:GetTrade()
+    local cap = tr:GetOutgoingRouteCapacity()
+    local active = 0
+    for _, city in p:GetCities():Members() do
+        pcall(function()
+            local routes = city:GetTrade():GetOutgoingRoutes()
+            if routes then active = active + #routes end
+        end)
+    end
+    local hasTrader = false
+    for _, u in p:GetUnits():Members() do
+        local uType = u:GetType()
+        if uType then
+            local uInfo = GameInfo.Units[uType]
+            if uInfo and uInfo.MakeTradeRoute then hasTrader = true end
+        end
+    end
+    local idle = (cap > active and hasTrader) and "1" or "0"
+    print("ATTN|TRADE|idle=" .. idle)
+end)
+fam("DIPLO", function()
+    local pending = false
+    for i = 0, 63 do
+        if i ~= me and Players[i] ~= nil and Players[i]:IsAlive() then
+            local a = DiplomacyManager.FindOpenSessionID(me, i)
+            if a and a >= 0 then pending = true end
+            local b = DiplomacyManager.FindOpenSessionID(i, me)
+            if b and b >= 0 then pending = true end
+        end
+    end
+    print("ATTN|DIPLO|pending=" .. (pending and "1" or "0"))
+end)
+fam("BLOCKERS", function()
+    local list = NotificationManager.GetList(me)
+    local seen = {}
+    local types = {}
+    if list then
+        for _, nid in ipairs(list) do
+            local entry = NotificationManager.Find(me, nid)
+            if entry and not entry:IsDismissed() then
+                local bt = entry:GetEndTurnBlocking()
+                if bt and bt ~= 0 then
+                    local typeName = "UNKNOWN"
+                    for k, v in pairs(EndTurnBlockingTypes) do
+                        if v == bt then typeName = k; break end
+                    end
+                    if not seen[typeName] then
+                        seen[typeName] = true
+                        table.insert(types, typeName)
+                    end
+                end
+            end
+        end
+    end
+    print("ATTN|BLOCKERS|types=" .. table.concat(types, ","))
+end)
+fam("NOTIFY", function()
+    local list = NotificationManager.GetList(me)
+    local emitted = 0
+    if list then
+        for _, nid in ipairs(list) do
+            if emitted >= 10 then break end
+            local entry = NotificationManager.Find(me, nid)
+            if entry and not entry:IsDismissed() then
+                local typeName = entry:GetTypeName() or "UNKNOWN"
+                local msg = (entry:GetMessage() or ""):gsub("|", "/")
+                print("ATTN|NOTIFY|type=" .. typeName .. "|msg=" .. msg)
+                emitted = emitted + 1
+            end
+        end
+    end
+end)
+print("{SENTINEL}")
+""".replace("{SENTINEL}", SENTINEL)
+
+
+def build_attention_query(player_id: int, threat_radius: int) -> str:
+    return _ATTENTION_LUA.replace("__PID__", str(int(player_id))).replace(
+        "__RADIUS__", str(int(threat_radius))
+    )
