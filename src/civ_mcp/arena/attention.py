@@ -339,6 +339,7 @@ class AttentionScan:
     blocker_types: tuple[str, ...] = ()
     notifications: tuple[tuple[str, str], ...] = ()
     failed_families: tuple[str, ...] = ()
+    failure_details: tuple[str, ...] = ()
 
 
 def _ids(value: str) -> tuple[int, ...]:
@@ -359,10 +360,16 @@ def parse_attention_scan(lines: "list[str] | None") -> AttentionScan | None:
     fields: dict = {}
     seen: set[str] = set()
     failed: list[str] = []
+    failure_details: list[str] = []
     notifications: list[tuple[str, str]] = []
     for line in lines:
         if line.startswith("ATTN_ERR|"):
-            failed.append(line.split("|", 1)[1].strip())
+            parts = line.split("|", 2)
+            fam_name = parts[1].strip() if len(parts) > 1 else ""
+            detail = parts[2].strip() if len(parts) > 2 else ""
+            failed.append(fam_name)
+            if detail:
+                failure_details.append(f"{fam_name}: {detail}")
             continue
         if not line.startswith("ATTN|"):
             continue
@@ -416,7 +423,8 @@ def parse_attention_scan(lines: "list[str] | None") -> AttentionScan | None:
         if family not in seen and family not in failed:
             failed.append(family)  # a missing family narrows attention -> treat as failed
     return AttentionScan(
-        notifications=tuple(notifications), failed_families=tuple(failed), **fields
+        notifications=tuple(notifications), failed_families=tuple(failed),
+        failure_details=tuple(failure_details), **fields
     )
 
 
@@ -465,8 +473,13 @@ local wakeTypes = {__WAKELIST__}
 local p = Players[me]
 local pDiplo = p:GetDiplomacy()
 local function fam(name, fn)
-    local ok = pcall(fn)
-    if not ok then print("ATTN_ERR|" .. name) end
+    local ok, err = pcall(fn)
+    if not ok then
+        -- Carry the engine error text (pipe-sanitized, capped) so a
+        -- SCAN_PARTIAL wake is diagnosable post-run: "API absent on this
+        -- build" vs a one-off miss (review-3 f3).
+        print("ATTN_ERR|" .. name .. "|" .. tostring(err):gsub("|", "/"):sub(1, 120))
+    end
 end
 fam("ERA", function()
     print("ATTN|ERA|index=" .. tostring(Game.GetEras():GetCurrentEra()))
@@ -774,7 +787,10 @@ def evaluate(
     if scan is None or snapshot is None:
         return Decision("wake", "SCAN_ERROR")
     if scan.failed_families:
-        return Decision("wake", "SCAN_PARTIAL", ",".join(scan.failed_families))
+        detail = ",".join(scan.failed_families)
+        if scan.failure_details:
+            detail = (detail + " -- " + "; ".join(scan.failure_details))[:300]
+        return Decision("wake", "SCAN_PARTIAL", detail)
     if state.last_snapshot is None or state.last_scan is None:
         return Decision("wake", "NO_BASELINE")
     hard, detail = _hard_triggers(state, scan, snapshot, task_event)

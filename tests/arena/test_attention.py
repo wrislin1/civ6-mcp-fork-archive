@@ -256,6 +256,20 @@ def test_parse_failed_family_flagged():
     scan = parse_attention_scan([*QUIET_LINES[:4], "ATTN_ERR|WC", *QUIET_LINES[5:]])
     assert "WC" in scan.failed_families
 
+def test_parse_attn_err_detail_captured():
+    """Review-3 f3: ATTN_ERR may carry the Lua error text as a third
+    segment; the parser must surface it for diagnosability."""
+    scan = parse_attention_scan(
+        [*QUIET_LINES[:4], "ATTN_ERR|WC|attempt to index a nil value", *QUIET_LINES[5:]]
+    )
+    assert "WC" in scan.failed_families
+    assert scan.failure_details == ("WC: attempt to index a nil value",)
+
+def test_parse_attn_err_bare_form_still_works():
+    scan = parse_attention_scan([*QUIET_LINES[:4], "ATTN_ERR|WC", *QUIET_LINES[5:]])
+    assert "WC" in scan.failed_families
+    assert scan.failure_details == ()
+
 def test_parse_missing_family_flagged():
     scan = parse_attention_scan([l for l in QUIET_LINES if "ATTN|ERA" not in l])
     assert "ERA" in scan.failed_families
@@ -288,6 +302,14 @@ def test_hard_family_lua_propagates_errors():
     q = build_attention_query(1, 4)
     assert "pcall" not in _lua_family_segment(q, "CITYHP", "LOYALTY")
     assert "pcall" not in _lua_family_segment(q, "LOYALTY", "WC")
+
+
+def test_fam_wrapper_emits_error_detail():
+    """Textual pin: fam() must capture pcall's error value and print it as
+    the ATTN_ERR line's third segment (sanitized, capped)."""
+    q = build_attention_query(1, 4)
+    assert "local ok, err = pcall(fn)" in q
+    assert "tostring(err)" in q
 
 
 def test_attention_query_embeds_wake_list_priority():
@@ -361,6 +383,14 @@ def test_scan_partial_wakes():
     partial = parse_attention_scan([*QUIET_LINES[1:], "ATTN_ERR|THREAT"])
     d = evaluate("auto", _st(), partial, SNAP, max_streak=5, task_event=False)
     assert d.wake_cause == "SCAN_PARTIAL"
+
+def test_scan_partial_wake_detail_carries_error_text():
+    partial = parse_attention_scan(
+        [*QUIET_LINES[1:], "ATTN_ERR|THREAT|attempt to index a nil value"]
+    )
+    d = evaluate("auto", _st(), partial, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "SCAN_PARTIAL"
+    assert "THREAT" in d.wake_detail and "nil value" in d.wake_detail
 
 def test_soft_trigger_requires_subscription():
     grown = parse_attention_scan([l.replace("total=12", "total=13") for l in QUIET_LINES])
