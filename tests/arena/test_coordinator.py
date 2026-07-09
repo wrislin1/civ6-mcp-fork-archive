@@ -1874,3 +1874,64 @@ async def test_failed_wake_cancels_directive_remainder(tmp_path, monkeypatch):
     assert st.skips_remaining == 0            # stale sleep cancelled
     assert len(st.slept) == 1                 # digest accumulator survives
     assert st.streak == 1                     # streak keeps bounding model-free turns
+
+
+@pytest.mark.asyncio
+async def test_tampered_slept_record_costs_digest_not_run(tmp_path):
+    """Final-review pinhole: a slept record missing "turn" (external tampering
+    -- load validates list-of-dicts, not record internals) must degrade to an
+    empty digest on the wake turn, never abort run_arena."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto", max_streak=1))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r8", puppet_ids=[1])
+    save_attention_state(str(tmp_path), "r8", 1, AttentionState(
+        run_id="r8", player_id=1,
+        streak=1,  # meets max_streak=1 -> STREAK_CAP wake with slept populated
+        last_snapshot=dict(_ATTN_BASELINE_SNAPSHOT),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12},
+        slept=[{"snapshot": dict(_ATTN_BASELINE_SNAPSHOT),
+                "task_notes": [], "notifications": []}]))  # no "turn" key
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 1                     # the wake still happened
+    assert pol.last_digest == ""              # digest lost, run intact
+    assert result["puppet_turns_played"] == 1
+    assert sink.records[-1]["turn_kind"] == "played"
+
+
+@pytest.mark.asyncio
+async def test_tampered_snapshot_value_degrades_slept_delta(tmp_path):
+    """Final-review pinhole: a wrong-TYPED snapshot value in the state file
+    ("score": "high") passes load's dict-shape check and the delta triggers
+    (which only read units/cities/gold), then TypeErrors in the slept-record
+    delta -- must record state_delta None, never abort."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=3, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r9", puppet_ids=[1])
+    tampered = dict(_ATTN_BASELINE_SNAPSHOT)
+    tampered["score"] = "high"
+    save_attention_state(str(tmp_path), "r9", 1, AttentionState(
+        run_id="r9", player_id=1,
+        last_snapshot=tampered,
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+
+    assert pol.calls == 0                     # still a quiet sleep
+    assert result["turns_slept"] == 1
+    rec = sink.records[-1]
+    assert rec["turn_kind"] == "slept"
+    assert rec["state_delta"] is None         # unknowable delta, not an abort

@@ -479,6 +479,11 @@ def _mean(values: list[float]) -> float:
 def attention_metrics(records: list[dict]) -> dict:
     """Aggregate attention/turn-skipping metrics per player.
 
+    Note on the record fields consumed here: ``attention.digest_chars`` is the
+    RENDERED digest length (pre-signature-gate, per the plan contract), not
+    what reached the model — ``prompt_injections.digest`` on the same record
+    is the post-gate "did it reach the prompt" signal.
+
     Returns a dict keyed per player (``player_id``, falling back to
     ``model``/``provider``/``"unknown"`` for records without one — same
     fallback as :func:`analyze`) with shape::

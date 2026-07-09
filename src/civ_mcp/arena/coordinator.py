@@ -276,7 +276,8 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     if att_state is None:
                         # first load raised: fresh state (== load's own failure
                         # result) without touching disk again -- fail-open, the
-                        # NO_BASELINE wake path takes it from here (review catch)
+                        # SCAN_ERROR wake path takes it from here (the scan
+                        # never ran in this branch) (review catch)
                         att_state = AttentionState(run_id=run_id, player_id=st.local)
                     task_event = any(
                         r.get("status") not in (None, "active") for r in task_results
@@ -314,17 +315,18 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         _num = ("score", "gold", "science", "culture", "faith", "cities", "units")
                         if prev_snapshot is not None and state_before is not None:
                             # A partial snapshot in the arena-owned state file
-                            # (dict-shaped but missing a numeric key) means the
-                            # delta is unknowable -- record None, degrade not
-                            # abort (review catch: load validates dict shape,
-                            # not key presence).
+                            # (dict-shaped but missing a numeric key, or a
+                            # wrong-typed value) means the delta is unknowable
+                            # -- record None, degrade not abort (review catch:
+                            # load validates dict shape, not key presence or
+                            # value types).
                             try:
                                 state_delta = {
                                     k: state_before[k] - prev_snapshot[k] for k in _num
                                 }
                                 state_delta["research"] = state_before["research"]
                                 state_delta["civic"] = state_before["civic"]
-                            except KeyError:
+                            except (KeyError, TypeError):
                                 state_delta = None
                         else:
                             state_delta = None
@@ -367,11 +369,17 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     deadline_polls -= 1
                     continue
                 if decision is not None and att_state.slept:
-                    digest_block = render_digest(
-                        att_state, wake_turn=st.turn,
-                        wake_cause=decision.wake_cause or "",
-                        wake_detail=decision.wake_detail,
-                    )
+                    try:
+                        digest_block = render_digest(
+                            att_state, wake_turn=st.turn,
+                            wake_cause=decision.wake_cause or "",
+                            wake_detail=decision.wake_detail,
+                        )
+                    except Exception as e:
+                        # A tampered slept record (e.g. missing "turn") must
+                        # cost the digest, not the run (final-review pinhole).
+                        digest_block = ""
+                        print(f"[arena] wake digest render failed: {e!r}", file=sys.stderr)
 
                 # Gate every injected kwarg on the policy's signature (the
                 # briefing precedent): a pre-slice-3 policy with a bare
