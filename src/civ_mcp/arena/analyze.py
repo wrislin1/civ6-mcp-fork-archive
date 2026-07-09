@@ -606,15 +606,18 @@ def attention_metrics(records: list[dict]) -> dict:
 
 
 def _has_attention_data(records: list[dict]) -> bool:
-    """True if any record carries a Task 10 attention/turn-skipping marker.
+    """True if any record carries a real attention/turn-skipping marker.
 
-    Guards ``analyze()``'s ``"attention"`` key so a pre-feature transcript
-    (no ``turn_kind``/``slept``/``attention`` keys anywhere) reads as falsy
-    and ``render_markdown`` skips the section entirely, instead of growing an
-    all-zeros "## Attention" table for runs that never had the feature on.
+    ``turn_kind: "played"`` is written on EVERY transcripts-on record
+    regardless of attention mode (a schema field, not a feature marker), so
+    it must not trip this guard (review-2 f9). The ``attention`` dict is
+    written only when a civ's attention mode is on -- on slept records and
+    woken played records alike -- so its presence (or ``slept: True``) is
+    the signal. Pre-feature transcripts stay falsy and ``render_markdown``
+    keeps skipping the section.
     """
     return any(
-        "turn_kind" in rec or "slept" in rec or "attention" in rec for rec in records
+        rec.get("slept") is True or "attention" in rec for rec in records
     )
 
 

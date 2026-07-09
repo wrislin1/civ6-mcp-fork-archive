@@ -1837,3 +1837,17 @@ def test_gold_crossing_negative_is_false_quiet():
             _played(4, "STREAK_CAP")]
     m = attention_metrics(recs)[1]
     assert m["false_quiet"] == {"streaks": 1, "false_quiet_streaks": 1, "rate": 1.0}
+
+
+def test_has_attention_data_ignores_bare_turn_kind():
+    """Review-2 finding 9: turn_kind:"played" is written on EVERY
+    transcripts-on record regardless of attention mode -- it must not trip
+    the guard and grow an all-zeros Attention section for attention-off runs."""
+    from civ_mcp.arena.analyze import _has_attention_data
+
+    attention_off = [{"player_id": 1, "turn_kind": "played", "step_count": 3}]
+    assert _has_attention_data(attention_off) is False
+
+    assert _has_attention_data([{"attention": {"decision": "woke"}}]) is True
+    assert _has_attention_data([{"slept": True}]) is True
+    assert _has_attention_data([]) is False
