@@ -1754,3 +1754,73 @@ async def test_max_game_turns_caps_run(tmp_path, monkeypatch):
     assert pol.calls == 0
     assert result["turns_slept"] == 1
     assert result["puppet_turns_played"] == 0
+
+
+@pytest.mark.asyncio
+async def test_attention_load_crash_degrades_to_wake(tmp_path, monkeypatch):
+    """load_attention_state raising must NOT abort the run: the coordinator
+    degrades to a fresh in-memory state (== what load returns on any failure)
+    with NO second disk read, evaluate() fails open to a wake, and the model
+    runs this turn. Goes RED under the unguarded fallback reload, whose
+    second load_attention_state call re-raises out of run_arena."""
+    from civ_mcp.arena.config import AttentionOptions
+    import civ_mcp.arena.coordinator as coord_mod
+
+    async def noop(_delay): pass
+    monkeypatch.setattr(asyncio, "sleep", noop)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("attention state dir unreadable")
+
+    monkeypatch.setattr(coord_mod, "load_attention_state", boom)
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r7", puppet_ids=[1])
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)  # must NOT raise
+
+    assert pol.calls == 1                      # fail-open: woke, model turn
+    assert result["turns_slept"] == 0
+    assert result["puppet_turns_played"] == 1
+    assert conn.restored
+
+
+@pytest.mark.asyncio
+async def test_partial_snapshot_state_delta_none(tmp_path):
+    """A persisted last_snapshot missing one numeric key ("units") must not
+    crash the slept-turn transcript write: the KeyError degrades to
+    state_delta=None (the record's documented "unknown delta" value).
+
+    The seeding still sleeps honestly: _hard_triggers uses .get() with
+    defaults, so prev missing "units" reads as 0 and snapshot.units(5) < 0
+    is False (no UNITS_LOST); cities match at 2 (no CITY_COUNT_CHANGED);
+    gold equal (no GOLD_CRASH); the quiet scan matches the seeded scan
+    scalars. Only the delta arithmetic touches the missing key."""
+    from civ_mcp.arena.attention import AttentionState, save_attention_state
+    from civ_mcp.arena.config import AttentionOptions
+
+    conn = AttnConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=3, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="r8", puppet_ids=[1])
+    partial = dict(_ATTN_BASELINE_SNAPSHOT)
+    del partial["units"]                       # dict-shaped but key-incomplete
+    save_attention_state(str(tmp_path), "r8", 1, AttentionState(
+        run_id="r8", player_id=1,
+        last_snapshot=partial,
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12}))
+
+    result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)  # must NOT raise
+
+    assert pol.calls == 0                      # the sleep genuinely happened
+    assert result["turns_slept"] == 1
+    rec = sink.records[-1]
+    assert rec["turn_kind"] == "slept"
+    assert rec["state_delta"] is None          # unknown delta, degrade not abort
+    assert conn.restored

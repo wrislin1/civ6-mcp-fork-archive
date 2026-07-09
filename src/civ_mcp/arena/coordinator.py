@@ -7,6 +7,7 @@ from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.attention import (
+    AttentionState,
     build_attention_query,
     evaluate,
     has_directive_lines,
@@ -272,7 +273,10 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         att_scan = None
                         print(f"[arena] attention scan failed; waking: {e!r}", file=sys.stderr)
                     if att_state is None:
-                        att_state = load_attention_state(transcript_dir, run_id, st.local)
+                        # first load raised: fresh state (== load's own failure
+                        # result) without touching disk again -- fail-open, the
+                        # NO_BASELINE wake path takes it from here (review catch)
+                        att_state = AttentionState(run_id=run_id, player_id=st.local)
                     task_event = any(
                         r.get("status") not in (None, "active") for r in task_results
                     )
@@ -308,11 +312,19 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                     if _tx_on:
                         _num = ("score", "gold", "science", "culture", "faith", "cities", "units")
                         if prev_snapshot is not None and state_before is not None:
-                            state_delta = {
-                                k: state_before[k] - prev_snapshot[k] for k in _num
-                            }
-                            state_delta["research"] = state_before["research"]
-                            state_delta["civic"] = state_before["civic"]
+                            # A partial snapshot in the arena-owned state file
+                            # (dict-shaped but missing a numeric key) means the
+                            # delta is unknowable -- record None, degrade not
+                            # abort (review catch: load validates dict shape,
+                            # not key presence).
+                            try:
+                                state_delta = {
+                                    k: state_before[k] - prev_snapshot[k] for k in _num
+                                }
+                                state_delta["research"] = state_before["research"]
+                                state_delta["civic"] = state_before["civic"]
+                            except KeyError:
+                                state_delta = None
                         else:
                             state_delta = None
                         _pol_backend = getattr(pol, "backend", None)
