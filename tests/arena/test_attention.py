@@ -47,6 +47,28 @@ def test_first_parsed_skip_wins():
     assert parse_directive("SKIP: soon\nSKIP: 4", 5).skip == 4
 
 
+@pytest.mark.parametrize("body", [
+    "hold until turn 340",
+    "maybe in 3 if peaceful",
+    "after 2 more builds",
+])
+def test_digit_bearing_prose_is_not_a_directive(body):
+    """Review-2 finding 6: a stray digit inside prose must not become a
+    max-clamped blind skip -- no leading integer means no directive (wake)."""
+    assert parse_directive(f"all quiet.\nSKIP: {body}", 5) is None
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("3", 3),
+    ("3 turns", 3),
+    ("**3**", 3),
+    ("`2`", 2),
+])
+def test_leading_integer_still_parses(body, expected):
+    d = parse_directive(f"all quiet.\nSKIP: {body}", 5)
+    assert d is not None and d.skip == expected
+
+
 from civ_mcp.arena.attention import (
     AttentionState,
     attention_path,

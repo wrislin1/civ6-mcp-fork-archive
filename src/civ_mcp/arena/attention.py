@@ -64,7 +64,8 @@ def parse_directive(summary: str, max_skip: int) -> Directive | None:
     SKIP line with no integer does not block a later parseable one. WAKE IF
     without SKIP is inert (spec: sleep must be freshly and explicitly
     chosen). Unknown WAKE IF tokens are collected, not fatal. SKIP body must
-    contain an integer ("SKIP: 3 turns" tolerated).
+    START with an integer ("SKIP: 3 turns" tolerated;
+    digit-bearing prose like "SKIP: hold until turn 340" does not parse).
     """
     skip: int | None = None
     clamped = False
@@ -73,9 +74,13 @@ def parse_directive(summary: str, max_skip: int) -> Directive | None:
     for line in summary.splitlines():
         m = SKIP_LINE_RE.match(line)
         if m and skip is None:
-            num = re.search(r"-?\d+", m.group("body"))
+            # The integer must LEAD the body (markdown decoration tolerated):
+            # "SKIP: 3" / "SKIP: 3 turns" / "SKIP: **3**" parse; digit-bearing
+            # prose like "SKIP: hold until turn 340" must NOT become a
+            # max-clamped blind skip (review-2 f6) -- no directive -> wake.
+            num = re.match(r"[\s*_`~'\"(\[]*(-?\d+)", m.group("body"))
             if num:
-                n = int(num.group())
+                n = int(num.group(1))
                 skip = min(max(n, 1), max_skip)
                 clamped = skip != n
             continue
