@@ -2,6 +2,9 @@
 
 **Date:** 2026-07-09
 **Status:** Approved by riz (brainstorming session, this date)
+**Revised:** 2026-07-09 — six findings from riz's separate-session review applied
+(standing-plan collision, decoupled directive wiring, config contract, slept
+record schema, scan contract, TASK_COMPLETED hard wake)
 **Predecessor:** Slice 4 (full toolset + era gating), merged at `b3540d8`, docs through `39fe27c`.
 **Sequencing:** riz decided this slice slots **before A (LLM↔LLM interaction)** in the D → A → C → B roadmap.
 
@@ -77,12 +80,13 @@ subscribed soft triggers), current streak, last-wake turn, digest accumulator.
      blockers, no triggers), no directive needed; `hybrid` allows either; `off`
      reproduces today's behavior exactly.
 3. **On SKIP:** append this turn's deltas + notifications + tracker results to the
-   digest accumulator (persisted), write a lightweight transcript record, `finish_units`,
-   `restore_local` — no model call, no briefing built. `max_game_turns` decrements;
-   `max_puppet_turns` does not.
+   digest accumulator (persisted), write a slept transcript record (exact schema in
+   Section 5), `finish_units`, `restore_local` — no model call, no briefing built.
+   `max_game_turns` decrements; `max_puppet_turns` does not.
 4. **On WAKE:** build briefing as today plus the `== WHILE YOU SLEPT ==` digest
    block; invoke the model; parse a new `SKIP:` directive from its final summary
-   (same channel as STANDING PLAN capture). `max_game_turns` decrements on every
+   — a channel the attention mode itself enables, independent of memory/task
+   settings (Section 3). `max_game_turns` decrements on every
    captured turn (slept or played); `max_puppet_turns` decrements only here.
 
 **Engine-risk note:** the slept-turn path (`finish_units` + `restore_local`, no
@@ -95,11 +99,74 @@ file corrupt → reset + wake (the `save_memory` poison-file self-heal conventio
 Trigger scan raises → wake. Failures can only produce *more* model turns, never
 more blind skips.
 
+### Config contract
+
+**`AttentionOptions`** — new frozen dataclass in `config.py` (the
+`MemoryOptions` pattern):
+
+| Field | Default | Validation |
+|---|---|---|
+| `mode` | `"off"` | one of `off / auto / model / hybrid`; anything else raises at parse time |
+| `max_skip` | `5` | int ≥ 1 — upper clamp for `SKIP: n` |
+| `max_streak` | `5` | int ≥ 1 — coordinator-side consecutive-sleep cap |
+| `threat_radius` | `4` | int ≥ 1 — hostile-scan radius around cities/civilians |
+
+- `CivOptions` gains `attention: AttentionOptions`, and `fingerprint()` gains
+  the sub-dict `{"mode", "max_skip", "max_streak", "threat_radius"}`. Every
+  fingerprint changes once; Section 5 already declares the comparability break
+  structural.
+- YAML: `attention` joins `_SHARED_KNOBS` in `experiment.py` as a per-civ
+  mapping whose sub-keys are exactly the four fields; unknown sub-keys are
+  rejected the same way `memory` / `task_tracker` reject theirs.
+- Default `mode="off"` reproduces today's behavior exactly — existing configs
+  and CLI invocations change fingerprint but not behavior.
+
+**`max_game_turns`** — new `ArenaConfig` field capping ALL captured turns
+(played, slept, or failed). Default `0` = uncapped (slept turns stay bounded
+by `idle_poll_limit` and the streak cap). Wired everywhere `max_puppet_turns`
+already is: top-level YAML key (`_TOP_KEYS`), CLI `--max-game-turns`, and the
+suppressed `--config-default-max-game-turns` passthrough.
+
+**Loop accounting & return counters:** `remaining` (the `max_puppet_turns`
+budget) decrements only on model-invoked turns (played or failed, as today); a
+separate counter enforces `max_game_turns` across every captured turn and ends
+the run when exhausted. `run_arena`'s result gains `"turns_slept"` alongside
+the existing `"puppet_turns_played"` (whose meaning — model-invoked turns —
+does not change). Slept entries in the run log carry `"slept": true` plus the
+`attention` sub-object, never the failed-turn `"skipped": true` key.
+
 ## Section 2 — Trigger Vocabulary
 
 Organizing principle: every trigger maps to something checkable in one batched
 read-only Lua query (the `build_caps_query` pattern) or an existing snapshot delta.
 No trigger may require judgment; anything requiring judgment is a wake.
+
+### Trigger-scan contract
+
+The scan is a `build_attention_query(player_id, threat_radius)` /
+`parse_attention_scan(lines)` pair in `attention.py` — the caps-query pattern:
+one batched **read-only** Lua query executed via `conn.execute_read`, parser
+returns `None` on any malformed payload, and `None` → WAKE (fail-open). Parsed
+fields, one per hard-trigger family:
+
+- `hostile_count` + `nearest_hostile` (unit type, distance, what it is near) —
+  radius `threat_radius` around owned cities and civilian units
+- `damaged_city_ids` (below full HP)
+- `at_war_with` (player-id set; delta vs. the stored set = war/peace change)
+- `negative_loyalty_city_ids` (net trend, the slice-4 `get_loyalty` read)
+- `wc_turns_until_next` (0 = in session / imminent)
+- `era_index` (delta vs. stored = era changed)
+- blocker family: `empty_queue_city_ids`, `research_due`, `civic_due`,
+  `idle_unit_count` (excluding fortified/sleeping/alert/automated/
+  tracker-owned), `pending_diplomacy`, `pending_trade`, `governor_point`,
+  `empty_policy_slot`, `pantheon_or_religion_choice`
+- `notifications`: (type, summary) pairs for wake-list matching + digest
+
+**Attention snapshots are not transcript-gated.** Today `_overview_snapshot`
+runs only when transcripts are on (`_tx_on`); with attention mode ≠ `off`, the
+snapshot (feeding the delta triggers) and the scan run on every captured turn
+regardless of transcript mode. Both run on the live `conn` before any
+exclusive-CLI disconnect (the pre-model-task precedent).
 
 ### Hard triggers (always wake; not model-optable)
 
@@ -131,17 +198,21 @@ literal encoding of "nothing of concern → next turn"):
 wake-list (city under attack, rebellion, spy caught, emergency, …). Starts
 conservative; grows from run evidence.
 
-**From the tracker:** a task **failed or blocked** this turn (standing intent
-broke; the model must re-plan). Task *completed* generally wakes via a blocker
-anyway (settled city → empty queue).
+**From the tracker:** any task **completed, failed, or blocked** this turn.
+Failure/block means standing intent broke; completion must also hard-wake so
+the model chooses its next intent — in `auto` mode there is no `WAKE IF`
+subscription to catch it, and completion does not reliably raise a blocker (a
+builder spending its last charge leaves no idle unit behind).
 
 ### Soft triggers (fixed enum, model-subscribable via `WAKE IF:`)
 
 v1 list — each maps to one cheap check; models copy names from the playbook, never
 author predicates:
 
-`TASK_COMPLETED`, `GREAT_PERSON_AVAILABLE`, `CITY_GREW`, `TRADE_ROUTE_IDLE`,
-`GOLD_STOCKPILE_HIGH` (fixed threshold ~500g in v1).
+`GREAT_PERSON_AVAILABLE`, `CITY_GREW`, `TRADE_ROUTE_IDLE`,
+`GOLD_STOCKPILE_HIGH` (fixed threshold ~500g in v1). (`TASK_COMPLETED` was in
+the draft enum; it is a **hard** trigger now — subscribing to an unconditional
+wake is meaningless.)
 
 Unknown tokens are dropped with a logged warning — never a parse failure, never a
 reason to refuse the directive. Parametrized predicates ("science > 200") are
@@ -170,14 +241,42 @@ catches the rest. Any scan error wakes.
 ```
 STANDING PLAN: consolidate; finish Campus in Suwon; settler -> (14,22)
 SKIP: 3
-WAKE IF: TASK_COMPLETED, GREAT_PERSON_AVAILABLE
+WAKE IF: GREAT_PERSON_AVAILABLE, CITY_GREW
 ```
 
 **Parsing** reuses the standing-plan extractor's paid-for tolerance:
 case-insensitive; forgiving of bullets, `**SKIP:**` emphasis, heading prefixes
 (the `memory.py` lesson — models reformat markers into markdown and silent misses
-freeze state). `SKIP:` takes an integer (tolerating "SKIP: 3 turns"), clamped 1–5.
-`WAKE IF:` takes comma/space-separated enum tokens. Garbage → no directive.
+freeze state). Directive lines are matched **line-wise anywhere in the final
+summary** — placement relative to the STANDING PLAN block must not matter.
+`SKIP:` takes an integer (tolerating "SKIP: 3 turns"), clamped 1–`max_skip`
+(default 5). `WAKE IF:` takes comma/space-separated enum tokens. Garbage → no
+directive.
+
+**Standing-plan collision (external-review catch, must-fix):** as written
+today, `extract_standing_plan` collects lines after the marker until a section
+header, and its header test requires a trailing colon — so `SKIP: 3` placed
+after the plan block (the canonical format above) would be swallowed **into
+persisted standing memory** and re-injected every turn. Fix in `memory.py`:
+a line matching the attention-directive regexes **terminates plan collection
+and is never included in plan text**. The regexes (`SKIP_LINE_RE`,
+`WAKE_IF_LINE_RE`) live in `attention.py` and are imported by `memory.py` —
+the existing `TASK_LINE_RE`/`CANCEL_LINE_RE` import precedent. Tests must
+prove both directions: directives after the plan are parsed and absent from
+saved memory; directives before the plan leave plan capture intact.
+
+**Prompt & capture wiring (decoupled from memory/tasks — external-review
+catch):** today the final-summary channel exists only when standing-plan
+capture is on — `STANDING_PLAN_INSTRUCTION` ships only via
+`include_standing_plan_instruction`, and the coordinator reads
+`final_summary` only under `opts.standing_plan_enabled`. Attention modes
+`model`/`hybrid` establish their own path: `prompting.py` gains an
+`ATTENTION_INSTRUCTION` block (exact `SKIP:`/`WAKE IF:` format + the soft
+enum), appended whenever the seat's attention mode is `model` or `hybrid`;
+the coordinator extracts `final_summary` and parses directives under that
+same condition, independent of `memory.enabled`/`task_tracker.enabled`.
+Directive parsing never writes standing memory or tasks — a memory-off,
+tracker-off civ can still sleep.
 
 **Semantics:**
 - Effective from the seat's next captured turn; decrements per slept turn.
@@ -238,6 +337,42 @@ possible v2 detector input.)
 distinct shape — `"slept": true` + an `attention` sub-object. Analyze treats turn
 kinds as played / slept / failed; sleeps are never counted as degraded turns.
 
+**Slept transcript record (exact schema — external-review catch):** slept
+turns write a transcript record even though no policy ran; analyze never
+guesses. Keys mirror the played record the coordinator writes today:
+
+```json
+{
+  "schema_version": 1, "run_id": "...", "ts": "...",
+  "player_id": 3, "turn": 47,
+  "provider": "...", "model": "...", "driver": "...",
+  "turn_kind": "slept", "slept": true,
+  "step_count": 0, "usd": 0.0,
+  "prompt_tokens": 0, "completion_tokens": 0,
+  "state_before": {"score": 210, "gold": 312, "...": "..."},
+  "state_after":  {"score": 214, "gold": 341, "...": "..."},
+  "state_delta":  {"score": 4,   "gold": 29,  "...": "..."},
+  "standing_memory": {"loaded": true, "injected": false, "...": "..."},
+  "task_tracker": {"active_before": 1, "pre_model_results": [], "...": "..."},
+  "attention": {
+    "mode": "hybrid", "decision": "slept",
+    "directive": {"skip": 3, "wake_if": ["GREAT_PERSON_AVAILABLE"]},
+    "skips_remaining": 2, "streak": 1, "wake_cause": null
+  }
+}
+```
+
+`provider`/`model`/`driver` come from the seat's policy object exactly as on
+played records (no invocation needed). `state_before` is the previous captured
+turn's snapshot; `state_after` is this turn's attention snapshot; the delta is
+the same computation played records use. `standing_memory`/`task_tracker` are
+the same field dicts (the tracker still ran; nothing was captured). The record
+never carries `"skipped"` — that key means a FAILED turn. Played (wake)
+records gain `"turn_kind": "played"` and the same `attention` object
+(`decision: "woke"`, `wake_cause` set). All additions are additive:
+`schema_version` stays 1, and records without `turn_kind` (pre-feature) read
+as played. Failed turns remain log-only with `"skipped": true`, unchanged.
+
 **Per-civ additions to `analyze.py`:**
 - Volume: captured / model / slept turn counts; skip rate; streak histogram + max.
 - Savings: LLM calls avoided; estimated USD and wall-clock saved (slept turns ×
@@ -265,6 +400,10 @@ that structural, never silent.
 **Unit (offline, existing conventions):**
 - Directive parsing in the standing-plan test style: markdown variants, clamping,
   garbage → none, unknown tokens dropped + warned, `WAKE IF` without `SKIP` inert.
+- Memory interaction (the collision fix): directives after a STANDING PLAN block
+  terminate plan collection and never appear in saved memory text; directives
+  before the block leave plan capture intact; a directive-only summary (no plan)
+  still parses; directive extraction works with memory and task tracking disabled.
 - Trigger-scan parsing from pinned fixtures (real captures, the turn-380 pattern);
   per-trigger true/false condition tests; notification wake-list classification;
   loyalty trend; malformed scan → wake (fail-open, mirroring caps-parser tests).
