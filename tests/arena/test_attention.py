@@ -63,6 +63,10 @@ def test_digit_bearing_prose_is_not_a_directive(body):
     ("3 turns", 3),
     ("**3**", 3),
     ("`2`", 2),
+    ("for 3 turns", 3),
+    ("skip 3 turns", 3),
+    ("sleep 2", 2),
+    ("**for 3**", 3),
 ])
 def test_leading_integer_still_parses(body, expected):
     d = parse_directive(f"all quiet.\nSKIP: {body}", 5)
