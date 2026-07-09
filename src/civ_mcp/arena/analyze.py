@@ -888,10 +888,15 @@ def analyze(transcript_records: list[dict], cost_records: list[dict]) -> dict:  
                         truncated_count += 1
 
             # Slice 3 — standing memory / task tracker / behavior-critical tool calls
-            if _standing_memory_injected(rec):
-                mem_injected_turns += 1
-            if _standing_memory_captured(rec):
-                mem_captured_turns += 1
+            # Standing-memory tallies are per MODEL turn (behavior_metrics
+            # precedent, review-2 f7 / review-3 f7). Task classification and
+            # tool-call counts below stay over ALL records: pre-model task
+            # follow-through runs on slept turns too.
+            if _turn_kind(rec) == "played":
+                if _standing_memory_injected(rec):
+                    mem_injected_turns += 1
+                if _standing_memory_captured(rec):
+                    mem_captured_turns += 1
             task_counts = _classify_task_results(rec)
             task_attempts += task_counts["attempts"]
             task_completions += task_counts["complete"]

@@ -1863,3 +1863,20 @@ def test_rubric_ignores_slept_records():
 
     played = {"turn": 6, "state_delta": {"cities": 1}}
     assert _rubric_for_model([played])["founded_extra_city"] is not None
+
+
+def test_per_player_memory_tallies_exclude_slept_records():
+    """Review-3 f7: per-player standing-memory tallies must gate on played,
+    matching behavior_metrics -- a future slept record carrying non-zero
+    standing_memory must not diverge the per-player table from the summary."""
+    from civ_mcp.arena.analyze import analyze
+
+    base = {"player_id": 1, "model": "m", "provider": "p", "driver": "in_process"}
+    slept = {**base, "turn": 5, "slept": True,
+             "standing_memory": {"injected": True, "captured_chars": 9}}
+    played = {**base, "turn": 6,
+              "standing_memory": {"injected": True, "captured_chars": 9}}
+    report = analyze([slept, played], [])
+    behavior = report["by_player"][1]["behavior"]
+    assert behavior["standing_memory_injected_turns"] == 1
+    assert behavior["standing_memory_captured_turns"] == 1
