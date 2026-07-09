@@ -680,10 +680,14 @@ fam("NOTIFY", function()
     local list = NotificationManager.GetList(me)
     if not list then return end
     local emitted = 0
+    local failures = 0
     local function tryEmit(nid, wantWake)
-        -- per-entry pcall (notifications.py:53-102 idiom): one malformed
-        -- notification skips itself, not the rest of the list
-        pcall(function()
+        -- Per-entry protected call (notifications.py:53-102 idiom): one
+        -- malformed notification skips itself, not the rest of the list.
+        -- But failures are COUNTED and raised after both passes -- a
+        -- raising accessor must never silently drop a wake-list type;
+        -- SPY_CAUGHT has no redundant trigger family (review-3 f2).
+        local ok = pcall(function()
             local entry = NotificationManager.Find(me, nid)
             if entry and not entry:IsDismissed() then
                 local typeName = entry:GetTypeName() or "UNKNOWN"
@@ -694,6 +698,7 @@ fam("NOTIFY", function()
                 end
             end
         end)
+        if not ok then failures = failures + 1 end
     end
     -- pass 1: wake-list types always make the cut, whatever their list
     -- position (review-2 f5: SPY_CAUGHT has no redundant trigger family)
@@ -705,6 +710,9 @@ fam("NOTIFY", function()
     for _, nid in ipairs(list) do
         if emitted >= 10 then break end
         tryEmit(nid, false)
+    end
+    if failures > 0 then
+        error(failures .. " notification entries unreadable")
     end
 end)
 print("{SENTINEL}")

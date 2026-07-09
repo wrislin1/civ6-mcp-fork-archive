@@ -322,6 +322,19 @@ def test_attention_query_embeds_wake_list_priority():
     assert "__WAKELIST__" not in q
 
 
+def test_notify_lua_counts_and_raises_entry_failures():
+    """Review-3 f2: NOTIFY keeps per-entry isolation but a failed entry must
+    end in ATTN_ERR|NOTIFY via fam()'s boundary, never a clean fam() pass
+    that blind-skips SPY_CAUGHT (the one wake type with no redundant
+    trigger family)."""
+    q = build_attention_query(1, 4)
+    seg = q[q.index('fam("NOTIFY"'):]
+    assert "pcall" in seg                       # per-entry isolation retained
+    assert "failures = failures + 1" in seg
+    assert "if failures > 0 then" in seg
+    assert "error(" in seg
+
+
 from civ_mcp.arena.attention import Decision, evaluate
 
 QUIET = parse_attention_scan(QUIET_LINES)
@@ -391,6 +404,18 @@ def test_scan_partial_wake_detail_carries_error_text():
     d = evaluate("auto", _st(), partial, SNAP, max_streak=5, task_event=False)
     assert d.wake_cause == "SCAN_PARTIAL"
     assert "THREAT" in d.wake_detail and "nil value" in d.wake_detail
+
+def test_notify_partial_failure_wakes_but_keeps_notifications():
+    lines = [
+        *QUIET_LINES,
+        "ATTN|NOTIFY|type=NOTIFICATION_PRODUCTION|msg=Choose production",
+        "ATTN_ERR|NOTIFY|2 notification entries unreadable",
+    ]
+    scan = parse_attention_scan(lines)
+    assert ("NOTIFICATION_PRODUCTION", "Choose production") in scan.notifications
+    assert "NOTIFY" in scan.failed_families
+    d = evaluate("auto", _st(), scan, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "SCAN_PARTIAL"
 
 def test_soft_trigger_requires_subscription():
     grown = parse_attention_scan([l.replace("total=12", "total=13") for l in QUIET_LINES])
