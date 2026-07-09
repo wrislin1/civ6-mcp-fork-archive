@@ -772,8 +772,13 @@ def evaluate(
     if state.streak >= max_streak:
         return Decision("wake", "STREAK_CAP")
     directive_active = state.skips_remaining > 0
-    if mode in ("model", "hybrid") and directive_active:
-        subscribed = tuple((state.directive or {}).get("wake_if", []))
+    # Subscriptions key on the directive EXISTING, not on skips remaining:
+    # in hybrid the seat keeps auto-sleeping after the directive is spent,
+    # and the model's explicit WAKE IF must keep being honored for that
+    # whole streak (review-2 f10). note_wake clears/replaces the directive
+    # on every wake, so a subscription never outlives its sleep streak.
+    subscribed = tuple((state.directive or {}).get("wake_if", ()))
+    if mode in ("model", "hybrid") and subscribed:
         soft: list[str] = []
         if "GREAT_PERSON_AVAILABLE" in subscribed and scan.great_person_available:
             soft.append("GREAT_PERSON_AVAILABLE")

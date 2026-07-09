@@ -415,3 +415,47 @@ def test_soft_trigger_true_conditions(old, new, token, snap):
     d = evaluate("hybrid", st, scan, snap, max_streak=5, task_event=False)
     assert (d.action, d.wake_cause) == ("wake", token)
     assert token in d.soft
+
+
+_QUIET_LINES_POP13 = [
+    "ATTN|THREAT|count=0|nearest=", "ATTN|CITYHP|damaged=", "ATTN|WAR|with=",
+    "ATTN|LOYALTY|negative=", "ATTN|WC|turns=5", "ATTN|ERA|index=1",
+    "ATTN|POP|total=13", "ATTN|GP|available=0", "ATTN|TRADE|idle=0",
+    "ATTN|DIPLO|pending=0", "ATTN|BLOCKERS|types=",
+]
+
+_SNAP = {
+    "score": 50, "gold": 100.0, "science": 10.0, "culture": 8.0,
+    "faith": 20.0, "research": "Mining", "civic": "Drama",
+    "cities": 2, "units": 5,
+}
+
+
+def test_hybrid_honors_subscription_after_directive_spent():
+    """Review-2 finding 10: hybrid keeps auto-sleeping once skips_remaining
+    hits 0; the model's WAKE IF subscription must keep being honored for that
+    whole streak, not silently lapse with the skip count."""
+    st = AttentionState(
+        directive={"skip": 3, "wake_if": ["CITY_GREW"]},
+        skips_remaining=0, streak=3,
+        last_snapshot=dict(_SNAP),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 12},
+    )
+    scan = parse_attention_scan(list(_QUIET_LINES_POP13))  # population 12 -> 13
+    d = evaluate("hybrid", st, scan, dict(_SNAP), max_streak=5, task_event=False)
+    assert d.action == "wake"
+    assert d.wake_cause == "CITY_GREW"
+
+def test_model_mode_spent_directive_still_wakes_no_directive():
+    """Regression pin: model mode with a spent directive and a FALSE soft
+    condition must still wake NO_DIRECTIVE (no accidental sleep)."""
+    st = AttentionState(
+        directive={"skip": 3, "wake_if": ["CITY_GREW"]},
+        skips_remaining=0, streak=1,
+        last_snapshot=dict(_SNAP),
+        last_scan={"at_war_with": [], "era_index": 1, "total_population": 13},
+    )
+    scan = parse_attention_scan(list(_QUIET_LINES_POP13))  # 13 -> 13: no growth
+    d = evaluate("model", st, scan, dict(_SNAP), max_streak=5, task_event=False)
+    assert d.action == "wake"
+    assert d.wake_cause == "NO_DIRECTIVE"
