@@ -96,13 +96,23 @@ already proven live — low engine risk, still probed (Section 6).
 **Error-handling philosophy (applies to every component):** degrade toward today's
 behavior, never abort the run. Directive unparseable → no directive. Skip-state
 file corrupt → reset + wake (the `save_memory` poison-file self-heal convention).
+`load_attention_state`'s checks are value-typed, not just shape-typed:
+`directive.skip` must be an `int` and `directive.wake_if` must be a list of
+`str`, closing the one corruption class — a string `wake_if` — that used to
+pass the load-time dict-shape check and silently `tuple()` into
+per-character tokens (a masked skip, not a loud failure; review-3 f1).
 Trigger scan raises → wake. Failures can only produce *more* model turns, never
 more blind skips. Persisted-but-wrong-typed state (dict-shaped, e.g.
-`last_snapshot={"units":"5"}`) passes the load-time shape check but raises
-inside `evaluate()`'s comparisons; the coordinator wraps `evaluate()` in its own
+`last_snapshot={"units":"5"}`) still passes the load-time check but raises
+inside `evaluate()`'s comparisons — as would a non-list `wake_if` that somehow
+reached `evaluate()` despite the load-time guard, which now raises on it
+explicitly as a backstop; the coordinator wraps `evaluate()` in its own
 try/except for exactly this, producing wake cause **`STATE_CORRUPT`**: state
 reset + wake, never abort. `note_wake`'s save on the fresh state self-heals
-the file, same as any other corrupt-state path.
+the file, same as any other corrupt-state path. Wake transcript records now
+carry a `wake_detail` string alongside `wake_cause` (Section 5); `STATE_CORRUPT`
+records carry the triggering exception's `repr()` capped 200 chars, and
+detail-less wakes carry `""` (review-3 f5).
 
 ### Config contract
 
@@ -182,16 +192,28 @@ fields, one per hard-trigger family:
 - `notifications`: (type, summary) pairs for wake-list matching + digest.
   NOTIFY reads the list in two passes — wake-list types first, then
   everything else — so a wake-worthy entry is never crowded out of the
-  shared 10-line cap by list position.
+  shared 10-line cap by list position. Each entry read is still its own
+  `pcall` (one malformed notification skips itself, not the rest of the
+  list), but entry failures are now counted across both passes and raised
+  once at the end (`error(<n> .. " notification entries unreadable")`) —
+  degrading the whole family to `ATTN_ERR|NOTIFY` → `SCAN_PARTIAL` wake
+  rather than silently dropping a wake-list type a bad entry happened to
+  shadow; lines already printed before the raise still reach the parser
+  (review-3 f2).
 - Every family is individually `pcall`-guarded in the Lua, but the two tiers
   handle a failed guard differently. Hard-trigger families — e.g. **CITYHP**
   and **LOYALTY** — are strict: a failure propagates to `ATTN_ERR|<FAMILY>` →
   `failed_families` → `SCAN_PARTIAL` wake (partial scans never silently
-  narrow attention). **GP** and **TRADE** are the deliberate exception —
-  soft-trigger tier, degrade-tolerant by design: their inner `pcall`s swallow
-  failures locally (a loud failure would wake every turn for an opt-in
-  signal), so a GP/TRADE glitch degrades that one soft signal instead of
-  forcing a wake.
+  narrow attention). The error line optionally carries a third segment —
+  `ATTN_ERR|<FAMILY>|<error text, pipe-sanitized, capped 120 chars>` — which
+  the parser surfaces as `AttentionScan.failure_details` and `evaluate`
+  folds into the `SCAN_PARTIAL` `wake_detail` (`"FAM1,FAM2 -- FAM1: <err1>;
+  FAM2: <err2>"`, capped 300 chars), so a live `SCAN_PARTIAL` wake is
+  diagnosable without re-running the scan (review-3 f3). **GP** and
+  **TRADE** are the deliberate exception — soft-trigger tier,
+  degrade-tolerant by design: their inner `pcall`s swallow failures locally
+  (a loud failure would wake every turn for an opt-in signal), so a
+  GP/TRADE glitch degrades that one soft signal instead of forcing a wake.
 
 **Attention snapshots are not transcript-gated.** Today `_overview_snapshot`
 runs only when transcripts are on (`_tx_on`); with attention mode ≠ `off`, the
@@ -280,7 +302,12 @@ case-insensitive; forgiving of bullets, `**SKIP:**` emphasis, heading prefixes
 (the `memory.py` lesson — models reformat markers into markdown and silent misses
 freeze state). Directive lines are matched **line-wise anywhere in the final
 summary** — placement relative to the STANDING PLAN block must not matter.
-`SKIP:` takes an integer (tolerating "SKIP: 3 turns"), clamped 1–`max_skip`
+`SKIP:` takes an integer that must LEAD the body (markdown decoration
+tolerated), optionally after exactly one filler word from `{for, skip,
+sleep}` (case-insensitive, whitespace required after the filler) —
+"SKIP: 3", "SKIP: 3 turns", "SKIP: for 3 turns", and "SKIP: skip 3" all
+parse; digit-bearing prose like "SKIP: hold until turn 340" still does not
+(review-3 f9 refinement of review-2 f6). The integer clamps 1–`max_skip`
 (default 5). `WAKE IF:` takes comma/space-separated enum tokens. Garbage → no
 directive.
 
@@ -302,10 +329,15 @@ capture is on — `STANDING_PLAN_INSTRUCTION` ships only via
 `include_standing_plan_instruction`, and the coordinator reads
 `final_summary` only under `opts.standing_plan_enabled`. Attention modes
 `model`/`hybrid` establish their own path: `prompting.py` gains an
-`ATTENTION_INSTRUCTION` block (exact `SKIP:`/`WAKE IF:` format + the soft
-enum), appended whenever the seat's attention mode is `model` or `hybrid`;
-the coordinator extracts `final_summary` and parses directives under that
-same condition, independent of `memory.enabled`/`task_tracker.enabled`.
+`attention_instruction(max_skip)` renderer (exact `SKIP:`/`WAKE IF:` format
++ the soft enum) whose `SKIP: <1-max_skip>` range is rendered from the run's
+configured `max_skip` rather than a hardcoded `1-5` — a non-default
+`max_skip` must not misinform the model (review-3 f8); the module-level
+`ATTENTION_INSTRUCTION` constant is just that renderer's default output
+(`max_skip=5`), pinned to `AttentionOptions.max_skip`'s default. The block is
+appended whenever the seat's attention mode is `model` or `hybrid`; the
+coordinator extracts `final_summary` and parses directives under that same
+condition, independent of `memory.enabled`/`task_tracker.enabled`.
 Directive parsing never writes standing memory or tasks — a memory-off,
 tracker-off civ can still sleep.
 
@@ -358,7 +390,11 @@ unbounded feed).
 **Mechanics:** each slept turn appends one compact record to the attention state
 JSON (persisted — a crash mid-streak loses nothing). On wake: render, inject,
 clear. Capped ~1,200 chars; participates in existing context-budget accounting the
-same way the memory block does.
+same way the memory block does. A digest render failure (e.g. a tampered
+slept record) degrades to a one-line stub — `== WHILE YOU SLEPT (<n> turns;
+digest unavailable: <repr(e)>) ==`, capped at the same char limit — never an
+empty block: the recap's *fact* (a sleep happened, for how long) survives
+even when its detail doesn't (review-3 f6).
 
 **Reserved extension slot:** the digest ends with a designed-in slot for the
 B-slice map delta — textual "ownership/border changes near you" first, rendered
@@ -407,7 +443,11 @@ the same computation played records use. `standing_memory`/`task_tracker` are
 the same field dicts (the tracker still ran; nothing was captured). The record
 never carries `"skipped"` — that key means a FAILED turn. Played (wake)
 records gain `"turn_kind": "played"` and the same `attention` object
-(`decision: "woke"`, `wake_cause` set). All additions are additive:
+(`decision: "woke"`, `wake_cause` set, plus `wake_detail` — the
+`SCAN_PARTIAL` family/error digest (capped 300 chars), the `ENEMY_NEAR`
+hostile description, or the `STATE_CORRUPT` exception repr (capped 200
+chars); `""` when the cause carries no extra detail; review-3 f5). All
+additions are additive:
 `schema_version` stays 1, and records without `turn_kind` (pre-feature) read
 as played. Failed turns remain log-only with `"skipped": true`, unchanged.
 
