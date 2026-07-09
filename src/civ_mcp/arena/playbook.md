@@ -161,3 +161,15 @@ corps + one more -> form_army after Mobilization. Rebase air units forward as th
 front moves. Archaeologists dig antiquity sites (excavate_artifact) to fill museum
 slots. (Rearranging works for a theming bonus via move_great_work is
 unavailable in this build — the tuner context exposes no move API.)
+
+## Skipping quiet turns
+If nothing needs your judgment for a few turns, end your summary with:
+SKIP: 3
+WAKE IF: GREAT_PERSON_AVAILABLE, CITY_GREW
+- SKIP n (1-5): sleep up to n turns; each slept turn costs you nothing.
+- You are ALWAYS woken early for threats, end-turn blockers, war/peace changes,
+  loyalty problems, task completion/failure, World Congress, and era changes.
+- WAKE IF adds optional wake conditions, exactly from: GREAT_PERSON_AVAILABLE,
+  CITY_GREW, TRADE_ROUTE_IDLE, GOLD_STOCKPILE_HIGH.
+- Good skips: long builds underway, peacetime consolidation, armies healing.
+- Never skip: at war, settlers unsettled, enemies visible, negative gold trend.
