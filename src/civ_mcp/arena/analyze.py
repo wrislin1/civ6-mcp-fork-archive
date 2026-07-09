@@ -226,15 +226,20 @@ def behavior_metrics(transcript_records: list[dict]) -> dict:
         if pid is not None:
             puppeted_players.add(pid)
 
-        if _is_local_driver(rec):
-            drivers["in_process"] += 1
-        else:
-            drivers["cli"] += 1
-
-        if _standing_memory_injected(rec):
-            standing_memory_turns += 1
-        if _standing_memory_captured(rec):
-            standing_memory_captured_turns += 1
+        # Driver and standing-memory tallies are per MODEL turn; slept
+        # records (no model invocation) would inflate them (review-2 f7).
+        # Task results below still count on every record:
+        # run_pre_model_tasks executes on slept turns too, so their
+        # follow-through is real behavior.
+        if _turn_kind(rec) == "played":
+            if _is_local_driver(rec):
+                drivers["in_process"] += 1
+            else:
+                drivers["cli"] += 1
+            if _standing_memory_injected(rec):
+                standing_memory_turns += 1
+            if _standing_memory_captured(rec):
+                standing_memory_captured_turns += 1
 
         if _task_tracker_active(rec):
             task_tracker_turns += 1
@@ -310,7 +315,14 @@ def _representative_n_ctx(recs: list[dict]) -> int | None:
 
 
 def config_summary(records: list[dict]) -> dict:
-    """Return per-player experiment config fingerprints and outcome averages."""
+    """Return per-player experiment config fingerprints and outcome averages.
+
+    Played turns only: slept records carry step_count=0, no briefing_tokens
+    and no civ_options, so counting them would deflate every average and
+    split an in-process civ into a spurious empty-config fingerprint group
+    (review-2 f7). attention_metrics owns the slept-turn story.
+    """
+    records = [rec for rec in records if _turn_kind(rec) == "played"]
     by_pid: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     fingerprints: dict[tuple[str, str], dict] = {}
     for rec in records:

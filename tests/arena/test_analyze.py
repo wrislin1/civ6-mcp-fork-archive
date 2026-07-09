@@ -502,6 +502,51 @@ def test_config_summary_falls_back_when_player_id_missing() -> None:
     assert summary["unknown"]["turns"] == 1
 
 
+def test_config_summary_ignores_slept_records():
+    """Review-2 finding 7: slept records (step_count 0, no civ_options) must
+    not deflate averages or split a civ into a spurious empty-config group."""
+    from civ_mcp.arena.analyze import config_summary
+
+    played = {
+        "player_id": 1, "provider": "local", "model": "m",
+        "civ_options": {"tools": "minimal"}, "turn_kind": "played",
+        "step_count": 4, "briefing_tokens": 100,
+        "state_delta": {"score": 2},
+    }
+    slept = {
+        "player_id": 1, "provider": "local", "model": "m",
+        "turn_kind": "slept", "slept": True, "step_count": 0,
+        "state_delta": {"score": 1},
+    }
+    summary = config_summary([played, slept, dict(played)])
+    assert list(summary) == ["1"]      # ONE group -- no empty-config split
+    entry = summary["1"]
+    assert entry["turns"] == 2         # played turns only
+    assert entry["avg_steps"] == 4.0   # not deflated by the slept 0
+    assert entry["avg_briefing_tokens"] == 100.0
+
+
+def test_behavior_metrics_drivers_played_only_tasks_still_counted():
+    """Drivers/standing-memory tally MODEL turns; slept-turn task
+    follow-through is real behavior and must still count."""
+    from civ_mcp.arena.analyze import behavior_metrics
+
+    played = {"player_id": 1, "driver": "in_process", "turn_kind": "played",
+              "standing_memory": {"injected": True, "injected_chars": 10,
+                                  "captured_chars": 5}}
+    slept = {"player_id": 1, "driver": "in_process", "turn_kind": "slept",
+             "slept": True,
+             "task_tracker": {"active_before": 1, "active_after": 0,
+                              "pre_model_results": [
+                                  {"kind": "settle", "action": "found_city",
+                                   "status": "complete", "result": "city founded"}]}}
+    m = behavior_metrics([played, slept])
+    assert m["drivers"] == {"in_process": 1, "cli": 0}  # slept != a model turn
+    assert m["standing_memory_turns"] == 1
+    assert m["task_completed"] == 1                     # slept follow-through counts
+    assert m["puppeted_players"] == [1]
+
+
 def test_analyze_report_carries_config_summary() -> None:
     from civ_mcp.arena.analyze import analyze
 
