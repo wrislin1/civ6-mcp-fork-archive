@@ -1380,3 +1380,73 @@ def test_clamp_final_summary_preserves_bullet_point_standing_plan_marker():
 
     assert clamped.startswith("• STANDING PLAN:")
     assert "keep scout moving" in clamped
+
+
+def test_call_attention_tail_replaces_one_line_summary(monkeypatch):
+    """Final-review Important 1: 'give a one-line summary' contradicts
+    ATTENTION_INSTRUCTION's end-with-SKIP-lines ask and suppresses directive
+    emission -- attention-instruction civs get the short-summary tail instead."""
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (b'{"type":"result","result":"ok","usage":{},"total_cost_usd":0}', b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(attention=AttentionOptions(mode="model")),
+    )
+    asyncio.run(pol(None, player_id=3, turn=9))
+
+    joined = " ".join(captured["argv"])
+    assert "give a one-line summary" not in joined
+    assert "give a short summary" in joined
+
+
+def test_final_summary_stays_raw_so_trailing_directives_survive(monkeypatch):
+    """Regression pin for the load-bearing guarantee behind final-review
+    Important 1: the transcript's final_summary is the RAW CLI text (never the
+    clamped summary field), so SKIP:/WAKE IF: lines beyond any clamp always
+    reach the coordinator's parse_directive."""
+    from civ_mcp.arena.attention import parse_directive
+
+    long_summary = ("x" * 600) + "\nSKIP: 3\nWAKE IF: CITY_GREW"
+    blob = json.dumps(
+        {"type": "result", "result": long_summary, "usage": {}, "total_cost_usd": 0}
+    ).encode()
+    captured = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        async def communicate(self):
+            return (blob, b"")
+        async def wait(self):
+            pass
+
+    async def fake_create(*args, **kwargs):
+        captured["argv"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    pol = CLIAgentPolicy(
+        "cli-claude", FakeCost(), project_dir="/x", timeout_s=5,
+        options=CivOptions(attention=AttentionOptions(mode="model")),
+    )
+    result = asyncio.run(pol(None, player_id=3, turn=9))
+
+    directive = parse_directive(result["transcript"]["final_summary"], 5)
+    assert directive is not None
+    assert directive.skip == 3 and directive.wake_if == ("CITY_GREW",)
+    # the human-readable summary field is clamped, but to the widened 1200 --
+    # wide enough that this 620-char summary keeps its trailing directive there too
+    assert "SKIP: 3" in result["summary"]

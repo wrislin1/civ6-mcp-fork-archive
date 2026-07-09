@@ -90,6 +90,10 @@ _PROMPT = (
     "city production and research). Do NOT end the turn — the host ends it for you."
 )
 _PROMPT_SUMMARY_TAIL = " When done, give a one-line summary."
+# Attention civs are told they may END the summary with SKIP:/WAKE IF: lines
+# (ATTENTION_INSTRUCTION); demanding "one-line" contradicts that and suppresses
+# directive emission (final-review Important 1).
+_PROMPT_SUMMARY_TAIL_ATTENTION = " When done, give a short summary."
 
 def _clamp_final_summary(text: str, max_summary_chars: int) -> str:
     # memory.find_standing_plan_start shares extraction's exact matcher, so a
@@ -511,7 +515,11 @@ class CLIAgentPolicy:
             include_attention_instruction=include_attention_instruction,
         )
         if not include_standing_plan_instruction:
-            opening += _PROMPT_SUMMARY_TAIL
+            opening += (
+                _PROMPT_SUMMARY_TAIL_ATTENTION
+                if include_attention_instruction
+                else _PROMPT_SUMMARY_TAIL
+            )
         core = _PROMPT.format(pid=player_id, turn=turn)
         prompt = f"{core}\n\n{opening}"
         if self._system_prefix:

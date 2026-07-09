@@ -173,3 +173,17 @@ def test_attention_directives_enabled_property():
 
 def test_arena_config_max_game_turns_default_uncapped():
     assert ArenaConfig(players=[]).max_game_turns == 0
+
+
+def test_summary_chars_widened_for_attention_directives():
+    # Final-review Important 1: directives sit at the END of the final summary;
+    # attention-directive civs must not get the plain 500-char front clamp on
+    # the run-log summary / fallback path. auto mode issues no directives.
+    assert CivOptions().standing_plan_summary_chars == 500
+    assert CivOptions(attention=AttentionOptions(mode="auto")).standing_plan_summary_chars == 500
+    assert CivOptions(attention=AttentionOptions(mode="model")).standing_plan_summary_chars == 1200
+    assert CivOptions(attention=AttentionOptions(mode="hybrid")).standing_plan_summary_chars == 1200
+    # memory/tracker civs keep their existing (>= 1200) widening untouched
+    assert (
+        CivOptions(memory=MemoryOptions(enabled=True)).standing_plan_summary_chars == 1200
+    )

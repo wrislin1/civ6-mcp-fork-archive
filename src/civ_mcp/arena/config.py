@@ -122,9 +122,17 @@ class CivOptions:
 
     @property
     def standing_plan_summary_chars(self) -> int:
-        if not self.standing_plan_enabled:
-            return 500
-        return max(1200, self.standing_plan_capture_chars)
+        if self.standing_plan_enabled:
+            return max(1200, self.standing_plan_capture_chars)
+        if self.attention_directives_enabled:
+            # SKIP:/WAKE IF: lines sit at the END of the final summary
+            # (ATTENTION_INSTRUCTION); the plain 500-char front clamp would
+            # hide them from the run-log summary field and from the
+            # coordinator's raw-empty fallback path. The transcript's
+            # final_summary itself is always raw -- this only widens the
+            # clamped views.
+            return 1200
+        return 500
 
 @dataclass(frozen=True)
 class PlayerSpec:
