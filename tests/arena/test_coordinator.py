@@ -1879,8 +1879,8 @@ async def test_failed_wake_cancels_directive_remainder(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_tampered_slept_record_costs_digest_not_run(tmp_path):
     """Final-review pinhole: a slept record missing "turn" (external tampering
-    -- load validates list-of-dicts, not record internals) must degrade to an
-    empty digest on the wake turn, never abort run_arena."""
+    -- load validates list-of-dicts, not record internals) must degrade to a
+    stub digest naming the failure on the wake turn, never abort run_arena."""
     from civ_mcp.arena.attention import AttentionState, save_attention_state
     from civ_mcp.arena.config import AttentionOptions
 
@@ -1901,7 +1901,11 @@ async def test_tampered_slept_record_costs_digest_not_run(tmp_path):
     result = await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
 
     assert pol.calls == 1                     # the wake still happened
-    assert pol.last_digest == ""              # digest lost, run intact
+    # Review-3 f6: the DETAIL is lost, but the FACT of the sleep survives --
+    # an empty block silently erased the whole recap.
+    assert "WHILE YOU SLEPT" in pol.last_digest
+    assert "digest unavailable" in pol.last_digest
+    assert "1 turns" in pol.last_digest       # len(slept) == 1 in this fixture
     assert result["puppet_turns_played"] == 1
     assert sink.records[-1]["turn_kind"] == "played"
 

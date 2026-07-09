@@ -8,6 +8,7 @@ from civ_mcp.arena import autoresolve, hook
 from civ_mcp.arena.agent import load_playbook
 from civ_mcp.arena.attention import (
     AttentionState,
+    DIGEST_MAX_CHARS,
     Decision,
     build_attention_query,
     cancel_remainder,
@@ -396,9 +397,14 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                             wake_detail=decision.wake_detail,
                         )
                     except Exception as e:
-                        # A tampered slept record (e.g. missing "turn") must
-                        # cost the digest, not the run (final-review pinhole).
-                        digest_block = ""
+                        # A tampered slept record (e.g. missing "turn") or a
+                        # render regression must cost the digest DETAIL, not
+                        # the run -- and not the FACT of the sleep: an empty
+                        # block silently erased the whole recap (review-3 f6).
+                        digest_block = (
+                            f"== WHILE YOU SLEPT ({len(att_state.slept)} turns; "
+                            f"digest unavailable: {e!r}) =="
+                        )[:DIGEST_MAX_CHARS]
                         print(f"[arena] wake digest render failed: {e!r}", file=sys.stderr)
 
                 # Gate every injected kwarg on the policy's signature (the
