@@ -319,3 +319,51 @@ def test_cancel_remainder_keeps_digest_and_streak():
     assert st.skips_remaining == 0
     assert len(st.slept) == 1 and st.streak == 1
     assert st.directive == {"skip": 3, "wake_if": []}
+
+
+# Final-review triage (T8): dedicated true-condition tests for every hard
+# trigger branch that only had matrix/false-side coverage.
+HARD_TRUE_CONDITIONS = [
+    ("ATTN|CITYHP|damaged=", "ATTN|CITYHP|damaged=17", "CITY_DAMAGED"),
+    ("ATTN|WAR|with=", "ATTN|WAR|with=3", "WAR_PEACE_CHANGED"),
+    ("ATTN|LOYALTY|negative=", "ATTN|LOYALTY|negative=17", "LOYALTY_NEGATIVE"),
+    ("ATTN|WC|turns=5", "ATTN|WC|turns=0", "WC_SESSION"),
+    ("ATTN|ERA|index=1", "ATTN|ERA|index=2", "ERA_CHANGED"),
+    ("ATTN|DIPLO|pending=0", "ATTN|DIPLO|pending=1", "BLOCKER_DIPLOMACY_SESSION"),
+]
+
+
+@pytest.mark.parametrize("old,new,cause", HARD_TRUE_CONDITIONS)
+def test_hard_trigger_true_conditions(old, new, cause):
+    scan = parse_attention_scan([l.replace(old, new) for l in QUIET_LINES])
+    d = evaluate("auto", _st(), scan, SNAP, max_streak=5, task_event=False)
+    assert (d.action, d.wake_cause) == ("wake", cause)
+
+
+def test_city_count_changed_wakes():
+    d = evaluate("auto", _st(), QUIET, {**SNAP, "cities": 3}, max_streak=5, task_event=False)
+    assert d.wake_cause == "CITY_COUNT_CHANGED"
+
+
+def test_peace_direction_also_wakes():
+    # WAR_PEACE_CHANGED is a set inequality: leaving a war wakes too
+    st = _st(last_scan={"at_war_with": [3], "era_index": 1, "total_population": 12})
+    d = evaluate("auto", st, QUIET, SNAP, max_streak=5, task_event=False)
+    assert d.wake_cause == "WAR_PEACE_CHANGED"
+
+
+SOFT_TRUE_CONDITIONS = [
+    ("ATTN|GP|available=0", "ATTN|GP|available=1", "GREAT_PERSON_AVAILABLE", SNAP),
+    ("ATTN|TRADE|idle=0", "ATTN|TRADE|idle=1", "TRADE_ROUTE_IDLE", SNAP),
+    (None, None, "GOLD_STOCKPILE_HIGH", {**SNAP, "gold": 600}),
+]
+
+
+@pytest.mark.parametrize("old,new,token,snap", SOFT_TRUE_CONDITIONS)
+def test_soft_trigger_true_conditions(old, new, token, snap):
+    lines = QUIET_LINES if old is None else [l.replace(old, new) for l in QUIET_LINES]
+    scan = parse_attention_scan(lines)
+    st = _st(skips_remaining=2, directive={"skip": 3, "wake_if": [token]})
+    d = evaluate("hybrid", st, scan, snap, max_streak=5, task_event=False)
+    assert (d.action, d.wake_cause) == ("wake", token)
+    assert token in d.soft

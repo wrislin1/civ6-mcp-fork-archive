@@ -902,3 +902,21 @@ def test_civ_options_fingerprint_contains_memory_and_task_tracker():
     ).fingerprint()
     assert fp["memory"] == {"enabled": True, "max_chars": 900, "max_age_turns": 10}
     assert fp["task_tracker"] == {"enabled": True, "max_tasks": 4}
+
+
+def test_attention_yaml_on_cli_civ(tmp_path):
+    """Final-review triage (T2): CLI civs are the expensive seats -- pin that
+    the attention knob reaches CivOptions through the cli-provider branch too,
+    not just the local one."""
+    cfg = _load(tmp_path, """
+run_id: t1
+civs:
+  - player: 2
+    provider: cli-claude
+    attention:
+      mode: hybrid
+      threat_radius: 6
+""")
+    assert cfg.players[0].provider == "cli-claude"
+    assert cfg.players[0].options.attention.mode == "hybrid"
+    assert cfg.players[0].options.attention.threat_radius == 6
