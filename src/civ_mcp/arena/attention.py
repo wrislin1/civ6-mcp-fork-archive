@@ -436,10 +436,14 @@ fam("ERA", function()
     print("ATTN|ERA|index=" .. tostring(Game.GetEras():GetCurrentEra()))
 end)
 fam("WAR", function()
+    -- diplomacy.py:43 loop shape. PlayerManager.GetAliveMajors() has no
+    -- codebase precedent; if that API were missing, this family would emit
+    -- ATTN_ERR|WAR on every scan -> every turn wakes -> feature silently inert.
     local ids = {}
-    for _, other in ipairs(PlayerManager.GetAliveMajors()) do
-        local i = other:GetID()
-        if i ~= me and pDiplo:IsAtWarWith(i) then ids[#ids + 1] = tostring(i) end
+    for i = 0, 62 do
+        if i ~= me and Players[i] and Players[i]:IsAlive() and Players[i]:IsMajor() then
+            if pDiplo:IsAtWarWith(i) then ids[#ids + 1] = tostring(i) end
+        end
     end
     print("ATTN|WAR|with=" .. table.concat(ids, ","))
 end)
@@ -624,13 +628,17 @@ fam("NOTIFY", function()
     if list then
         for _, nid in ipairs(list) do
             if emitted >= 10 then break end
-            local entry = NotificationManager.Find(me, nid)
-            if entry and not entry:IsDismissed() then
-                local typeName = entry:GetTypeName() or "UNKNOWN"
-                local msg = (entry:GetMessage() or ""):gsub("|", "/")
-                print("ATTN|NOTIFY|type=" .. typeName .. "|msg=" .. msg)
-                emitted = emitted + 1
-            end
+            -- per-entry pcall (notifications.py:53-102 idiom): one malformed
+            -- notification skips itself, not the rest of the list
+            pcall(function()
+                local entry = NotificationManager.Find(me, nid)
+                if entry and not entry:IsDismissed() then
+                    local typeName = entry:GetTypeName() or "UNKNOWN"
+                    local msg = (entry:GetMessage() or ""):gsub("|", "/")
+                    print("ATTN|NOTIFY|type=" .. typeName .. "|msg=" .. msg)
+                    emitted = emitted + 1
+                end
+            end)
         end
     end
 end)
