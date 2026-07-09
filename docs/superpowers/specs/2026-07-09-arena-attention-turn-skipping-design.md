@@ -156,11 +156,20 @@ fields, one per hard-trigger family:
 - `negative_loyalty_city_ids` (net trend, the slice-4 `get_loyalty` read)
 - `wc_turns_until_next` (0 = in session / imminent)
 - `era_index` (delta vs. stored = era changed)
-- blocker family: `empty_queue_city_ids`, `research_due`, `civic_due`,
-  `idle_unit_count` (excluding fortified/sleeping/alert/automated/
-  tracker-owned), `pending_diplomacy`, `pending_trade`, `governor_point`,
-  `empty_policy_slot`, `pantheon_or_religion_choice`
+- `blocker_types`: the game's own `EndTurnBlocking` type names (the proven
+  `build_end_turn_blocking_query` read), minus a small ignore-set (unit
+  promotions — `sweep_promotions` resolves those post-turn). One passthrough
+  covers empty queues, research/civic choices, units needing orders,
+  governors, policies, beliefs — every "needs input" signal the game itself
+  raises. Tracker-owned units don't false-trigger: the scan runs after
+  `run_pre_model_tasks`, so their moves are already spent.
+- `pending_diplomacy`: any open diplomacy session involving this seat (the
+  orphan-sweep session-read idiom)
+- `total_population`, `great_person_available`, `trade_route_idle` — feed the
+  soft triggers (`CITY_GREW` via stored-population delta, the others directly)
 - `notifications`: (type, summary) pairs for wake-list matching + digest
+- Every family is individually `pcall`-guarded in the Lua; a failed family is
+  reported and → WAKE (partial scans never silently narrow attention)
 
 **Attention snapshots are not transcript-gated.** Today `_overview_snapshot`
 runs only when transcripts are on (`_tx_on`); with attention mode ≠ `off`, the
