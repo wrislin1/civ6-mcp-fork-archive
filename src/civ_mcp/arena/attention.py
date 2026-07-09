@@ -127,6 +127,13 @@ def load_attention_state(transcript_dir: str, run_id: str, player_id: int) -> At
     if not isinstance(data, dict):
         return fresh
     try:
+        for key in ("directive", "last_snapshot", "last_scan"):
+            value = data.get(key)
+            if value is not None and not isinstance(value, dict):
+                raise TypeError(f"{key} must be a dict or null")
+        slept = data.get("slept", [])
+        if not isinstance(slept, list) or not all(isinstance(r, dict) for r in slept):
+            raise TypeError("slept must be a list of dicts")
         st = AttentionState(
             schema_version=int(data["schema_version"]),
             run_id=str(data["run_id"]),
@@ -137,7 +144,7 @@ def load_attention_state(transcript_dir: str, run_id: str, player_id: int) -> At
             last_wake_turn=int(data.get("last_wake_turn", -1)),
             last_snapshot=data.get("last_snapshot"),
             last_scan=data.get("last_scan"),
-            slept=list(data.get("slept", [])),
+            slept=list(slept),
             directive_ack=str(data.get("directive_ack", "")),
         )
     except (KeyError, TypeError, ValueError):
@@ -213,7 +220,11 @@ def render_digest(
     state: AttentionState, *, wake_turn: int, wake_cause: str, wake_detail: str
 ) -> str:
     """Priority order (spec section 4): wake cause, directive ack, accumulated
-    deltas, tracker progress, notifications (newest first, capped)."""
+    deltas, tracker progress, notifications (newest first, capped).
+
+    Must be called on the pre-wake state (while ``slept`` is still populated)
+    — ``note_wake`` clears the accumulator.
+    """
     if not state.slept:
         return ""
     first = state.slept[0]["turn"]

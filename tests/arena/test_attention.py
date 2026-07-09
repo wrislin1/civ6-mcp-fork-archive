@@ -110,3 +110,23 @@ def test_render_digest_contents_and_cap():
 
 def test_render_digest_empty_without_sleeps():
     assert render_digest(_seeded_state(), wake_turn=45, wake_cause="", wake_detail="") == ""
+
+def test_wrong_shaped_nested_fields_reset(tmp_path):
+    p = attention_path(str(tmp_path), "r1", 3)
+    p.parent.mkdir(parents=True)
+    p.write_text(
+        '{"schema_version": 1, "run_id": "r1", "player_id": 3, "directive": null,'
+        ' "skips_remaining": 1, "streak": 1, "last_wake_turn": 4,'
+        ' "last_snapshot": null, "last_scan": null, "slept": "abc", "directive_ack": ""}'
+    )
+    st = load_attention_state(str(tmp_path), "r1", 3)
+    assert st.slept == [] and st.streak == 0  # fresh, not ['a','b','c']
+
+def test_run_or_player_mismatch_resets(tmp_path):
+    st = _seeded_state()
+    save_attention_state(str(tmp_path), "r1", 3, st)
+    # seeded state has skips_remaining=3 and a snapshot; fresh has neither
+    mismatched_run = load_attention_state(str(tmp_path), "OTHER", 3)
+    assert mismatched_run.skips_remaining == 0 and mismatched_run.last_snapshot is None
+    mismatched_player = load_attention_state(str(tmp_path), "r1", 4)
+    assert mismatched_player.skips_remaining == 0 and mismatched_player.last_snapshot is None
