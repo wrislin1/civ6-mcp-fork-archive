@@ -419,24 +419,56 @@ def _attention_streaks(records: list[dict]) -> list[tuple[list[dict], str]]:
     return streaks
 
 
+def _gold_level(rec: dict, key: str) -> "int | float | None":
+    """Defensive gold-level read from a record's state snapshot.
+
+    Returns None unless the snapshot is a dict carrying a numeric gold value —
+    records whose ``state_delta`` is None may also carry unreliable snapshots,
+    and an unreadable level must never fabricate a false-quiet.
+    """
+    snapshot = rec.get(key)
+    if not isinstance(snapshot, dict):
+        return None
+    gold = snapshot.get("gold")
+    if isinstance(gold, bool) or not isinstance(gold, (int, float)):
+        return None
+    return gold
+
+
 def _streak_is_false_quiet(streak: list[dict], ending_cause: str) -> bool:
     """Harm = summed units < 0, summed cities < 0, or gold ended < 0 (started >= 0).
 
-    Records with ``state_delta is None`` contribute nothing (degrade, not
-    abort — mirrors the coordinator's own None-on-unknown-delta convention).
+    Units/cities are summed deltas across the streak; records with
+    ``state_delta is None`` contribute nothing (degrade, not abort — mirrors
+    the coordinator's own None-on-unknown-delta convention).
+
+    Gold is deliberately an absolute-LEVEL rule, not a delta sum (review
+    catch): a healthy treasury drifting down (1000 → 950) sums negative but
+    is not harm — only crossing into the negative is. Started = first streak
+    record's ``state_before`` gold; ended = last record's ``state_after``
+    gold. If either level is missing or non-numeric, the gold leg contributes
+    no harm (conservative — never fabricate a false-quiet from unreadable
+    data).
     """
     units_sum = 0
     cities_sum = 0
-    gold_sum = 0
     for rec in streak:
         state_delta = rec.get("state_delta")
         if state_delta is None:
             continue
         units_sum += state_delta.get("units", 0) or 0
         cities_sum += state_delta.get("cities", 0) or 0
-        gold_sum += state_delta.get("gold", 0) or 0
 
-    harm = units_sum < 0 or cities_sum < 0 or gold_sum < 0
+    gold_started = _gold_level(streak[0], "state_before") if streak else None
+    gold_ended = _gold_level(streak[-1], "state_after") if streak else None
+    gold_harm = (
+        gold_started is not None
+        and gold_ended is not None
+        and gold_started >= 0
+        and gold_ended < 0
+    )
+
+    harm = units_sum < 0 or cities_sum < 0 or gold_harm
     return harm and ending_cause not in _FALSE_QUIET_EXPECTED_CAUSES
 
 

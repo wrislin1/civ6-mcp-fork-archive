@@ -1764,3 +1764,31 @@ def test_true_quiet_not_flagged():
 def test_pre_feature_records_read_as_played():
     m = attention_metrics([{"player_id": 1, "turn": 1, "usd": 0.0}])
     assert m[1]["captured"] == 1 and m[1]["slept_turns"] == 0
+
+
+def _slept_gold(turn, gold_before, gold_after):
+    """Slept record with explicit gold LEVELS (state_before/state_after snapshots)."""
+    rec = _slept(turn)
+    rec["state_delta"]["gold"] = gold_after - gold_before
+    rec["state_before"] = {"gold": gold_before, "units": 3, "cities": 1, "score": 10,
+                           "science": 0, "culture": 0, "faith": 0}
+    rec["state_after"] = {"gold": gold_after, "units": 3, "cities": 1, "score": 11,
+                          "science": 0, "culture": 0, "faith": 0}
+    return rec
+
+
+def test_healthy_gold_drain_not_false_quiet():
+    # treasury 1000 -> 950 over a quiet streak: net-negative deltas but never
+    # near zero -- must NOT count as harm (review catch: level rule, not delta sum)
+    recs = [_played(1), _slept_gold(2, 1000, 975), _slept_gold(3, 975, 950),
+            _played(4, "STREAK_CAP")]
+    m = attention_metrics(recs)[1]
+    assert m["false_quiet"] == {"streaks": 1, "false_quiet_streaks": 0, "rate": 0.0}
+
+
+def test_gold_crossing_negative_is_false_quiet():
+    # started >= 0, ended < 0, woken by STREAK_CAP (not GOLD_CRASH) -> false quiet
+    recs = [_played(1), _slept_gold(2, 30, 5), _slept_gold(3, 5, -20),
+            _played(4, "STREAK_CAP")]
+    m = attention_metrics(recs)[1]
+    assert m["false_quiet"] == {"streaks": 1, "false_quiet_streaks": 1, "rate": 1.0}
