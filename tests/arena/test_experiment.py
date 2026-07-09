@@ -742,6 +742,65 @@ civs:
     assert cfg.gateway_url == "http://192.168.20.196:11444/v1"
 
 
+def _load(tmp_path, text):
+    """Helper to write YAML text and load as experiment."""
+    return load_experiment(_write(tmp_path, text))
+
+
+def test_attention_yaml_parsed(tmp_path):
+    cfg = _load(tmp_path, """
+run_id: t1
+civs:
+  - player: 1
+    provider: local
+    model: m
+    attention:
+      mode: hybrid
+      max_skip: 3
+""")
+    assert cfg.players[0].options.attention.mode == "hybrid"
+    assert cfg.players[0].options.attention.max_skip == 3
+    assert cfg.players[0].options.attention.max_streak == 5  # default preserved
+
+
+def test_attention_bad_mode_rejected(tmp_path):
+    with pytest.raises(ValueError, match="attention.mode"):
+        _load(tmp_path, """
+run_id: t1
+civs:
+  - {player: 1, provider: local, model: m, attention: {mode: sometimes}}
+""")
+
+
+def test_attention_unknown_subkey_rejected(tmp_path):
+    with pytest.raises(ValueError, match="attention"):
+        _load(tmp_path, """
+run_id: t1
+civs:
+  - {player: 1, provider: local, model: m, attention: {mode: auto, nap_time: 9}}
+""")
+
+
+def test_max_game_turns_top_level(tmp_path):
+    cfg = _load(tmp_path, """
+run_id: t1
+max_game_turns: 200
+civs:
+  - {player: 1, provider: local, model: m}
+""")
+    assert cfg.max_game_turns == 200
+
+
+def test_max_game_turns_negative_rejected(tmp_path):
+    with pytest.raises(ValueError, match="max_game_turns"):
+        _load(tmp_path, """
+run_id: t1
+max_game_turns: -1
+civs:
+  - {player: 1, provider: local, model: m}
+""")
+
+
 def test_local_civ_parses_memory_and_task_tracker(tmp_path):
     text = GOOD.replace(
         "briefing: {enabled: true, map_radius: 4, sections: [overview, units, map]}",

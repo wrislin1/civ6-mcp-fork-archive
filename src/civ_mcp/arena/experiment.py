@@ -11,6 +11,7 @@ from civ_mcp.arena.config import (
     VALID_PLAYBOOKS,
     VALID_SECTIONS,
     ArenaConfig,
+    AttentionOptions,
     BriefingOptions,
     CivOptions,
     MemoryOptions,
@@ -32,12 +33,14 @@ _SHARED_KNOBS = (
     "briefing",
     "memory",
     "task_tracker",
+    "attention",
 )
 _CIV_KEYS = {"player", "provider", "model", "gateway", *_LOCAL_KNOBS, *_SHARED_KNOBS}
-_TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "civs"}
+_TOP_KEYS = {"run_id", "max_puppet_turns", "idle_poll_limit", "gateway_url", "max_game_turns", "civs"}
 _BRIEFING_DEFAULTS = BriefingOptions()
 _MEMORY_DEFAULTS = MemoryOptions()
 _TASK_TRACKER_DEFAULTS = TaskTrackerOptions()
+_ATTENTION_DEFAULTS = AttentionOptions()
 _CIV_DEFAULTS = CivOptions()
 _ARENA_DEFAULTS = ArenaConfig(players=[])
 
@@ -197,6 +200,34 @@ def _parse_task_tracker(civ_label: str, raw: object) -> TaskTrackerOptions:
     return TaskTrackerOptions(enabled=enabled, max_tasks=max_tasks)
 
 
+_ATTENTION_MODES = ("off", "auto", "model", "hybrid")
+
+
+def _parse_attention(civ_label: str, raw: object) -> AttentionOptions:
+    if not isinstance(raw, dict):
+        raise _err(civ_label, f"attention must be a mapping, got {raw!r}")
+    _validate_mapping_keys(
+        civ_label, raw, {"mode", "max_skip", "max_streak", "threat_radius"}, "attention"
+    )
+    mode = raw.get("mode", _ATTENTION_DEFAULTS.mode)
+    if mode not in _ATTENTION_MODES:
+        raise _err(civ_label, f"attention.mode must be one of {_ATTENTION_MODES}, got {mode!r}")
+    return AttentionOptions(
+        mode=mode,
+        max_skip=_positive_int(
+            civ_label, "attention.max_skip", raw.get("max_skip", _ATTENTION_DEFAULTS.max_skip)
+        ),
+        max_streak=_positive_int(
+            civ_label, "attention.max_streak", raw.get("max_streak", _ATTENTION_DEFAULTS.max_streak)
+        ),
+        threat_radius=_positive_int(
+            civ_label,
+            "attention.threat_radius",
+            raw.get("threat_radius", _ATTENTION_DEFAULTS.threat_radius),
+        ),
+    )
+
+
 def _parse_tools(civ_label: str, raw: object) -> str | tuple[str, ...]:
     if isinstance(raw, str):
         selector: str | tuple[str, ...] = raw
@@ -248,6 +279,9 @@ def _parse_civ(raw: dict[object, object]) -> PlayerSpec:
         if "task_tracker" not in raw
         else _parse_task_tracker(label, raw["task_tracker"])
     )
+    attention = (
+        _ATTENTION_DEFAULTS if "attention" not in raw else _parse_attention(label, raw["attention"])
+    )
 
     if provider != "local":
         opts = CivOptions(
@@ -256,6 +290,7 @@ def _parse_civ(raw: dict[object, object]) -> PlayerSpec:
             briefing=briefing,
             memory=memory,
             task_tracker=task_tracker,
+            attention=attention,
         )
         return PlayerSpec(player_id, provider, model, gateway, opts)
 
@@ -272,6 +307,7 @@ def _parse_civ(raw: dict[object, object]) -> PlayerSpec:
         briefing=briefing,
         memory=memory,
         task_tracker=task_tracker,
+        attention=attention,
     )
     return PlayerSpec(player_id, provider, model, gateway, opts)
 
@@ -288,6 +324,14 @@ def _top_int(path: Path, field: str, value: object) -> int:
     if parsed <= 0:
         raise ValueError(f"experiment config {path}: {field} must be positive")
     return parsed
+
+
+def _top_non_negative_int(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(
+            f"experiment config: max_game_turns must be an integer >= 0, got {value!r}"
+        )
+    return value
 
 
 def load_experiment(path: str | Path, defaults: ArenaConfig | None = None) -> ArenaConfig:
@@ -324,6 +368,9 @@ def load_experiment(path: str | Path, defaults: ArenaConfig | None = None) -> Ar
             config_path,
             "max_puppet_turns",
             data.get("max_puppet_turns", arena_defaults.max_puppet_turns),
+        ),
+        max_game_turns=_top_non_negative_int(
+            data.get("max_game_turns", arena_defaults.max_game_turns)
         ),
         gateway_url=(
             arena_defaults.gateway_url
