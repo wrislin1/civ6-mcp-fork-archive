@@ -1,0 +1,26 @@
+# Live-probe P2 (attention spec, 2026-07-14): auto-mode puppet on a quiet seat
+# must SLEEP. Seat 5 (Sumeria) chosen: at peace with all majors, zero visible
+# hostiles within threat_radius 4 at arming time (turn 155), and it was already
+# an LLM seat in the 8civ-3gemma runs. Expected shape: capture 1 wakes
+# NO_BASELINE (gemma plays, consumes the 1st puppet turn), capture 2 sleeps
+# (turn_kind:"slept", consumes nothing), watcher exits on idle_poll_limit.
+max_puppet_turns: 2
+idle_poll_limit: 300
+gateway_url: http://192.168.20.196:11444/v1
+civs:
+  - player: 5
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 10
+    playbook: condensed
+    context_budget: auto
+    attention:
+      mode: auto
+      threat_radius: 4
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [promotions, overview, units, cities, map, research, production_options, threats, rivals, empire_resources, great_people, victory]

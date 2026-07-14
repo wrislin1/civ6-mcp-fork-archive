@@ -1,0 +1,45 @@
+# Live-probe P4 take 2 (2026-07-14): seats 3 (Byzantium, auto) + 5 (Sumeria, hybrid),
+# Fresh seats (never captured this session): 4 = Babylon (attention auto),
+# both scanned quiet at arming (hostiles=0 damaged=0 negloyal=0, turn ~220).
+# max_streak 2 forces the digest-injected STREAK_CAP wake INSIDE the run:
+# T1 both NO_BASELINE played (2 puppet turns), T2+T3 both sleep, T4 both wake
+# STREAK_CAP with digests (4 puppet turns total -> clean exit).
+# Expected budgets: turns_slept 4 + puppet_turns_played 4 == 8 captured.
+max_puppet_turns: 4
+idle_poll_limit: 600
+gateway_url: http://192.168.20.196:11444/v1
+civs:
+  - player: 3
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 8
+    playbook: condensed
+    context_budget: auto
+    attention:
+      mode: auto
+      max_streak: 2
+      threat_radius: 4
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [overview, units, cities, threats]
+  - player: 5
+    provider: local
+    model: gemma4-26b
+    gateway: http://192.168.20.196:11440/v1
+    tools: full
+    result_char_cap: 6000
+    max_steps: 8
+    playbook: condensed
+    context_budget: auto
+    attention:
+      mode: hybrid
+      max_streak: 2
+      threat_radius: 4
+    briefing:
+      enabled: true
+      map_radius: 3
+      sections: [overview, units, cities, threats]

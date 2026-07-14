@@ -259,6 +259,67 @@ def test_parse_busy_scan():
     assert scan.blocker_types == ("NOTIFICATION_PRODUCTION",)
     assert scan.notifications == (("NOTIFICATION_REBELLION", "Rebels near Pusan"),)
 
+# Live-probe P1 capture (2026-07-14): build_attention_query(0, 4) executed on a
+# real game via the InGame state -- Korea, turn 155, Medieval, 6 cities, quiet
+# borders. All 11 families answered, zero ATTN_ERR. Captured verbatim; this is
+# the regression anchor for the production line format. NOTE: the same query in
+# the GameCore state ATTN_ERRs on CITYHP/LOYALTY/WC/DIPLO (nil APIs) -- the
+# scan must run via execute_write (see test_coordinator.py context assertions).
+LIVE_T155_LINES = [
+    "ATTN|ERA|index=2",
+    "ATTN|WAR|with=",
+    "ATTN|POP|total=35",
+    "ATTN|THREAT|count=0|nearest=",
+    "ATTN|CITYHP|damaged=",
+    "ATTN|LOYALTY|negative=",
+    "ATTN|WC|turns=19",
+    "ATTN|GP|available=0",
+    "ATTN|TRADE|idle=1",
+    "ATTN|DIPLO|pending=0",
+    "ATTN|BLOCKERS|types=ENDTURN_BLOCKING_CIVIC",
+    "ATTN|NOTIFY|type=NOTIFICATION_WONDER_COMPLETED|msg=Wonder Completed",
+    "ATTN|NOTIFY|type=NOTIFICATION_FOREIGN_CITY_BECAME_FREE_CITY|msg=Free City Petitions Civilization",
+    "ATTN|NOTIFY|type=NOTIFICATION_WONDER_COMPLETED|msg=Wonder Completed",
+    "ATTN|NOTIFY|type=NOTIFICATION_FOREIGN_CITY_BECAME_FREE_CITY|msg=Foreign City Gains Independence",
+    "ATTN|NOTIFY|type=NOTIFICATION_CIVIC_DISCOVERED|msg=Discovered Divine Right",
+    "ATTN|NOTIFY|type=NOTIFICATION_CHOOSE_CIVIC|msg=Choose a Civic",
+    "ATTN|NOTIFY|type=NOTIFICATION_QUICK_DEAL|msg=New deals available.",
+]
+
+
+def test_parse_live_t155_fixture():
+    scan = parse_attention_scan(LIVE_T155_LINES)
+    assert scan.failed_families == () and scan.failure_details == ()
+    assert scan.era_index == 2 and scan.total_population == 35
+    assert scan.hostile_count == 0 and scan.nearest_hostile == ""
+    assert scan.damaged_city_ids == () and scan.negative_loyalty_city_ids == ()
+    assert scan.at_war_with == () and scan.wc_turns_until_next == 19
+    assert scan.great_person_available is False
+    assert scan.trade_route_idle is True and scan.pending_diplomacy is False
+    assert scan.blocker_types == ("ENDTURN_BLOCKING_CIVIC",)
+    assert len(scan.notifications) == 7
+    assert scan.notifications[5] == ("NOTIFICATION_CHOOSE_CIVIC", "Choose a Civic")
+    assert scan_scalars(scan) == {
+        "at_war_with": [], "era_index": 2, "total_population": 35,
+    }
+
+
+def test_parse_units_blocker_ignored():
+    """Live-probe P3 finding (2026-07-14, turns 172/182): after any model-played
+    turn the seat's units are left awake, so ENDTURN_BLOCKING_UNITS appears on
+    every subsequent capture and auto mode can never sleep again (wake loop).
+    The sleep path already finish_units()es the seat (coordinator sleep branch),
+    so this blocker is auto-resolvable and must be filtered like the promotion
+    blocker -- a genuinely quiet seat with awake units still sleeps."""
+    lines = [l for l in QUIET_LINES if "BLOCKERS" not in l]
+    lines.append("ATTN|BLOCKERS|types=ENDTURN_BLOCKING_UNITS")
+    scan = parse_attention_scan(lines)
+    assert scan.blocker_types == ()
+    lines[-1] = "ATTN|BLOCKERS|types=ENDTURN_BLOCKING_UNITS,ENDTURN_BLOCKING_PRODUCTION"
+    scan = parse_attention_scan(lines)
+    assert scan.blocker_types == ("ENDTURN_BLOCKING_PRODUCTION",)
+
+
 def test_parse_failed_family_flagged():
     scan = parse_attention_scan([*QUIET_LINES[:4], "ATTN_ERR|WC", *QUIET_LINES[5:]])
     assert "WC" in scan.failed_families

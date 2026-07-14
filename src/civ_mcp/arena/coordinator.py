@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
+from dataclasses import replace as _dc_replace
 from datetime import datetime, timezone
 from civ_mcp import lua as lq
 from civ_mcp.arena import autoresolve, hook
@@ -270,15 +271,33 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                 att_scan = None
                 digest_block = ""
                 decision = None
+                scan_error_detail = ""
                 if attention_on:
                     try:
                         att_state = load_attention_state(transcript_dir, run_id, st.local)
-                        scan_lines = await conn.execute_read(
+                        # InGame (execute_write), NOT GameCore: DefenseTypes,
+                        # GetCulturalIdentity, Game.GetWorldCongress and
+                        # DiplomacyManager are nil in GameCore, so a GameCore
+                        # scan ATTN_ERRs 4 families every turn -> perpetual
+                        # SCAN_PARTIAL wakes (live-probe P1, turn 155).
+                        scan_lines = await conn.execute_write(
                             build_attention_query(st.local, opts.attention.threat_radius)
                         )
                         att_scan = parse_attention_scan(scan_lines)
+                        if att_scan is None:
+                            # Parse-None was a silent SCAN_ERROR (live-probe P3,
+                            # turns 190/212: empty detail, empty stderr). Carry a
+                            # raw-line preview so it is diagnosable post-run,
+                            # like SCAN_PARTIAL carries Lua error text.
+                            scan_error_detail = (
+                                "scan parse returned None; lines="
+                                + repr(scan_lines)[:200]
+                            )
+                        elif state_before is None:
+                            scan_error_detail = "overview snapshot missing"
                     except Exception as e:
                         att_scan = None
+                        scan_error_detail = f"scan raised: {e!r}"[:200]
                         print(f"[arena] attention scan failed; waking: {e!r}", file=sys.stderr)
                     if att_state is None:
                         # first load raised: fresh state (== load's own failure
@@ -307,6 +326,13 @@ async def run_arena(conn, gs, config, policy=None, policy_for=None, transcript=N
                         decision = Decision("wake", "STATE_CORRUPT", repr(e)[:200])
                         print(f"[arena] attention evaluate failed; reset + wake: {e!r}",
                               file=sys.stderr)
+                    if (
+                        decision is not None
+                        and decision.wake_cause == "SCAN_ERROR"
+                        and not decision.wake_detail
+                        and scan_error_detail
+                    ):
+                        decision = _dc_replace(decision, wake_detail=scan_error_detail)
                 if decision is not None and decision.action == "sleep":
                     prev_snapshot = att_state.last_snapshot
                     task_notes = [

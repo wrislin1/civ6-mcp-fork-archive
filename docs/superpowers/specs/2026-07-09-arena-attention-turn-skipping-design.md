@@ -172,8 +172,14 @@ No trigger may require judgment; anything requiring judgment is a wake.
 
 The scan is a `build_attention_query(player_id, threat_radius)` /
 `parse_attention_scan(lines)` pair in `attention.py` — the caps-query pattern:
-one batched **read-only** Lua query executed via `conn.execute_read`, parser
-returns `None` on any malformed payload, and `None` → WAKE (fail-open). Parsed
+one batched **read-only** Lua query, parser returns `None` on any malformed
+payload, and `None` → WAKE (fail-open). Executed via `conn.execute_write`
+(the **InGame** state), *not* `execute_read`: live-probe P1 (turn 155,
+2026-07-14) showed `DefenseTypes`, `GetCulturalIdentity`,
+`Game.GetWorldCongress`, and `DiplomacyManager` are nil in GameCore, so a
+GameCore scan ATTN_ERRs the CITYHP/LOYALTY/WC/DIPLO families on every turn —
+perpetual SCAN_PARTIAL wakes, feature silently inert. All other read-style
+tools that touch these APIs already go through `execute_write`. Parsed
 fields, one per hard-trigger family:
 
 - `hostile_count` + `nearest_hostile` (unit type, distance, what it is near) —

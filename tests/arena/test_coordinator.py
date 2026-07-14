@@ -27,6 +27,7 @@ class FakeConn:
         self._connected = True
         self._dead_when_disconnected = True   # behave like a real socket
         self.read_calls = []                  # every lua passed to execute_read (even if it raises)
+        self.write_calls = []                 # every lua passed to execute_write (even if it raises)
         self._polls = iter([
             ["LOCAL|0", "TURN|1", "ACTIVE|false", "LAST|nil"],   # human turn
             ["LOCAL|1", "TURN|2", "ACTIVE|true", "LAST|1"],      # puppet held
@@ -51,6 +52,7 @@ class FakeConn:
         if "FINISHED" in lua: return ["FINISHED|1"]
         return []
     async def execute_write(self, lua, timeout=5.0):
+        self.write_calls.append(lua)
         self._maybe_die()
         return []
 
@@ -390,6 +392,7 @@ class FakeConnWithOverview(FakeConn):
         self._overview_calls = 0
 
     async def execute_write(self, lua, timeout=5.0):
+        self.write_calls.append(lua)
         self._maybe_die()
         if "Game.GetLocalPlayer" in lua:
             self._overview_calls += 1
@@ -1549,10 +1552,13 @@ _ATTN_BASELINE_SNAPSHOT = {
 
 
 class AttnConn(FakeConnWithOverview):
-    async def execute_read(self, lua, timeout=5.0):
+    # The attention scan is InGame Lua (execute_write): CITYHP/LOYALTY/WC/DIPLO
+    # use APIs that are nil in GameCore -- live-probe P1 finding, turn 155.
+    async def execute_write(self, lua, timeout=5.0):
         if "ATTN" in lua:
+            self.write_calls.append(lua)
             return list(QUIET_SCAN_LINES)
-        return await super().execute_read(lua, timeout)
+        return await super().execute_write(lua, timeout)
 
 
 class CountingPolicy:
@@ -1593,6 +1599,40 @@ async def test_auto_mode_sleeps_quiet_turn(tmp_path):
     assert rec["step_count"] == 0 and rec["usd"] == 0.0
     assert "skipped" not in rec                 # that key means FAILED
     assert conn.restored                        # handback still happened
+    # Context regression (live-probe P1, turn 155): the scan MUST go through
+    # execute_write (InGame). In GameCore, CITYHP/LOYALTY/WC/DIPLO hit nil
+    # APIs -> ATTN_ERR every scan -> SCAN_PARTIAL wakes every turn and the
+    # feature is silently inert.
+    assert any("ATTN" in c for c in conn.write_calls)
+    assert not any("ATTN" in c for c in conn.read_calls)
+
+
+@pytest.mark.asyncio
+async def test_scan_error_wake_carries_parse_detail(tmp_path):
+    """Live-probe P3 finding (2026-07-14, turns 190/212): parse_attention_scan
+    returning None produced a bare SCAN_ERROR wake with empty wake_detail and
+    empty stderr -- undiagnosable post-run. The record must carry a preview of
+    the raw lines (or name the missing snapshot) like SCAN_PARTIAL carries the
+    Lua error (review-3 f3)."""
+    class GarbageScanConn(FakeConnWithOverview):
+        async def execute_write(self, lua, timeout=5.0):
+            if "ATTN" in lua:
+                self.write_calls.append(lua)
+                return ["TUNER NOISE", "half a li"]
+            return await super().execute_write(lua, timeout)
+
+    from civ_mcp.arena.config import AttentionOptions
+    conn = GarbageScanConn(); gs = FakeGSWithConn(conn); sink = FakeSink()
+    opts = CivOptions(attention=AttentionOptions(mode="auto"))
+    pol = CountingPolicy(opts)
+    cfg = ArenaConfig(players=[PlayerSpec(1, "local", "m", options=opts)],
+                      max_puppet_turns=1, idle_poll_limit=5,
+                      transcript_dir=str(tmp_path), run_id="rse", puppet_ids=[1])
+    await run_arena(conn, gs, cfg, policy=pol, transcript=sink)
+    rec = sink.records[-1]
+    assert rec["attention"]["wake_cause"] == "SCAN_ERROR"
+    detail = rec["attention"]["wake_detail"]
+    assert "TUNER NOISE" in detail          # raw-line preview present
 
 
 @pytest.mark.asyncio
@@ -1644,6 +1684,7 @@ async def test_off_mode_bit_for_bit_today(tmp_path, monkeypatch):
     assert result["puppet_turns_played"] == 1
     assert result["turns_slept"] == 0
     assert not any("ATTN" in c for c in conn.read_calls)   # scan never issued
+    assert not any("ATTN" in c for c in conn.write_calls)  # ...on either context
     rec = sink.records[-1]
     assert rec["turn_kind"] == "played"     # added unconditionally
     assert "attention" not in rec           # off mode never produces this

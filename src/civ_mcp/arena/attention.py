@@ -321,7 +321,15 @@ _SCAN_FAMILIES = (
     "THREAT", "CITYHP", "WAR", "LOYALTY", "WC", "ERA",
     "POP", "GP", "TRADE", "DIPLO", "BLOCKERS",
 )
-BLOCKER_IGNORE = frozenset({"ENDTURN_BLOCKING_UNIT_PROMOTION"})
+# ENDTURN_BLOCKING_UNITS: live-probe P3 (2026-07-14) -- after any model-played
+# turn the units are left awake, so this blocker rides every later capture and
+# auto mode wake-loops forever. The sleep path finish_units()es the seat
+# (coordinator sleep branch), so unmoved units are auto-resolvable, same as
+# pending promotions.
+BLOCKER_IGNORE = frozenset({
+    "ENDTURN_BLOCKING_UNIT_PROMOTION",
+    "ENDTURN_BLOCKING_UNITS",
+})
 NOTIFICATION_WAKE_LIST = frozenset({
     "NOTIFICATION_CITY_UNDER_ATTACK",
     "NOTIFICATION_CITY_LOW_LOYALTY",
